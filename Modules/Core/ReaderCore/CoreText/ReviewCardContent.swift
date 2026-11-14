@@ -19,6 +19,9 @@ struct ReviewCardContent: Equatable, Sendable {
         var user: String
         var likes: String
         var content: String
+        /// 评论者头像的 URL，由卡片根节点的 `data-yd-avatars` 按评论顺序给出；
+        /// 书源不写就是空，模板回退到名字首字。
+        var avatar: String = ""
     }
 
     var kind: ReaderCommentCardKind
@@ -82,6 +85,11 @@ struct ReviewCardContent: Equatable, Sendable {
                 }
             }
         }
+        if let avatars = avatarURLs(in: root) {
+            for index in comments.indices where index < avatars.count {
+                comments[index].avatar = avatars[index]
+            }
+        }
         guard comments.contains(where: { !$0.content.isEmpty || !$0.user.isEmpty }) else { return nil }
         return ReviewCardContent(kind: kind, title: title, count: count, number: number, comments: comments)
     }
@@ -126,12 +134,19 @@ struct ReviewCardContent: Equatable, Sendable {
     // MARK: - Reading
 
     /// The headings sources draw, longest first so 神评论 is not read as 神评.
+    ///
+    /// 繁体一并认：起点自己的卡片写的是「本章說 / 作家說 / 神評論 / 熱評」，
+    /// 只认简体时这些卡读不出来，模板再好看也套不上去（书源不改标题就永远不生效）。
     private static let headings: [(String, ReaderCommentCardKind)] = [
-        ("本章说", .chapterSay), ("本章说", .chapterSay), ("本章讨论", .chapterSay), ("本章讨论", .chapterSay),
-        ("作者的话", .authorSay), ("作者的话", .authorSay), ("作者说", .authorSay), ("作者说", .authorSay),
-        ("作家的话", .authorSay), ("作家的话", .authorSay), ("作家说", .authorSay), ("作家说", .authorSay),
-        ("神评论", .hotComment), ("神评论", .hotComment), ("神评", .hotComment), ("神评", .hotComment),
-        ("热评", .hotComment), ("热评", .hotComment),
+        ("本章讨论", .chapterSay), ("本章討論", .chapterSay),
+        ("本章说", .chapterSay), ("本章說", .chapterSay),
+        ("作者的话", .authorSay), ("作者的話", .authorSay),
+        ("作家的話", .authorSay), ("作家的话", .authorSay),
+        ("作者说", .authorSay), ("作者說", .authorSay),
+        ("作家说", .authorSay), ("作家說", .authorSay),
+        ("神评论", .hotComment), ("神評論", .hotComment),
+        ("神评", .hotComment), ("神評", .hotComment),
+        ("热评", .hotComment), ("熱評", .hotComment),
     ]
 
     /// A heading is a short run that is the keyword, give or take a little decoration — not a
@@ -350,6 +365,32 @@ struct ReviewCardContent: Equatable, Sendable {
         }
     }
 
+    /// 卡片带来的头像 URL，按评论顺序一条一个，写在根节点上：
+    /// `data-yd-avatars='["https://…","https://…"]'`。单条评论的卡也可以只写
+    /// `data-yd-avatar="https://…"`。
+    ///
+    /// 源卡片里没有头像元素（它只画文字），所以这两个属性只能由书源写进去；
+    /// 没写就是空，模板回退到名字首字那个圆。
+    private static func avatarURLs(in root: String) -> [String]? {
+        if let value = attribute("data-yd-avatars", in: root) {
+            if let data = decodedEntities(value).data(using: .utf8),
+               let list = (try? JSONSerialization.jsonObject(with: data)) as? [String] {
+                return list
+            }
+            // 书源手写时常常图省事用逗号分隔，认这个写法。
+            let parts = value
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return parts.isEmpty ? nil : parts
+        }
+        if let single = attribute("data-yd-avatar", in: root) {
+            let trimmed = decodedEntities(single).trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : [trimmed]
+        }
+        return nil
+    }
+
     /// The comments the source cut, whole again (`ReviewCardFullText`).
     private static func fullTexts(in root: String) -> [String]? {
         guard let value = attribute(ReviewCardFullText.attribute, in: root) else { return nil }
@@ -398,7 +439,10 @@ struct ReviewCardContent: Equatable, Sendable {
     private static func decodedEntities(_ text: String) -> String {
         guard text.contains("&") else { return text }
         var result = text
-        for (entity, value) in [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&apos;", "'"), ("&nbsp;", " ")] {
+        // `&amp;` 放最后：先解它会把 `&amp;quot;` 变成 `&quot;` 再被当实体解一次。
+        // 头像 URL 的查询串里带 `&` 时书源只能写成 `&amp;`（否则 SVG 不是合法 XML），
+        // 不解回来这条 URL 就带了个 `&amp;` 去请求。
+        for (entity, value) in [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&apos;", "'"), ("&nbsp;", " "), ("&amp;", "&")] {
             result = result.replacingOccurrences(of: entity, with: value)
         }
         if let regex = try? NSRegularExpression(pattern: "&#(x?)([0-9a-fA-F]+);") {

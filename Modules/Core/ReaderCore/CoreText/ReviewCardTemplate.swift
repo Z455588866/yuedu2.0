@@ -87,6 +87,7 @@ struct ReviewCardTemplate: Sendable {
             "user": first?.user ?? "",
             "likes": first?.likes ?? "",
             "content": first?.content ?? "",
+            "avatar": first?.avatar ?? "",
         ]
         var filledRoot = Self.expanded(root, values: cardValues, comments: card.comments)
             ?? Element(name: "svg", attributes: [:], children: [])
@@ -276,6 +277,7 @@ struct ReviewCardTemplate: Sendable {
                     commentValues["user"] = comment.user
                     commentValues["likes"] = comment.likes
                     commentValues["content"] = comment.content
+                    commentValues["avatar"] = comment.avatar
                     if let filled = expanded(template, values: commentValues, comments: comments) {
                         children.append(.element(filled))
                     }
@@ -497,8 +499,13 @@ struct ReviewCardTemplate: Sendable {
                 let lower = name.lowercased()
                 if lower.hasPrefix("on") { continue }
                 if lower == "href" || lower.hasSuffix(":href") || lower == "src" {
-                    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    guard trimmed.hasPrefix("#") || trimmed.hasPrefix("data:image/") else { continue }
+                    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // `src="${avatar}"`：填充前这里只有一个占位符，真 URL 要等填完才知道，
+                    // 所以先放行；不放行的话模板里的头像会被整条删掉，永远显示不出来。
+                    if !trimmed.hasPrefix("${") {
+                        let lowered = trimmed.lowercased()
+                        guard lowered.hasPrefix("#") || lowered.hasPrefix("data:image/") else { continue }
+                    }
                 }
                 safe[name] = lower == "style" ? safeCSS(value) : value
             }

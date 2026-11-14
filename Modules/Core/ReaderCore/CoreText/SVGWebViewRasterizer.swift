@@ -575,6 +575,15 @@ final class SVGWebViewRasterizer: NSObject {
     private func measureCard(_ webView: WKWebView) async -> (height: CGFloat, glassPanels: [ReviewCardGlassPanel])? {
         let script = """
         await document.fonts.ready;
+        // 模板里的头像是一张网络图：等它落定再量高度、再截图，否则量到的是「图还没来」
+        // 的高度，截出来就是一个空圆。超时 1.5 秒，等不到也照画，不拖住整页。
+        await Promise.race([
+            Promise.all(Array.from(document.images, (img) => img.complete ? null : new Promise((resolve) => {
+                img.addEventListener('load', resolve);
+                img.addEventListener('error', resolve);
+            }))),
+            new Promise((resolve) => setTimeout(resolve, 1500))
+        ]);
         const svg = document.querySelector('svg');
         if (!svg) { return { height: -1, panels: [] }; }
         const declared = svg.height.baseVal.value;

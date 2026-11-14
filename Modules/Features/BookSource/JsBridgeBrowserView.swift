@@ -73,24 +73,16 @@ struct ReviewSheetGlassBackground: View {
     private var level: Double {
         let sheet = min(max(settings.reviewSheetOpacity, 0), 1)
         let global = 1 - min(max(settings.interfaceGlassTransparency, 0), 1)
-        return min(max(0.7 * sheet + 0.3 * global, 0), 1)
-    }
-
-    /// 極淡 tint，只給玻璃一點厚度、保證評論文字對比；不是白板來源。
-    private var tintOpacity: Double {
-        // tint 压到 0~0.14：白纸书页上材质自带白纱，tint 再叠白就糊成白板。
-        0.14 * level
+        return min(max(0.85 * sheet + 0.15 * global, 0), 1)
     }
 
     /// 固定淡玻璃色：跟滑杆走、绝不变白。真正「透出书页」的玻璃由
-    /// `ReviewSheetBookBackdrop` 负责（见下方 `.presentationBackground`）。
+    /// `ReviewPanelBackdropLayer` 负责（见下方 `.presentationBackground`）。
+    /// 两端 0.02 → 0.46：以前只有 0.03~0.23 的两层白，白纸书页上白叠白，
+    /// 滑杆拉到底也看不出区别。
     private var glass: some View {
-        ZStack {
-            (colorScheme == .dark ? Color.black : Color.white)
-                .opacity(0.03 + 0.20 * level)
-            (colorScheme == .dark ? Color.black : Color.white)
-                .opacity(tintOpacity)
-        }
+        (colorScheme == .dark ? Color.black : Color.white)
+            .opacity(0.02 + 0.44 * level)
     }
 
     var body: some View {
@@ -163,7 +155,7 @@ struct ReviewPanelBackdropLayer: View {
     private var level: Double {
         let sheet = min(max(settings.reviewSheetOpacity, 0), 1)
         let global = 1 - min(max(settings.interfaceGlassTransparency, 0), 1)
-        return min(max(0.7 * sheet + 0.3 * global, 0), 1)
+        return min(max(0.85 * sheet + 0.15 * global, 0), 1)
     }
 
     var body: some View {
