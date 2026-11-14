@@ -301,23 +301,23 @@ private struct ReviewQuoteGlass: View {
 
     var cornerRadius: CGFloat = 14
 
-    /// 濃度 0 = 最透、1 = 最實，公式與面板玻璃完全一致。
+    /// 濃度 0 = 最透、1 = 最實，公式與面板玻璃完全一致（滑桿主權重 0.85）。
     private var level: Double {
         let sheet = min(max(settings.reviewSheetOpacity, 0), 1)
         let global = 1 - min(max(settings.interfaceGlassTransparency, 0), 1)
-        return min(max(0.7 * sheet + 0.3 * global, 0), 1)
+        return min(max(0.85 * sheet + 0.15 * global, 0), 1)
     }
 
-    /// 極淡 tint 給玻璃一點厚度；暗色用黑，避免夜間發白。
+    /// 滿量程 tint：0 = 全透，1 = 最實。以前封在 0.03~0.19，拉到底幾乎沒有差別。
     private var tintOpacity: Double {
-        (colorScheme == .dark ? 0.05 : 0.03) + 0.16 * level
+        min(level, 1)
     }
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(colorScheme == .dark ? Color.black : Color.white)
-                .opacity(0.05 + 0.22 * level)
+                .opacity(min(level, 1))
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(colorScheme == .dark ? Color.black : Color.white)
                 .opacity(tintOpacity)

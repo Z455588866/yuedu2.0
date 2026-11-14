@@ -3019,9 +3019,9 @@ final class ReviewPanelOverlayController: UIViewController {
     /// 「不透明度 / 玻璃濃淡」的唯一換算：0 = 最透、1 = 最實。
     ///
     /// 以前是 `0.7 * 滑桿 + 0.3 * 全局透明度`，全局那項默認值就把結果壓在 0.3 上下，
-    /// 拉滑桿只在自己那 0.7 裡動，加上 tint 只有 0.02~0.24 的白，白紙書頁上白疊白，
+    /// 拉滑桿只在自己那 0.7 裡動，加上 tint 又封在 0.22 以內，白紙書頁上白疊白，
     /// 視覺上幾乎沒有差別 —— 這就是「這個不透明度調節根本看不出來」。
-    /// 現在滑桿佔 0.85、全局只做微調，tint 也從 0.02~0.24 拉到 0~0.40。
+    /// 現在滑桿佔 0.85、全局只做微調，下游 tint 用滿量程 0~1。
     static func glassLevel(sheet: Double, globalTransparency: Double) -> Double {
         let s = min(max(sheet, 0), 1)
         let g = 1 - min(max(globalTransparency, 0), 1)
@@ -3199,7 +3199,8 @@ final class ReviewPanelOverlayController: UIViewController {
     }
 
     /// 玻璃浓淡跟「外观 › 界面效果」的滑杆走；玻璃本体样式不动，
-    /// 浓淡全部由这层膜承担：tint 0 → 0.40，拉滑杆一路都看得见变化。
+    /// 浓淡全部由这层膜承担，且是**满量程**：level 0 → 完全透明（裸玻璃），
+    /// level 1 → 纯白/纯黑（最实）。中间线性，拉到哪就是哪，不再压缩到 0.4 封顶。
     private func applyTint() {
         let level = ReviewPanelOverlayController.currentGlassLevel
         guard abs(level - lastLevel) > 0.001 || tint.backgroundColor == nil else { return }
@@ -3208,12 +3209,12 @@ final class ReviewPanelOverlayController: UIViewController {
         // 本身，只留一层底色 —— 看上去就是「一块死白」。浓淡全部交给上面这层膜。
         blur.alpha = 1
         let dark = traitCollection.userInterfaceStyle == .dark
-        if level <= 0.02 {
-            // 最透端就是裸玻璃，连那层 0.02 的白纱也去掉。
+        if level <= 0.001 {
+            // 最透端就是裸玻璃，那层膜一点都不要。
             tint.backgroundColor = .clear
         } else {
             tint.backgroundColor = (dark ? UIColor.black : UIColor.white)
-                .withAlphaComponent(0.40 * level)
+                .withAlphaComponent(min(level, 1))
         }
     }
 

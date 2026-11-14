@@ -76,13 +76,11 @@ struct ReviewSheetGlassBackground: View {
         return min(max(0.85 * sheet + 0.15 * global, 0), 1)
     }
 
-    /// 固定淡玻璃色：跟滑杆走、绝不变白。真正「透出书页」的玻璃由
-    /// `ReviewPanelBackdropLayer` 负责（见下方 `.presentationBackground`）。
-    /// 两端 0.02 → 0.46：以前只有 0.03~0.23 的两层白，白纸书页上白叠白，
-    /// 滑杆拉到底也看不出区别。
+    /// 固定淡玻璃色：跟滑杆走。满量程 0 → 1：0 完全透明、1 完全实，
+    /// 以前封在 0.03~0.23，白纸书页上白叠白，滑杆拉到底也看不出区别。
     private var glass: some View {
         (colorScheme == .dark ? Color.black : Color.white)
-            .opacity(0.02 + 0.44 * level)
+            .opacity(min(level, 1))
     }
 
     var body: some View {
@@ -160,9 +158,8 @@ struct ReviewPanelBackdropLayer: View {
 
     var body: some View {
         ZStack {
-            // 玻璃本体：系统材质实时模糊面板背后的真实书页。浓度跟「外观 ›
-            // 界面效果」的滑杆走——最透端 0.15（白纸页上也能看清文字形状，
-            // 不会糊成白板），最实端 0.75（重磨砂仍透出内容）。
+            // 玻璃本体：系统材质实时模糊面板背后的真实书页。浓度满量程跟
+            // 「外观 › 界面效果」的滑杆走：0 = 不叠材质（全透），1 = 材质全强度。
             //
             // 全屏白板不是这一层的问题：是系统 sheet 的呈现容器在全屏时挂了
             // 一层不透明装饰（Liquid Glass 底 + 白雾），把这一层整个盖住。
@@ -170,11 +167,11 @@ struct ReviewPanelBackdropLayer: View {
             if !usesOuterGlass {
                 Rectangle()
                     .fill(.ultraThinMaterial)
-                    .opacity(0.15 + 0.60 * level)
+                    .opacity(min(level, 1))
             }
-            // 极淡中性 tint：只给评论文字补对比，颜色完全来自材质对书页的采样。
+            // 中性 tint：满量程 0 → 1，颜色完全来自材质对书页的采样。
             (colorScheme == .dark ? Color.black : Self.paperTint)
-                .opacity(0.02 + 0.10 * level)
+                .opacity(min(level, 1))
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
