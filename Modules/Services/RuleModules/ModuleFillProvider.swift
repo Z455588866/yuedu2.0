@@ -113,7 +113,8 @@ final class ModuleFillProvider: MetadataFillProvider {
         }
         // Its page, when the entry has one, for the one result that is the copy's work: never a row it is not.
         let result: MetadataFillResult
-        if let match = Self.match(in: items, of: entry, query: query) {
+        if let match = Self.match(in: items, of: entry, query: query)
+            ?? try await matchWithDetail(items, of: entry, query: query) {
             let item = try await LibrarySearch.within(timeout) { try await provider.detailed(match, of: entry, wanting: query.missing) }
             let values = Self.values(of: item, entry: entry, query: query)
             let key: SourceItemKey? = if case .item(let record, _, _) = provider.searchEntry(item) { record.key } else { nil }
@@ -124,6 +125,39 @@ final class ModuleFillProvider: MetadataFillProvider {
         SourcePerfTrace.record("metadata.fill.module", "module=\(provider.module.id) items=\(items.count) filled=\(result.values.count)",
                                since: started, thresholdMs: 0)
         return result
+    }
+
+    /// A row that names only a title (番茄's search page: its cards carry a garbled title and
+    /// neither author nor intro) still gets its second point: the title-holding rows' own
+    /// `detail` page is asked for the intro, and 书名/作者/简介 count again over it. At most
+    /// three rows are asked, and exactly one surviving the two points is the work's.
+    private func matchWithDetail(_ items: [RuleListItem], of entry: RuleModule.Entry, query: MetadataFillQuery) async throws -> RuleListItem? {
+        guard let detail = entry.detail else { return nil }
+        let titleKey = WorkMatchKey.title(query.title)
+        guard !titleKey.isEmpty else { return nil }
+        let holding = items.filter { item in
+            entry.contentKind(of: item) == query.contentKind
+                && ([item.name] + (item.aliases ?? [])).contains { WorkMatchKey.title($0).contains(titleKey) }
+                && item.author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && item.intro.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        guard !holding.isEmpty else { return nil }
+        var matched: [RuleListItem] = []
+        for item in holding.prefix(3) {
+            let filled: RuleListItem
+            do {
+                filled = try await LibrarySearch.within(timeout) { try await provider.detailed(item, of: entry, wanting: [.intro]) }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                continue
+            }
+            if !Self.sameWork(in: [filled], of: entry, title: query.title, authors: query.authors,
+                              contentKind: query.contentKind).isEmpty {
+                matched.append(filled)
+            }
+        }
+        return matched.count == 1 ? matched.first : nil
     }
 
     private func lookUp(isbn: String, of lookup: RuleModule.Entry, query: MetadataFillQuery) async throws -> MetadataFillResult {
@@ -187,21 +221,32 @@ final class ModuleFillProvider: MetadataFillProvider {
         return matches.count == 1 ? matches.first : nil
     }
 
-    /// The items that are the work named, in the list's order, each record once: its title or one
-    /// of its `aliases` is the work's (`WorkMatchKey`), its author is compatible with the work's,
-    /// and it is the work's kind. A site that lists one work once has one; a site of uploads has
-    /// one per upload (`ModuleReviewProvider`).
+    /// The items that are the work named, in the list's order, each record once: its 书名
+    /// (title or one of its `aliases`), its 作者 (author) and its 简介 (intro) are each checked
+    /// against the work, and two of the three agreeing make the item the work's (maintainer,
+    /// 2026-11-16: 「用作者名加简介加书名只要符合两点就行了」— a source that garbles one of
+    /// the three, as a search page's snippet titles do, still matches). A title hit is the
+    /// work's title the item's own or held by it; an author hit is `authorsCompatible`; an
+    /// intro hit is the intro holding the title. A site that lists one work once has one; a
+    /// site of uploads has one per upload (`ModuleReviewProvider`).
     static func sameWork(in items: [RuleListItem], of entry: RuleModule.Entry, title: String, authors: [String],
                          contentKind: ContentKind) -> [RuleListItem] {
         let titleKey = WorkMatchKey.title(title)
         guard !titleKey.isEmpty else { return [] }
         var seen = Set<String>()
         return items.filter { item in
-            entry.contentKind(of: item) == contentKind
-                && ([item.name] + (item.aliases ?? [])).contains { WorkMatchKey.title($0) == titleKey }
-                && WorkMatchKey.authorsCompatible(authors, Self.names(item.author))
-                // One work listed twice is still one.
-                && seen.insert(item.bookUrl.isEmpty ? "\(item.name)\u{1F}\(item.author)" : item.bookUrl).inserted
+            guard entry.contentKind(of: item) == contentKind else { return false }
+            let titleHit = ([item.name] + (item.aliases ?? [])).contains {
+                let key = WorkMatchKey.title($0)
+                return key == titleKey || key.contains(titleKey)
+            }
+            let authorHit = WorkMatchKey.authorsCompatible(authors, Self.names(item.author))
+            let introKey = WorkMatchKey.title(item.intro)
+            let introHit = !introKey.isEmpty && introKey.contains(titleKey)
+            // Two of 书名, 作者 and 简介 agree; one alone never does.
+            guard (titleHit && authorHit) || (titleHit && introHit) || (authorHit && introHit) else { return false }
+            // One work listed twice is still one.
+            return seen.insert(item.bookUrl.isEmpty ? "\(item.name)\u{1F}\(item.author)" : item.bookUrl).inserted
         }
     }
 

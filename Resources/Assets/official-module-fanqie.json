@@ -1,0 +1,54 @@
+{
+  "id": "fanqie",
+  "title": "番茄小说",
+  "description": "番茄小说的书页与书评：按书名搜索它的书页（经今日头条的番茄收录页找到），读它的书评。",
+  "author": "Yuedu",
+  "site": "https://fanqienovel.com/",
+  "version": "1.0",
+  "requiredVersion": "3.0.2",
+  "hosts": ["fanqienovel.com", "so.toutiao.com"],
+  "rateLimit": "1/1000",
+  "modules": [],
+  "search": {
+    "searchesAuthors": true,
+    "request": {
+      "url": "https://so.toutiao.com/search?keyword={{keyword}}%20%E7%95%AA%E8%8C%84&format=json",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+      }
+    },
+    "list": {
+      "items": ":cr-params=\"[^\"]*&quot;title&quot;:&quot;([^&]*)&quot;[^\"]*&quot; preload-67=\"[^\"]*&quot;key&quot;:&quot;https://fanqienovel\\.com/page/(\\d{15,25})",
+      "title": "$1",
+      "url": "https://fanqienovel.com/page/$2",
+      "id": "$2"
+    }
+  },
+  "detail": {
+    "request": {
+      "url": "{{url}}",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+      }
+    },
+    "intro": "meta[name=description]@content",
+    "cacheDuration": 86400
+  },
+  "reviews": {
+    "request": {
+      "url": "https://fanqienovel.com/reading/ugc/novel_comment/book/v?book_id={{id}}&offset=0&count=50&aid=1967",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Cookie": "ttwid=1%7C1JfMIJNcoVVBE33Q2fFmp08nWBJuGvH48bqzl3hsoX0%7C1794768649%7C66784a253c617e3ee395a2a5a5d116cb7e501edeee1ac1cd24631e712548d219"
+      }
+    },
+    "cacheDuration": 21600,
+    "list": {
+      "items": "$.data.comment[*]",
+      "text": "$.text",
+      "author": "$.user_name",
+      "date": "$.create_timestamp",
+      "likes": "$.digg_count"
+    }
+  }
+}
