@@ -500,14 +500,12 @@ struct HomeBandGround: ViewModifier {
 
     /// The header's line under the section's name.
     static func line(for cover: CoverTint.RGB?) -> CoverTint.RGB {
-        CoverTint.lightTint(for: cover ?? CoverTint.placeholder)
+        CoverTint.blockLine(for: cover)
     }
 
     /// Also behind the header on its own, which its long press lifts out of the band.
     static func ground(for cover: CoverTint.RGB?, contrast: ColorSchemeContrast) -> Color {
-        guard let cover else { return DSColor.coverTintPlaceholder }
-        return CoverTint.background(for: cover, under: line(for: cover),
-                                    minimumContrast: contrast == .increased ? 7 : 4.5).color
+        CoverTint.blockGround(for: cover, increasedContrast: contrast == .increased).color
     }
 
     func body(content: Content) -> some View {
@@ -555,7 +553,10 @@ struct HomeReadingCard: View {
         }
         .padding(DSSpacing.lg)
         .frame(maxWidth: .infinity, minHeight: coverSize.height + DSSpacing.lg * 2, alignment: .topLeading)
+        // The app's glass surface is kept behind the total switch (`interfaceFrostedGlass`);
+        // the white-ground shadow upstream adds still applies on top of it.
         .interfaceCardSurface(in: RoundedRectangle(cornerRadius: DSRadius.xl, style: .continuous))
+        .shadow(color: DSColor.shadow, radius: DSLayout.exploreCardShadowRadius, y: DSLayout.exploreCardShadowY)
         .contentShape(RoundedRectangle(cornerRadius: DSRadius.xl, style: .continuous))
     }
 

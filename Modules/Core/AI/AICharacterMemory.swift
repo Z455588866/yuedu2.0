@@ -171,6 +171,13 @@ struct AIMemoryView: Sendable {
 
 enum AIMemoryFailure: String, Error, LocalizedError, Sendable {
     case invalidPlan, invalidEvidence, invalidSchema, sourceChanged, providerChanged, budget, resultUnknown, persistence, cancelled
+    // One case per rule that rejects a reply in `AIMemoryExtraction.validate`, so the job's
+    // saved `failure` — which the page shows and the trace exports — names the rule (FB-177).
+    // `invalidSchema` and `invalidEvidence` stay for jobs saved before the rules had names.
+    case replyUndecodable, replyIncomplete, mentionType, mentionID, mentionIDReused, mentionSurface
+    case factEntities, factText, factNoEvidence, aliasReference, aliasSelf, aliasNoEvidence
+    case evidenceSegment, evidenceQuote, evidenceSource, surfaceNotInEvidence
+
     var errorDescription: String? {
         switch self {
         case .invalidPlan: return localized("无法在目前正文与预算内规划人物分析批次。")
@@ -182,6 +189,13 @@ enum AIMemoryFailure: String, Error, LocalizedError, Sendable {
         case .resultUnknown: return localized("上一批可能已呼叫并计费，但尚无已保存结果；续跑可能再次计费。")
         case .persistence: return localized("人物资料保存失败，尚未保存的范围不计入完成。")
         case .cancelled: return localized("人物建档已暂停。")
+        // The sentence the reader already knew, then the rule's name: a code to quote in a
+        // report, not prose, so it is the same in every language.
+        case .replyUndecodable, .replyIncomplete, .mentionType, .mentionID, .mentionIDReused, .mentionSurface,
+             .factEntities, .factText, .factNoEvidence, .aliasReference, .aliasSelf, .aliasNoEvidence:
+            return localized("人物抽取格式不完整，该批未保存。") + " [\(rawValue)]"
+        case .evidenceSegment, .evidenceQuote, .evidenceSource, .surfaceNotInEvidence:
+            return localized("抽取引用无法唯一核对，该批未保存。") + " [\(rawValue)]"
         }
     }
 }

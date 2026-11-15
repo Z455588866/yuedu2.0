@@ -15,6 +15,12 @@ private enum AudiobookDetailPush: Hashable {
     case category(ExploreCategoryReference)
     /// A 同题材 book.
     case book(OnlineBook)
+    /// The author's page.
+    case author(AuthorPageRequest)
+    /// A genre the source has no category of: the source's books for it.
+    case tag(SourceTagPage)
+    /// 读者评论, every review the section showed the first of.
+    case reviews(WorkReviewSet)
 }
 
 /// Dedicated detail page for audiobooks. Audiobooks must NOT fall into the text-book
@@ -31,13 +37,14 @@ struct AudiobookDetailView: View {
     /// On 作品详情, the work's versions: 换源 lists the others first, and picking one switches
     /// the page to it (unified library 5f-3). `nil` elsewhere.
     private let workVersions: BookDetailInfoChoice?
-    /// On 作品详情, the work's series fanned behind the cover, as the work's own page draws it
-    /// (`SeriesCoverFan`). `nil` elsewhere.
-    private let seriesFan: SeriesFan?
 
     @State private var currentBook: OnlineBook
     @State private var pushed: AudiobookDetailPush?
     @StateObject private var genres = SourceGenreLinks()
+    /// 读者评论 and 作者其他作品, as every detail page has them (maintainer, 2026-11-14: the same
+    /// sections whatever the source).
+    @StateObject private var reviews = WorkReviewsModel()
+    @StateObject private var authorWorks = AuthorWorksModel()
     @EnvironmentObject var bookStore: BookStore
     // DismissAction is repeatedly replaced by iOS 17 while a page is pushed above this
     // detail (a genre's category, a 同题材 book). Its stable binding avoids a navigation
@@ -84,14 +91,12 @@ struct AudiobookDetailView: View {
         book: OnlineBook,
         onRemoveFromShelf: (() -> Void)? = nil,
         onSourceKindChange: ((BookOrigin) -> Void)? = nil,
-        workVersions: BookDetailInfoChoice? = nil,
-        seriesFan: SeriesFan? = nil
+        workVersions: BookDetailInfoChoice? = nil
     ) {
         self.searchBook = nil
         self.onRemoveFromShelf = onRemoveFromShelf
         self.onSourceKindChange = onSourceKindChange
         self.workVersions = workVersions
-        self.seriesFan = seriesFan
         _currentBook = State(
             initialValue: OnlineBookDetailPresentationPolicy.sanitized(book)
         )
@@ -104,14 +109,12 @@ struct AudiobookDetailView: View {
         initialOrigin: BookOrigin? = nil,
         onRemoveFromShelf: (() -> Void)? = nil,
         onSourceKindChange: ((BookOrigin) -> Void)? = nil,
-        workVersions: BookDetailInfoChoice? = nil,
-        seriesFan: SeriesFan? = nil
+        workVersions: BookDetailInfoChoice? = nil
     ) {
         self.searchBook = searchBook
         self.onRemoveFromShelf = onRemoveFromShelf
         self.onSourceKindChange = onSourceKindChange
         self.workVersions = workVersions
-        self.seriesFan = seriesFan
         if let origin = initialOrigin
             ?? searchBook.preferredOrigin(for: .audio)
             ?? searchBook.origins.first {
@@ -241,7 +244,11 @@ struct AudiobookDetailView: View {
                 authorActions: sourceCallBacks == nil ? sourceLinks.authorActions(shown.author) : [],
                 sourceGestures: sourceCallBacks?.gestures,
                 links: sourceCallBacks == nil ? sourceLinks.links(for: tags) : [],
-                seriesFan: seriesFan
+                // 检视有声书／检视书籍: the book as its own source's page, as a 同题材 book opens.
+                openOtherForm: { work in
+                    if case .onlineBook(let frozen) = work.opening { pushed = .book(frozen.book) }
+                },
+                source: heroSource
             )
         } content: {
             if let intro = shown.intro {
@@ -251,7 +258,8 @@ struct AudiobookDetailView: View {
                     baseURL: intro.isSourcesOwn ? currentBook.bookUrl : nil,
                     onAction: introAction(isSourcesOwn: intro.isSourcesOwn),
                     readsSourceFormats: intro.isSourcesOwn,
-                    isUnavailable: intro.isUnavailable
+                    isUnavailable: intro.isUnavailable,
+                    links: sourceCallBacks == nil ? sourceLinks.links(for: tags) : []
                 )
             }
             BookDetailChapterSection(
@@ -261,7 +269,8 @@ struct AudiobookDetailView: View {
                 errorMessage: loadError,
                 latestChapter: displayLatestChapter,
                 onRetry: { load() },
-                onShowAll: { showChapterList = true }
+                onShowAll: { showChapterList = true },
+                preview: .latestAndResume(resumeIndex: resumeChapterIndex > 0 ? resumeChapterIndex : nil)
             ) { offset, chapter in
                 BookDetailChapterRow(
                     title: BookDetailChapterTitle.display(chapter, offset: offset),
@@ -271,6 +280,7 @@ struct AudiobookDetailView: View {
                     action: { play(chapterIndex: offset) }
                 )
             }
+            BookDetailReviewsSection(reviews: reviews.reviews, onShowAll: { pushed = .reviews($0) })
             BookDetailRelatedSection(
                 related: genres.related,
                 choices: genres.choices,
@@ -284,6 +294,14 @@ struct AudiobookDetailView: View {
                     guard let key = genreLoadKey else { return }
                     Task { await genres.retryRelated(key: key, source: source, tags: tags, book: currentBook) }
                 }
+            )
+            BookDetailAuthorWorksSection(
+                state: authorWorks.state,
+                onShowAll: sourceCallBacks == nil ? sourceLinks.authorActions(shown.author).first?.action : nil,
+                onSelect: { route in
+                    if case .onlineBook(let frozen) = route.opening { pushed = .book(frozen.book) }
+                },
+                onRetry: { Task { await authorWorks.retry(authorWorksRequest, store: bookStore) } }
             )
             // 作品资讯 last: the first half serves reading and finding more (2026-10-12).
             BookDetailInfoSection(items: infoItems)
@@ -346,16 +364,14 @@ struct AudiobookDetailView: View {
             pendingChapterSelection = nil
             play(chapterIndex: chapterIndex)
         }) {
-            NavigationStack {
-                BookDetailChapterListSheet(
-                    chapters: chapters,
-                    trailing: .play,
-                    onSelect: { offset in
-                        pendingChapterSelection = offset
-                        showChapterList = false
-                    }
-                )
-            }
+            // The app's one 目录, the reader's; it closes itself on a pick, and the chapter plays
+            // once it is gone.
+            ReaderTOCView(
+                detailChapters: chapters, bookID: addedBookId,
+                current: resumeChapterIndex > 0 ? resumeChapterIndex : nil,
+                accessory: .play, isPresented: $showChapterList,
+                onSelect: { offset in pendingChapterSelection = offset }
+            )
         }
         .navigationDestination(item: $pushed) { push in
             switch push {
@@ -365,6 +381,12 @@ struct AudiobookDetailView: View {
             case .book(let book):
                 BookDetailRelatedBookDestination(book: book)
                     .environmentObject(bookStore)
+            case .author(let request):
+                AuthorPageView(request: request).environmentObject(bookStore)
+            case .tag(let page):
+                SourceTagWorksPage(page: page).environmentObject(bookStore)
+            case .reviews(let reviews):
+                WorkReviewsPage(reviews: reviews)
             }
         }
         // The player's own 加入书架 shelves the book while it is up; this page learns of it
@@ -389,6 +411,8 @@ struct AudiobookDetailView: View {
             if chapters.isEmpty, loadError == nil { load() }
         }
         .task(id: shelvedCopy?.id) { copySidecar = shelvedCopy.map(bookStore.copyIntroValues(of:)) ?? [] }
+        .task(id: reviewsQuery) { await reviews.load(reviewsQuery) }
+        .task(id: authorWorksRequest) { await authorWorks.load(authorWorksRequest, store: bookStore) }
         .task(id: genreLoadKey) {
             guard let key = genreLoadKey else { return }
             await genres.load(key: key, source: source, tags: tags, book: currentBook)
@@ -396,6 +420,21 @@ struct AudiobookDetailView: View {
     }
 
     // MARK: Genres and author
+
+    /// What 读者评论 asks the modules about. An audiobook's reviews are its book's: the modules
+    /// list books, so the work is asked for as one.
+    private var reviewsQuery: WorkReviewQuery? {
+        guard displayName != localized("未知书名") else { return nil }
+        return WorkReviewQuery(title: displayName, authors: [displayAuthor], contentKind: .text)
+    }
+
+    /// What 作者其他作品 is read for: the source and the author, once the chapters have loaded or
+    /// failed, as 同题材 waits. Not for a book that names no author.
+    private var authorWorksRequest: AuthorWorksRequest? {
+        guard !(loading || (chapters.isEmpty && loadError == nil)),
+              let author = WorkMatchKey.knownAuthors([displayAuthor]).first else { return nil }
+        return .source(sourceID: currentBook.sourceId, author: author, title: displayName, bookURL: currentBook.bookUrl)
+    }
 
     /// What the genre links and 同题材 are read for: the source, the genres and the book. Nil
     /// until the chapters have loaded or failed: the source's categories are read after them,
@@ -407,7 +446,8 @@ struct AudiobookDetailView: View {
 
     /// The genre and author taps, for a source that does not take them itself.
     private var sourceLinks: BookDetailSourceLinks {
-        BookDetailSourceLinks(source: source, genres: genres, openCategory: { pushed = .category($0) })
+        BookDetailSourceLinks(source: source, genres: genres, openCategory: { pushed = .category($0) },
+                              openTag: { pushed = .tag($0) }, openAuthor: { pushed = .author($0) })
     }
 
     // MARK: Hero
@@ -448,8 +488,9 @@ struct AudiobookDetailView: View {
 
     private var shelfAction: BookDetailAction {
         BookDetailAction(
+            // The shelf's state, not what a tap does: a tap asks before it takes the book off.
             title: alreadyInShelf
-                ? localized("移除书架")
+                ? localized("已在书架")
                 : (addingToShelf ? localized("加入中…") : localized("加入书架")),
             systemImage: alreadyInShelf ? "checkmark" : "plus",
             isBusy: addingToShelf,
@@ -467,8 +508,15 @@ struct AudiobookDetailView: View {
                 id: "chapters", label: localized("章节"), value: chapters.count.formatted()
             ))
         }
-        items.append(.source(name: sourceName) { showSourcePicker = true })
         return items
+    }
+
+    /// 来源, on the hero's panel: the source played from, whose name opens 换源.
+    private var heroSource: BookDetailHeroSource {
+        BookDetailHeroSource(
+            name: sourceName, switchAction: { showSourcePicker = true },
+            facts: [localized("线上")] + (chapters.isEmpty ? [] : [String(format: localized("%d 章"), chapters.count)])
+        )
     }
 
     /// The runtime variables the next play, shelf add or fetch will carry.

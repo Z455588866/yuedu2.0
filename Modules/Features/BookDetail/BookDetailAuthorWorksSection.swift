@@ -30,6 +30,8 @@ struct BookDetailAuthorWorksSection: View {
                 )
                 .padding(.horizontal, DSSpacing.lg)
                 content
+                BookDetailSectionRule()
+                    .padding(.horizontal, DSSpacing.lg)
             }
         }
     }
@@ -44,7 +46,7 @@ struct BookDetailAuthorWorksSection: View {
             Button(action: onRetry) {
                 Label(localized("载入失败，点按重试"), systemImage: "arrow.clockwise")
                     .font(DSFont.subheadline)
-                    .foregroundStyle(DSColor.accent)
+                    .foregroundStyle(DSColor.textPrimary)
                     .frame(maxWidth: .infinity, minHeight: DSLayout.discoverShelfCoverHeight)
             }
             .buttonStyle(.plain)
@@ -88,6 +90,8 @@ struct BookDetailCoverShelf: View {
         .contentMargins(.horizontal, DSSpacing.lg, for: .scrollContent)
         .scrollTargetBehavior(.viewAligned)
         .scrollClipDisabled()
+        // The row is lazy and below the fold: its covers are fetched once it has its works.
+        .prefetchingCovers(of: cards)
     }
 }
 

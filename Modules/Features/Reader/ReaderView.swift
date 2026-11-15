@@ -1906,6 +1906,8 @@ struct ReaderView: View {
                     clearExternalTargetPosition: {},
                     currentPage: $currentPage,
                     pageIsCovered: pageIsCoveredBySurface,
+                    // 固定版式页上没有帘子，但自动阅读仍在等它要的每一笔翻页的答复。
+                    autoReadRevealHandle: autoReadRevealHandle,
                     onPageChanged: { newPage, _ in
                         currentPage = newPage
                     },

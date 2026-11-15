@@ -8,6 +8,9 @@ import UIKit
 @MainActor
 final class ReaderAutoReadRevealHandle {
     var setProgress: ((Double) -> Void)?
+    /// The paged host's answer to a turn 自动阅读 asked for: it is on screen, or it was
+    /// refused. Set by the reader, called by the host (`AutoReadController.pageTurnResolved`).
+    var onPageTurnResolved: (() -> Void)?
 }
 
 /// The 自动阅读 curtain: the next page, unmasked from the top down.
@@ -34,6 +37,13 @@ final class AutoReadRevealView: UIView {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         backgroundColor = .clear
+        // Drawn above its siblings wherever it sits among them. A 仿真 page view
+        // controller adds each page it is handed as a new subview on top of the ones
+        // already there, so after the first turn the page covered the curtain and
+        // 自动阅读 only jumped from page to page (a 滑动／覆盖 one keeps its pages inside
+        // one scroll view and never did). Re-ordering after every stack write would
+        // have to chase UIKit's own turns as well; this does not depend on the order.
+        layer.zPosition = 1
 
         pageImageView.contentMode = .scaleToFill
         pageImageView.frame = bounds

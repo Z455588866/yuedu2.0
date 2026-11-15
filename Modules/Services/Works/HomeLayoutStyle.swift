@@ -23,6 +23,8 @@ enum HomeLayoutStyle: String, CaseIterable, Identifiable, Sendable {
     /// 色带书架: the section on its first cover's colour, its covers stacked (`HomeSectionLayout.colorBand`).
     case colorBand
     case heroGrid
+    /// 主打卡片: a book a page, its title over a wide card of its cover's colour (`HomeHeroCard`).
+    case heroCards
     /// 专题集合: lists, not books, a card each (`HomeSection.listCards`), as are the four after it.
     case collection
     case categoryCards
@@ -30,6 +32,10 @@ enum HomeLayoutStyle: String, CaseIterable, Identifiable, Sendable {
     case bannerCards
     /// 排行榜: a column per ranking, its first places (`HomeChartColumns`).
     case chart
+    /// 分组书架: a shelf per list, its name over its covers (`HomeGroupedShelves`).
+    case groupedShelves
+    /// 类型清单: a row per list, its symbol and name (`HomeGenreList`).
+    case genreList
 
     var id: String { rawValue }
 
@@ -45,11 +51,14 @@ enum HomeLayoutStyle: String, CaseIterable, Identifiable, Sendable {
         case .largeRow: "大型封面书架"
         case .colorBand: "色带书架"
         case .heroGrid: "一大四小"
+        case .heroCards: "主打卡片"
         case .collection: "专题集合"
         case .categoryCards: "分类卡片"
         case .collageCards: "拼贴卡片"
         case .bannerCards: "大图卡片"
         case .chart: "排行榜"
+        case .groupedShelves: "分组书架"
+        case .genreList: "类型清单"
         }
     }
 
@@ -65,21 +74,28 @@ enum HomeLayoutStyle: String, CaseIterable, Identifiable, Sendable {
         case .largeRow: "rectangle.split.2x1"
         case .colorBand: "rectangle.stack"
         case .heroGrid: "square.grid.2x2"
+        case .heroCards: "rectangle.topthird.inset.filled"
         case .collection: "square.stack"
         case .categoryCards: "rectangle.grid.1x2"
         case .collageCards: "rectangle.on.rectangle"
         case .bannerCards: "rectangle.inset.filled"
         case .chart: "list.number"
+        case .groupedShelves: "rectangle.split.1x2"
+        case .genreList: "list.bullet"
         }
     }
 
     /// A layout of lists, each card a list: 专题集合, 分类卡片, 拼贴卡片, 大图卡片 and 排行榜.
     var drawsLists: Bool {
         switch self {
-        case .collection, .categoryCards, .collageCards, .bannerCards, .chart: true
+        case .collection, .categoryCards, .collageCards, .bannerCards, .chart, .groupedShelves, .genreList: true
         default: false
         }
     }
+
+    /// Draws each list's own books, not only its first covers: 排行榜's places, 分组书架's shelves
+    /// (`HomeRowContent.lists`).
+    var drawsListBooks: Bool { self == .chart || self == .groupedShelves }
 
     /// What 呈现方式 offers a section: every layout (maintainer, 2026-10-27: every source in every
     /// layout), a layout of lists drawing a card per list (`HomeSection.listCards`); only the
@@ -108,11 +124,14 @@ extension HomeSectionLayout {
         case .band, .largeRow: return .largeRow
         case .colorBand: return .colorBand
         case .heroGrid: return .heroGrid
+        case .heroCards: return .heroCards
         // 显示排名's two values, written before 2026-10-27, and 排行榜's.
         case .rankedRow, .rankedList: return .chart
         case .categoryCards: return .categoryCards
         case .collageCards: return .collageCards
         case .bannerCards: return .bannerCards
+        case .genreList: return .genreList
+        case .groupedShelves: return .groupedShelves
         default: break
         }
         switch componentKind {
@@ -137,11 +156,14 @@ extension HomeSectionLayout {
         case .largeRow: self = .largeRow
         case .colorBand: self = .colorBand
         case .heroGrid: self = .heroGrid
+        case .heroCards: self = .heroCards
         case .collection: self = .collection
         case .categoryCards: self = .categoryCards
         case .collageCards: self = .collageCards
         case .bannerCards: self = .bannerCards
         case .chart: self = .rankedRow
+        case .groupedShelves: self = .groupedShelves
+        case .genreList: self = .genreList
         }
     }
 

@@ -34,7 +34,7 @@ struct AIPhase3CharacterMemoryTests {
                 let reference = "m\(mentions.count)"
                 let proof: [String: Any] = ["segmentID": id, "quote": text]
                 mentions.append(["id": reference, "surface": name, "type": "person", "unresolved": name == "蒙面人", "evidence": proof])
-                let kind = text.contains("謊稱") ? "statement" : text.contains("傳聞") ? "rumor" : text.contains("其實未死") ? "correction" : "narration"
+                let kind = text.contains("谎称") ? "statement" : text.contains("传闻") ? "rumor" : text.contains("其实未死") ? "correction" : "narration"
                 facts.append(["entities": [reference], "kind": kind, "text": text, "evidence": [proof]])
                 if text.contains("就是柳青"), let earlier = background.first(where: { $0["surface"] as? String == "蒙面人" }) {
                     aliases.append(["first": reference, "second": earlier["reference"]!, "evidence": [proof]])
@@ -61,7 +61,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test func segmentReferencesKeepExactAppOwnedEvidenceAndRejectInventedSurfaces() throws {
-        let text = "柳青站在門邊。柳青讀完書信，沒有說話。𠮷來訪。"
+        let text = "柳青站在门边。柳青读完书信，没有说话。𠮷来访。"
         let source = source([text]), job = try plan(source)
         let input = try AIMemoryExtraction.input(unit: job.units[0], source: source, job: job, previous: [])
         func raw(surface: String = "柳青", segment: String = "s0", quote: String? = nil) throws -> LLMRawResponse {
@@ -76,22 +76,22 @@ struct AIPhase3CharacterMemoryTests {
         #expect(record.mentions[0].evidence.quote == text)
         #expect(record.mentions[0].evidence.span.text(in: source) == text)
         #expect(record.mentions[0].evidence.span.end == text.utf16.count)
-        #expect(throws: AIMemoryFailure.invalidEvidence) {
-            try AIMemoryExtraction.validate(raw: raw(surface: "未出現的人"), input: input, source: source)
+        #expect(throws: AIMemoryFailure.surfaceNotInEvidence) {
+            try AIMemoryExtraction.validate(raw: raw(surface: "未出现的人"), input: input, source: source)
         }
-        #expect(throws: AIMemoryFailure.invalidEvidence) {
+        #expect(throws: AIMemoryFailure.evidenceSegment) {
             try AIMemoryExtraction.validate(raw: raw(segment: "s999"), input: input, source: source)
         }
-        #expect(throws: AIMemoryFailure.invalidEvidence) {
+        #expect(throws: AIMemoryFailure.evidenceQuote) {
             try AIMemoryExtraction.validate(raw: raw(quote: "柳青"), input: input, source: source)
         }
-        #expect(throws: AIMemoryFailure.invalidEvidence) {
-            try AIMemoryExtraction.validate(raw: raw(quote: "柳青說了原文沒有的話"), input: input, source: source)
+        #expect(throws: AIMemoryFailure.evidenceQuote) {
+            try AIMemoryExtraction.validate(raw: raw(quote: "柳青说了原文没有的话"), input: input, source: source)
         }
     }
 
     @Test @MainActor func consentProposalIsReadOnlyAndScopeIsFixedWithMissingCoverage() async throws {
-        let source = source(["人物1在書信中被提及。", nil, "人物2在遠處。"], spine: 0)
+        let source = source(["人物1在书信中被提及。", nil, "人物2在远处。"], spine: 0)
         let dir = temporary(); defer { try? FileManager.default.removeItem(at: dir) }
         let store = AICharacterMemoryStore(directory: dir), provider = Provider()
         let service = AICharacterMemoryService(store: store, provider: provider, origin: .testFixture)
@@ -115,7 +115,7 @@ struct AIPhase3CharacterMemoryTests {
     /// units keeps them: planning it again in new ones would ask for every unit again.
     @Test @MainActor func aBookAnalysedInSmallerUnitsKeepsThem() async throws {
         #expect(AIMemoryBudget().unitCharacters == 4_000)
-        let text = String(repeating: "人物1在信裡被提及。\n", count: 300)
+        let text = String(repeating: "人物1在信里被提及。\n", count: 300)
         let source = source([text])
         let dir = temporary(); defer { try? FileManager.default.removeItem(at: dir) }
         let store = AICharacterMemoryStore(directory: dir), provider = Provider()
@@ -135,7 +135,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test func longUnicodeChapterCoversEveryPrimaryCharacterWithoutOverlap() throws {
-        let text = String(repeating: "𠮷👩🏽‍🚀e\u{301}人物1在信裡被提及。\n", count: 400)
+        let text = String(repeating: "𠮷👩🏽‍🚀e\u{301}人物1在信里被提及。\n", count: 400)
         let source = source([text]), job = try plan(source, budget: AIMemoryBudget(unitCharacters: 1_200))
         #expect(job.units.count > 2)
         #expect(job.units.compactMap { $0.primary.text(in: source) }.joined() == text)
@@ -147,7 +147,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test func prefixAndUnmappedPositionNeverBorrowUnreadText() throws {
-        let prefix = "人物1拿起𠮷👩🏽‍🚀銅鑰匙。"
+        let prefix = "人物1拿起𠮷👩🏽‍🚀铜钥匙。"
         let source = source([prefix + "UNREAD_REVEAL"], offset: prefix.utf16.count)
         let job = try plan(source, whole: false)
         #expect(job.units.compactMap { $0.primary.text(in: source) }.joined() == prefix)
@@ -156,7 +156,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test func sameBatchLaterUnderstandingCannotUseEarlyCitationAtMidpoint() throws {
-        let text = "蒙面人到了。" + String(repeating: "風在吹。", count: 30) + "蒙面人就是柳青。"
+        let text = "蒙面人到了。" + String(repeating: "风在吹。", count: 30) + "蒙面人就是柳青。"
         let source = source([text]), job = try plan(source)
         let input = try AIMemoryExtraction.input(unit: job.units[0], source: source, job: job, previous: [])
         // Extraction does not think (maintainer, 2026-10-15; AIReasoningBudgetTests).
@@ -183,7 +183,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test func sameNameAndSimilarEventsStayDistinctAndAllFactKindsPersist() throws {
-        let source = source(["人物1謊稱殺了別人。", "人物1傳聞已死。", "人物1其實未死。"]), job = try plan(source)
+        let source = source(["人物1谎称杀了别人。", "人物1传闻已死。", "人物1其实未死。"]), job = try plan(source)
         let records = try job.units.indices.map { try record(source, job, index: $0) }
         let view = AIMemoryProjection.make(records: records, decisions: [], source: source, boundary: source.boundary())
         #expect(view.count == 3)
@@ -192,7 +192,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test @MainActor func successfulLedgerIsIdempotentAndSurvivesCheckpointAfterCommit() async throws {
-        let source = source(["人物1走過橋。"]), dir = temporary()
+        let source = source(["人物1走过桥。"]), dir = temporary()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = AICharacterMemoryStore(directory: dir)
         var job = try plan(source); job.calls = 1; job.inFlightUnitID = job.units[0].id
@@ -211,7 +211,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test @MainActor func reservedAttemptSurvivesRestartAndRequiresExplicitAcknowledgement() async throws {
-        let source = source(["人物1走過橋。"]), dir = temporary()
+        let source = source(["人物1走过桥。"]), dir = temporary()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = AICharacterMemoryStore(directory: dir)
         var job = try plan(source); job.calls = 1; job.inFlightUnitID = job.units[0].id; job.state = .running
@@ -227,7 +227,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test func realDiskFailureDoesNotAdvanceCommittedCoverage() async throws {
-        let source = source(["人物1走過橋。"]), dir = temporary()
+        let source = source(["人物1走过桥。"]), dir = temporary()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = AICharacterMemoryStore(directory: dir), job = try plan(source)
         try await store.create(job)
@@ -243,7 +243,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test @MainActor func lengthSplitIsOptInBoundedAndSharesTotalBudget() async throws {
-        let source = source([String(repeating: "風徐徐吹過。", count: 40)]), dir = temporary()
+        let source = source([String(repeating: "风徐徐吹过。", count: 40)]), dir = temporary()
         defer { try? FileManager.default.removeItem(at: dir) }
         let provider = Provider([.incompleteOutput]), store = AICharacterMemoryStore(directory: dir)
         let service = AICharacterMemoryService(store: store, provider: provider, origin: .testFixture)
@@ -257,7 +257,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test @MainActor func defaultFailureDoesNotAutomaticallyRetryAndManualSplitNeedsBudget() async throws {
-        let source = source(["人物1走過橋。人物2看著河流。"]), dir = temporary()
+        let source = source(["人物1走过桥。人物2看著河流。"]), dir = temporary()
         defer { try? FileManager.default.removeItem(at: dir) }
         let provider = Provider([.incompleteOutput]), service = AICharacterMemoryService(store: .init(directory: dir), provider: provider, origin: .testFixture)
         var budget = AIMemoryBudget(); budget.maximumCalls = 1
@@ -270,13 +270,13 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test func appendReusesIdentityButEarlierEditFillAndConfigurationInvalidate() throws {
-        let initial = source(["人物1前行。", nil, "人物2遠行。"]), old = try plan(initial)
+        let initial = source(["人物1前行。", nil, "人物2远行。"]), old = try plan(initial)
         let records = try old.units.indices.map { try record(initial, old, index: $0) }
-        let append = source(["人物1前行。", nil, "人物2遠行。", "人物3來了。"]), appended = try plan(append)
+        let append = source(["人物1前行。", nil, "人物2远行。", "人物3来了。"]), appended = try plan(append)
         #expect(records.allSatisfy { AIMemoryPlanner.matches($0, source: append, job: appended) })
-        let edit = source(["人物1後退。", nil, "人物2遠行。"]), edited = try plan(edit)
+        let edit = source(["人物1后退。", nil, "人物2远行。"]), edited = try plan(edit)
         #expect(records.allSatisfy { !AIMemoryPlanner.matches($0, source: edit, job: edited) })
-        let fill = source(["人物1前行。", "人物4原來在此。", "人物2遠行。"]), filled = try plan(fill)
+        let fill = source(["人物1前行。", "人物4原来在此。", "人物2远行。"]), filled = try plan(fill)
         #expect(AIMemoryPlanner.matches(records[0], source: fill, job: filled))
         #expect(!AIMemoryPlanner.matches(records[1], source: fill, job: filled))
         // Facts are written in the reader's language: records in another one are not reused.
@@ -290,12 +290,12 @@ struct AIPhase3CharacterMemoryTests {
     /// `validate` looks up literally in the quote. A job planned before (no language) keeps
     /// the recipe it was confirmed with.
     @Test func factsAreWrittenInTheJobsLanguageAndNamesStayAsWritten() throws {
-        let source = source(["蒙面人走過橋。"])
+        let source = source(["蒙面人走过桥。"])
         let job = try AIMemoryPlanner.plan(source: source, boundary: source.boundary(wholeBook: true), provider: "memory-mock",
                                            model: "scripted-fixture", language: .simplifiedChinese)
         let system = try AIMemoryExtraction.input(unit: job.units[0], source: source, job: job, previous: []).request.messages[0].content
-        #expect(system.contains("facts 的 text 用簡體中文寫"))
-        #expect(system.contains("surface 照原文逐字，不翻譯、不轉繁簡"))
+        #expect(system.contains("facts 的 text 用简体中文写"))
+        #expect(system.contains("surface 照原文逐字，不翻译、不转繁简"))
         var legacy = job
         legacy.language = nil
         let legacySystem = try AIMemoryExtraction.input(unit: legacy.units[0], source: source, job: legacy, previous: []).request.messages[0].content
@@ -305,7 +305,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test func aJobSavedBeforeTheLanguageFieldStillLoads() throws {
-        let job = try plan(source(["蒙面人走過橋。"]))
+        let job = try plan(source(["蒙面人走过桥。"]))
         var object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(job)) as? [String: Any])
         object["language"] = nil
         let legacy = try JSONDecoder().decode(AIMemoryJob.self, from: JSONSerialization.data(withJSONObject: object))
@@ -314,7 +314,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test func backgroundIsBoundedAndNeverReadsLaterRecords() throws {
-        let source = source(["蒙面人走過橋。", "蒙面人在船上。", "蒙面人就是柳青。"]), job = try plan(source)
+        let source = source(["蒙面人走过桥。", "蒙面人在船上。", "蒙面人就是柳青。"]), job = try plan(source)
         let early = try record(source, job), late = try record(source, job, index: 2, previous: [early])
         let input = try AIMemoryExtraction.input(unit: job.units[1], source: source, job: job, previous: [early, late])
         #expect(input.background.count == 1 && input.background[0].recordID == early.unit.id)
@@ -323,7 +323,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test func missingBackgroundDependencyInvalidatesDescendant() async throws {
-        let source = source(["蒙面人走過橋。", "蒙面人就是柳青。"]), job = try plan(source), dir = temporary()
+        let source = source(["蒙面人走过桥。", "蒙面人就是柳青。"]), job = try plan(source), dir = temporary()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = AICharacterMemoryStore(directory: dir)
         try await store.create(job)
@@ -335,7 +335,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test @MainActor func staleJobCannotCommitAndClearOnlyRemovesThisBookMemory() async throws {
-        let source = source(["人物1走過橋。"]), dir = temporary()
+        let source = source(["人物1走过桥。"]), dir = temporary()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = AICharacterMemoryStore(directory: dir), old = try plan(source), newer = try plan(source)
         try await store.create(old); try await store.create(newer)
@@ -350,7 +350,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test @MainActor func everyCharacterHasLocalCardsAndPagingNeedsNoAdditionalModelCalls() async throws {
-        let source = source((0..<85).map { "人物\($0)在一封書信裡被提及。" }), dir = temporary()
+        let source = source((0..<85).map { "人物\($0)在一封书信里被提及。" }), dir = temporary()
         defer { try? FileManager.default.removeItem(at: dir) }
         let provider = Provider(), service = AICharacterMemoryService(store: .init(directory: dir), provider: provider, origin: .testFixture)
         try await service.start(confirmed: plan(source), source: source); await service.wait(book: book)
@@ -362,9 +362,9 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test @MainActor func hundredsOfChaptersResumeIncrementAndScopeWithoutFutureIdentity() async throws {
-        var texts: [String?] = (0..<650).map { "合成章節\($0 + 1)：風從空谷吹過。" }
-        texts[39] = "蒙面人交出一封書信後離開。"
-        texts[619] = "蒙面人就是柳青，今天終於揭下了面罩。"
+        var texts: [String?] = (0..<650).map { "合成章节\($0 + 1)：风从空谷吹过。" }
+        texts[39] = "蒙面人交出一封书信后离开。"
+        texts[619] = "蒙面人就是柳青，今天终于揭下了面罩。"
         let source = source(texts), dir = temporary(), started = Date()
         defer { try? FileManager.default.removeItem(at: dir) }
         let provider = Provider()
@@ -398,7 +398,7 @@ struct AIPhase3CharacterMemoryTests {
         #expect(merged.count == 1 && merged.cards[0].names == ["柳青", "蒙面人"])
         for alias in late.aliases { try await service.decide(alias: alias, approved: false, source: source, boundary: lateBoundary) }
         #expect(try await service.view(source: source, boundary: lateBoundary).count == 3)
-        let extended = self.source(texts + ["人物9在新章登場。", "人物8在信裡出現。"])
+        let extended = self.source(texts + ["人物9在新章登场。", "人物8在信里出现。"])
         let extendedJob = try plan(extended)
         #expect(try await service.coverage(job: extendedJob, source: extended).committedUnits == 650)
         try await service.start(confirmed: extendedJob, source: extended); await service.wait(book: book)
@@ -445,7 +445,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test @MainActor func lateCancelledReplyCannotOverwriteResumedBudgetOrRecords() async throws {
-        let source = source(["人物1在橋上。"]), dir = temporary()
+        let source = source(["人物1在桥上。"]), dir = temporary()
         defer { try? FileManager.default.removeItem(at: dir) }
         let provider = HeldProvider(), store = AICharacterMemoryStore(directory: dir)
         let service = AICharacterMemoryService(store: store, provider: provider, origin: .testFixture)
@@ -462,7 +462,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test @MainActor func networkFailureRetainsPossibleBillingAndNoAutomaticRetry() async throws {
-        let source = source(["人物1在橋上。"]), dir = temporary()
+        let source = source(["人物1在桥上。"]), dir = temporary()
         defer { try? FileManager.default.removeItem(at: dir) }
         let provider = Provider([.networkError("fixture disconnect")])
         let service = AICharacterMemoryService(store: .init(directory: dir), provider: provider, origin: .testFixture)
@@ -473,23 +473,20 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test @MainActor func existingChatCardsRosterAndManualVoicesRemainIsolated() async throws {
-        let source = source(["蒙面人出現。", "蒙面人就是柳青。"]), dir = temporary()
+        let source = source(["蒙面人出现。", "蒙面人就是柳青。"]), dir = temporary()
         let name = "memory-isolation-\(UUID())", defaults = UserDefaults(suiteName: name)!
         defer { try? FileManager.default.removeItem(at: dir); defaults.removePersistentDomain(forName: name) }
         let chats = AIChatStore(defaults: defaults), cards = AICharacterCardStore(directory: dir.appendingPathComponent("legacy-cards"))
-        let roster = AISpeakerRosterStore(defaults: defaults)
         let session = AIChatSession(messages: [.init(role: .user, text: "Existing conversation")])
         chats.save(session, forBook: book)
         let profile = AICharacterProfile(name: "Manual", firstAppearance: nil, role: nil, relationships: [], aliasCandidates: ["Alias"], summary: "Existing profile", citationChunkIDs: [], provider: "manual", model: "none", promptVersion: "legacy")
         cards.upsert(profile, forBook: book)
-        roster.save(["Manual": "Manual"], forBook: book, boundary: source.boundary())
         defaults.set(TTSRoleVoiceCast.setting(voiceIdentifier: "system:manual", forSpeaker: "Manual", bookID: book, in: [:]), forKey: "manual-cast")
         let before = defaults.persistentDomain(forName: name)! as NSDictionary
         let service = AICharacterMemoryService(store: .init(directory: dir.appendingPathComponent("memory")), provider: Provider(), origin: .testFixture)
         try await service.start(confirmed: plan(source), source: source); await service.wait(book: book)
         let view = try await service.view(source: source, boundary: source.boundary())
         for alias in view.aliases { try await service.decide(alias: alias, approved: true, source: source, boundary: source.boundary()) }
-        #expect(roster.safeRoster(forBook: book, boundary: source.boundary())["蒙面人"] == nil)
         #expect(cards.aliasMap(forBook: book, boundary: source.boundary())["蒙面人"] == nil)
         try await service.clear(book: book)
         #expect(chats.sessions(forBook: book).first?.id == session.id)
@@ -498,7 +495,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test @MainActor func concurrentResumeReservesOneActivationAndOneBudgetIncrease() async throws {
-        let source = source(["人物1在橋上。"]), dir = temporary()
+        let source = source(["人物1在桥上。"]), dir = temporary()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = AICharacterMemoryStore(directory: dir), provider = Provider()
         let service = AICharacterMemoryService(store: store, provider: provider, origin: .testFixture)
@@ -512,7 +509,7 @@ struct AIPhase3CharacterMemoryTests {
     }
 
     @Test @MainActor func cancelledLaunchAndResumeNeverStartModelCalls() async throws {
-        let source = source(["人物1在橋上。"]), dir = temporary()
+        let source = source(["人物1在桥上。"]), dir = temporary()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = AICharacterMemoryStore(directory: dir), provider = Provider()
         let service = AICharacterMemoryService(store: store, provider: provider, origin: .testFixture)

@@ -1,6 +1,6 @@
 import Foundation
 
-/// The rules of one list's items: a 來源配置's search or explore rule, or a module's list
+/// The rules of one list's items: a 来源配置's search or explore rule, or a module's list
 /// (Phase 6c). One mapping for all of them, so a module reads a list the way a source does.
 struct RuleListFields: Sendable {
     var name: String
@@ -11,9 +11,9 @@ struct RuleListFields: Sendable {
     var wordCount: String
     var lastChapter: String
     var kind: String
-    /// A module's (6d); 來源配置 have no language rule.
+    /// A module's (6d); 来源配置 have no language rule.
     var language: String = ""
-    // A module's (format 3.0); 來源配置 have none of these.
+    // A module's (format 3.0); 来源配置 have none of these.
     var aliases: String = ""
     var tags: String = ""
     var publisher: String = ""
@@ -21,6 +21,11 @@ struct RuleListFields: Sendable {
     var series: String = ""
     var seriesCovers: String = ""
     var contentKind: String = ""
+    /// A module's (format 3.0.1): the record's own id on the site.
+    var id: String = ""
+    /// A module's (format 3.0.1): the books of the series the item stands for, each read with
+    /// these same rules.
+    var volumes: String = ""
 }
 
 /// One list item as its rules read it.
@@ -44,6 +49,12 @@ struct RuleListItem: Codable, Equatable, Sendable {
     var series: String? = nil
     var seriesCovers: [String]? = nil
     var contentKind: String? = nil
+    /// A module's (format 3.0.1): the record's own id on the site, nil without a rule.
+    var id: String? = nil
+    /// A module's (format 3.0.1): the books of the series the item stands for, in series order,
+    /// nil without a rule. Each was read with the list's own rules; none lists volumes itself,
+    /// and one the list gives no link has an empty `bookUrl`.
+    var volumes: [RuleListItem]? = nil
     /// What the item's rules put (`@put`, `java.put`) on top of the list's own puts: Legado's
     /// `SearchBook.variable`, which travels with the book into its detail, TOC and content.
     /// Nil when nothing was put, or when the caller gave no item scope.
@@ -55,10 +66,10 @@ enum RuleListMapping {
     /// is skipped. `engine` is left holding the last item.
     ///
     /// - Parameter earlyFilter: asked with the name and author before the other fields are
-    ///   read (Legado's BookList idea): a strict matcher such as 換源 skips most of the work.
+    ///   read (Legado's BookList idea): a strict matcher such as 换源 skips most of the work.
     /// - Parameter onMissingLink: when given, an item whose link rule finds no link in it is
     ///   left out and named here. Legado lists it as its page (`bookUrl = baseUrl`), which is
-    ///   how a site's "no results" row (「没有找到包含：…」) became a book in 搜尋 (search 9a). An
+    ///   how a site's "no results" row (「没有找到包含：…」) became a book in 搜寻 (search 9a). An
     ///   empty link rule still means the page itself, as Legado has it.
     /// - Parameter onSelected: told how many items the list rule selected, before any is read
     ///   or skipped — Legado's `collections.size`.
@@ -83,7 +94,8 @@ enum RuleListMapping {
         onMissingLink: ((_ name: String) -> Void)? = nil,
         itemScope: (() -> RuleDataInterface)? = nil,
         itemBook: (() -> LegadoBookBridge)? = nil,
-        onSelected: ((_ count: Int) -> Void)? = nil
+        onSelected: ((_ count: Int) -> Void)? = nil,
+        keepsUnlinked: Bool = false
     ) -> [RuleListItem] {
         guard !listRule.isEmpty else {
             onSelected?(0)
@@ -119,7 +131,11 @@ enum RuleListMapping {
             let coverUrl = engine.getOptionalURL(ruleStr: fields.coverUrl)
             book?.coverUrl = coverUrl
             let bookUrl: String
-            if let onMissingLink, !fields.bookUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if keepsUnlinked {
+                // A series' volume (`fields.volumes`): one the list gives no link is still a
+                // volume, with no page of its own; never the list's own address.
+                bookUrl = engine.getOptionalURL(ruleStr: fields.bookUrl)
+            } else if let onMissingLink, !fields.bookUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 bookUrl = engine.getOptionalURL(ruleStr: fields.bookUrl)
                 guard !bookUrl.isEmpty else {
                     onMissingLink(name)
@@ -129,6 +145,19 @@ enum RuleListMapping {
                 bookUrl = engine.getString(ruleStr: fields.bookUrl, isUrl: true)
             }
             book?.bookUrl = bookUrl
+            let aliases = values(engine, fields.aliases), tags = values(engine, fields.tags)
+            let publisher = value(engine, fields.publisher), isbn = value(engine, fields.isbn)
+            let series = value(engine, fields.series), seriesCovers = values(engine, fields.seriesCovers)
+            let contentKind = value(engine, fields.contentKind), id = value(engine, fields.id)
+            let language = fields.language.isEmpty ? "" : engine.getString(ruleStr: fields.language)
+            // Last: reading the volumes moves the engine onto each of them in turn.
+            var volumes: [RuleListItem]?
+            if !fields.volumes.isEmpty {
+                var own = fields
+                own.volumes = ""
+                volumes = Self.items(engine: engine, content: element, baseURL: baseURL, listRule: fields.volumes,
+                                     fields: own, keepsUnlinked: true)
+            }
             items.append(RuleListItem(
                 name: name,
                 author: author,
@@ -138,14 +167,16 @@ enum RuleListMapping {
                 wordCount: wordCount,
                 lastChapter: lastChapter,
                 kind: kind,
-                language: fields.language.isEmpty ? "" : engine.getString(ruleStr: fields.language),
-                aliases: values(engine, fields.aliases),
-                tags: values(engine, fields.tags),
-                publisher: value(engine, fields.publisher),
-                isbn: value(engine, fields.isbn),
-                series: value(engine, fields.series),
-                seriesCovers: values(engine, fields.seriesCovers),
-                contentKind: value(engine, fields.contentKind),
+                language: language,
+                aliases: aliases,
+                tags: tags,
+                publisher: publisher,
+                isbn: isbn,
+                series: series,
+                seriesCovers: seriesCovers,
+                contentKind: contentKind,
+                id: id,
+                volumes: volumes,
                 runtimeVariables: scope.flatMap { $0.variableMap.isEmpty ? nil : $0.variableMap }
             ))
         }
@@ -167,7 +198,7 @@ enum RuleListMapping {
 }
 
 extension OnlineBook {
-    /// A 來源配置's list item. `tocUrl` is empty, as Legado's `SearchBook.tocUrl` is: the real
+    /// A 来源配置's list item. `tocUrl` is empty, as Legado's `SearchBook.tocUrl` is: the real
     /// table of contents comes from `ruleBookInfo.tocUrl` once the detail page is open.
     init(_ item: RuleListItem, source: BookSource) {
         self.init(name: item.name, author: item.author, intro: item.intro, coverUrl: item.coverUrl, bookUrl: item.bookUrl,

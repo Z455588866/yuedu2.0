@@ -21,10 +21,10 @@ struct HomeSectionTests {
 
     @Test("every binding and layout survives encoding")
     func roundTrip() throws {
-        let sections = allBindings().map { HomeSection(layout: .row, title: "標題", binding: $0, parameters: ["sort": "new"]) }
+        let sections = allBindings().map { HomeSection(layout: .row, title: "标题", binding: $0, parameters: ["sort": "new"]) }
             + [HomeSection(layout: .tiles, binding: .myLibrary, isEnabled: false),
                HomeSection(layout: HomeSectionLayout(.waterfall), binding: .sourceCategories([category]))]
-            + [HomeSectionLayout.band, .largeRow, .heroGrid, .rankedRow].map { HomeSection(layout: $0, subtitle: "副標", binding: .latest) }
+            + [HomeSectionLayout.band, .largeRow, .heroGrid, .rankedRow].map { HomeSection(layout: $0, subtitle: "副标", binding: .latest) }
             + [HomeSectionLayout.categoryCards, .collageCards].map { HomeSection(layout: $0, binding: .gutenbergLists) }
         let page = HomePage(sections: sections)
         let decoded = try JSONDecoder().decode(HomePage.self, from: JSONEncoder().encode(page))
@@ -55,8 +55,8 @@ struct HomeSectionTests {
 
     @Test("a section's own subtitle is kept, and one left empty is not written (schema 3)")
     func subtitle() throws {
-        let section = HomeSection(layout: .band, title: "本週", subtitle: "編輯挑的漫畫", binding: .latest)
-        #expect(try JSONDecoder().decode(HomeSection.self, from: JSONEncoder().encode(section)).subtitle == "編輯挑的漫畫")
+        let section = HomeSection(layout: .band, title: "本周", subtitle: "编辑挑的漫画", binding: .latest)
+        #expect(try JSONDecoder().decode(HomeSection.self, from: JSONEncoder().encode(section)).subtitle == "编辑挑的漫画")
         let plain = try JSONSerialization.jsonObject(with: JSONEncoder().encode(HomeSection(layout: .row, binding: .latest)))
         #expect((plain as? [String: Any])?["subtitle"] == nil)
         #expect(HomePage(sections: [section]).schemaVersion == 3)
@@ -86,31 +86,57 @@ struct HomeSectionTests {
             case .gutenbergLists: "featured"
             case .gutenbergShelf("popular"): "popular"
             case .nextInSeries: "next"
+            case .lists(HomePageDefaults.pickCards): "picks"
+            case .lists: "charts"
+            case .module(HomePageDefaults.trendsID, let entry): entry
             default: "other"
             }
         }
     }
 
-    /// 精選書單: the bundled lists as one section of cards (專題集合, decision 37), since
+    /// 精选书单: the bundled lists as one section of cards (专题集合, decision 37), since
     /// 2026-10-13 in place of a row per list.
     private var featured: [String] { ["featured"] }
 
-    // 我的書庫 left the defaults in 5d-1 (settled decision 12): 範圍 holds the libraries.
-    // 為你推薦 was deleted on 2026-10-27 (maintainer): no default has it.
-    @Test("book-source readers start from 繼續閱讀 → 系列下一本 → 最新 → 古騰堡熱門 → 精選")
+    // 我的书库 left the defaults in 5d-1 (settled decision 12): 范围 holds the libraries.
+    // 为你推荐 was deleted on 2026-10-27 (maintainer): no default has it.
+    // Since 2026-11-14 the home is laid out as Apple Books' store (maintainer): 热门精选, 主打卡片,
+    // 本月热门, 热门排行榜, 探索更多, then 完结推荐, 今年热门 and 经典名著, and 古腾堡热门.
+    private let storeSections = ["picks", "today", "month", "featured", "completed", "year", "classics", "popular"]
+
+    @Test("book-source readers start from 继续阅读 → 系列下一本 → 最新, then the store's sections")
     func bookSourceDefaults() {
         let page = HomePageDefaults.page(mode: .bookSources, publicLibrariesAvailable: true, languages: [])
-        #expect(kinds(page) == ["continue", "next", "latest", "popular"] + featured)
+        #expect(kinds(page) == ["continue", "next", "latest"] + storeSections)
     }
 
-    @Test("public-library readers and new installs start from 繼續閱讀 → 系列下一本 → 古騰堡熱門 → 精選 → 最新")
+    @Test("public-library readers and new installs start from 继续阅读 → 系列下一本, the store's sections, and 最新 last")
     func publicLibraryDefaults() {
         let page = HomePageDefaults.page(mode: .publicLibraries, publicLibrariesAvailable: true, languages: [])
-        #expect(kinds(page) == ["continue", "next", "popular"] + featured + ["latest"])
+        #expect(kinds(page) == ["continue", "next"] + storeSections + ["latest"])
         #expect(!page.sections.contains { if case .gutenbergCollection = $0.binding { true } else { false } })
-        // After Apple Books' home (2026-10-25): the download ranking ranked, the lists as cards.
-        #expect(page.sections[2].layout == .rankedRow)
-        #expect(page.sections[3].layout == .categoryCards)
+        let layouts = Dictionary(uniqueKeysWithValues: zip(kinds(page), page.sections.map(\.layout)))
+        #expect(layouts["picks"] == .collageCards)
+        #expect(layouts["today"] == .heroCards)
+        #expect(layouts["month"] == .multiRow)
+        #expect(layouts["featured"] == .bannerCards)
+        #expect(layouts["completed"] == .largeRow)
+        #expect(layouts["year"] == .heroGrid)
+        #expect(layouts["classics"] == .colorBand)
+        // 古腾堡's covers are mostly made up: a plain row, never large.
+        #expect(layouts["popular"] == .row)
+    }
+
+    @Test("热门精选 is three of 趋势's lists, a collage each; no section of the defaults prints a module's name")
+    func picksAndTitles() {
+        #expect(HomePageDefaults.pickCards.map(\.binding) == ["year", "completed", "classics"].map {
+            HomeSectionBinding.module(moduleID: "trends", entryID: $0)
+        })
+        let page = HomePageDefaults.page(mode: .publicLibraries, publicLibrariesAvailable: true, languages: ["zh"])
+        let titles = Dictionary(uniqueKeysWithValues: zip(kinds(page), page.sections.map { $0.displayTitle(sourceName: "趋势") }))
+        #expect(titles["picks"] == localized("热门精选"))
+        #expect(titles["charts"] == localized("热门排行榜"))
+        #expect(titles["featured"] == localized("精选书单"))
     }
 
     @Test("a Gutenberg shelf is kept by id and read on the endpoint this build uses")
@@ -122,7 +148,7 @@ struct HomeSectionTests {
         }
         #expect(GutenbergShelf.shelf(id: "Popular") == nil)
         #expect(GutenbergShelf.shelf(id: "") == nil)
-        #expect(HomeSection(layout: .row, binding: .gutenbergShelf(id: "popular")).displayTitle(sourceName: "") == localized("熱門"))
+        #expect(HomeSection(layout: .row, binding: .gutenbergShelf(id: "popular")).displayTitle(sourceName: "") == localized("热门"))
     }
 
     @Test("China gets no public-library section")
@@ -133,7 +159,7 @@ struct HomeSectionTests {
             #expect(!kinds(page).contains("popular"))
         }
         let page = HomePageDefaults.page(mode: .bookSources, publicLibrariesAvailable: false, languages: [])
-        #expect(kinds(page) == ["continue", "next", "latest"])
+        #expect(kinds(page) == ["continue", "next", "latest", "picks", "today", "month", "completed", "year", "classics"])
     }
 
     // The official modules' lists in the reader's languages (maintainer, 2026-10-21).
@@ -169,14 +195,33 @@ struct HomeSectionTests {
         #expect(HomePageDefaults.officialModuleLists(languages: ["zh"], publicLibrariesAvailable: false).count == 2)
     }
 
-    @Test("the official modules' lists follow 系列下一本 for a new install, 最新 for a book-source reader")
-    func officialModuleListsPlace() {
+    @Test("each reading language's rankings are 热门排行榜's columns, after 本月热门: Chinese Bangumi, Japanese なろう, English AniList")
+    func rankingsByLanguage() {
+        func card(_ module: String, _ entry: String) -> HomeListCard { HomeListCard(binding: .module(moduleID: module, entryID: entry)) }
+        let bangumi = [card("bangumi", "novel-rank"), card("bangumi", "manga-rank")]
+        let narou = [card("narou", "weekly"), card("narou", "completed")]
+        let aniList = [card("anilist", "trending-novels"), card("anilist", "trending-manga")]
+        #expect(HomePageDefaults.rankings(languages: ["zh"], publicLibrariesAvailable: true) == bangumi)
+        #expect(HomePageDefaults.rankings(languages: ["ja"], publicLibrariesAvailable: true) == narou)
+        #expect(HomePageDefaults.rankings(languages: ["en"], publicLibrariesAvailable: true) == aniList)
+        #expect(HomePageDefaults.rankings(languages: ["ko"], publicLibrariesAvailable: true).isEmpty)
+        #expect(HomePageDefaults.rankings(languages: ["ja", "zh-Hant", "zh"], publicLibrariesAvailable: true) == narou + bangumi,
+                "in the languages' order, each ranking once")
+        // なろう stays off where the public libraries are hidden.
+        #expect(HomePageDefaults.rankings(languages: ["ja"], publicLibrariesAvailable: false).isEmpty)
+
         let newInstall = HomePageDefaults.page(mode: .publicLibraries, publicLibrariesAvailable: true, languages: ["zh"])
-        #expect(kinds(newInstall) == ["continue", "next", "other", "other", "popular"] + featured + ["latest"])
+        #expect(kinds(newInstall) == ["continue", "next", "picks", "today", "month", "charts", "featured", "completed", "year",
+                                      "classics", "popular", "latest"])
+        let charts = newInstall.sections[5]
+        #expect(charts.binding == .lists(bangumi))
+        #expect(charts.layout == .rankedRow && charts.layout.style == .chart)
         let sources = HomePageDefaults.page(mode: .bookSources, publicLibrariesAvailable: true, languages: ["zh"])
-        #expect(kinds(sources) == ["continue", "next", "latest", "other", "other", "popular"] + featured)
-        #expect(newInstall.sections[2].binding == .module(moduleID: "bangumi", entryID: "novel-rank"))
-        #expect(newInstall.sections[2].layout == .band)
+        #expect(kinds(sources) == ["continue", "next", "latest", "picks", "today", "month", "charts", "featured", "completed",
+                                   "year", "classics", "popular"])
+        // A language with no rankings has no 热门排行榜.
+        #expect(!kinds(HomePageDefaults.page(mode: .publicLibraries, publicLibrariesAvailable: true, languages: ["ko"]))
+            .contains("charts"))
     }
 
     @Test("every default section is enabled, untitled and has its own id")
@@ -291,7 +336,7 @@ struct HomePageStoreTests {
         let (folder, cleanup) = try makeFolder()
         defer { cleanup() }
         let pagesURL = folder.appendingPathComponent("custom_explore_pages.json")
-        let before = try JSONEncoder().encode([CustomExplorePage(name: "我的頁")])
+        let before = try JSONEncoder().encode([CustomExplorePage(name: "我的页")])
         try before.write(to: pagesURL)
 
         let store = HomePageStore(fileURL: folder.appendingPathComponent("explore_home.json"))

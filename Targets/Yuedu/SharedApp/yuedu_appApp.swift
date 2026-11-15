@@ -85,6 +85,10 @@ struct yuedu_appApp: App {
         // `AppLogger` call from here on is captured for 設定 → 診斷與回報, and the
         // session record is what tells the next launch whether this one survived.
         DiagnosticLog.shared.beginSession()
+        // Books imported before `BookFileProtection.copy` kept the protection class of the
+        // app they came from; one that locks with the device crashes 朗读 behind the lock
+        // screen. Off main: it walks Documents and nothing waits on it.
+        Task.detached(priority: .utility) { BookFileProtection.relaxExistingFiles() }
         // Before any source script can ask for it: `java.deviceID()` runs on the JS queue,
         // and `UIDevice` can only be read here, on main.
         DeviceIdentity.captureAtLaunch()
@@ -121,7 +125,8 @@ struct yuedu_appApp: App {
         // anything reads `HomePageStore.shared` or `AggregationSettingsStore.shared`.
         if ProcessInfo.processInfo.arguments.contains("-reset-explore-home") {
             for key in [ExploreSettings.scopeKey, AggregationSettingsStore.defaultsKey,
-                        ExploreSettings.legacyLandingKey, HomePageStore.defaultsRhythmKey] {
+                        ExploreSettings.legacyLandingKey, HomePageStore.defaultsRhythmKey,
+                        HomePageStore.defaultsStoreKey] {
                 UserDefaults.standard.removeObject(forKey: key)
             }
             for name in ["explore_home.json", "custom_explore_pages.json"] {
@@ -294,6 +299,11 @@ struct yuedu_appApp: App {
                     // What an earlier 清除封面快取 deleted, or a cover download that failed then
                     // (feedback #116).
                     Task(priority: .utility) { await bookStore.restoreMissingCovers() }
+                    // Caches over the cap in 快取管理 lose their least recently used first
+                    // (feedback #47, #129): checked now, then as cache writes add up.
+                    CacheRetentionProvider.bind(bookStore)
+                    CacheAutoCleaner.shared.bind(CacheManagementService(coverOwner: bookStore))
+                    CacheAutoCleaner.shared.requestCheck(reason: "launch")
                     _ = FirebaseAuthManager.shared
                     Task {
                         await AppDependencies.live.offlineDownloadManager

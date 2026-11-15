@@ -45,7 +45,7 @@ struct RuleModuleRepositoryView: View {
         .navigationTitle(repository?.subscription.name ?? localized("模组仓库"))
         .toolbarTitleDisplayMode(.inline)
         .themedAppSurface(for: .settings)
-        .hidesRootTabBar()
+        .hidesRootTabBar(hasBottomBar: true)
         .environment(\.editMode, $editMode)
         .toolbar { toolbar }
         .sheet(isPresented: $showsImport) {

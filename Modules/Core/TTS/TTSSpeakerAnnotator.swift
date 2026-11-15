@@ -19,6 +19,16 @@ enum TTSSpeakerAnnotator {
         /// `nil` when the line is quoted speech whose speaker could not be read off
         /// the surrounding narration.
         let speaker: String?
+        /// How the line is spoken, from the AI analysis. `nil` for the engines that
+        /// cannot act an emotion; kept here so one attribution carries everything a
+        /// per-line voice needs.
+        let delivery: TTSDelivery?
+
+        init(range: NSRange, speaker: String?, delivery: TTSDelivery? = nil) {
+            self.range = range
+            self.speaker = speaker
+            self.delivery = delivery
+        }
     }
 
     /// Quoted runs of `text`, in ascending order, each with its speaker if one

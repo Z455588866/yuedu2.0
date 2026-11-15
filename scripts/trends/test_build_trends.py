@@ -23,22 +23,22 @@ class PureTests(unittest.TestCase):
     def test_a_story_is_kept_and_its_adaptation_is_not(self):
         self.assertTrue(builder.keeps_work(['Q1667921', 'Q277759']))   # 凡人修仙传: novel series
         self.assertTrue(builder.keeps_work(['Q104213567']))            # a light novel series
-        self.assertFalse(builder.keeps_work(['Q5398426']))             # 香蜜沉沉燼如霜: television series
+        self.assertFalse(builder.keeps_work(['Q5398426']))             # 香蜜沉沉烬如霜: television series
         self.assertFalse(builder.keeps_work([]))
 
     def test_titles_lose_the_articles_qualifier_and_compare_folded(self):
         self.assertEqual(builder.strip_disambiguation('天官赐福 (小说)'), '天官赐福')
-        self.assertEqual(builder.strip_disambiguation('魔道祖師（小說）'), '魔道祖師')
-        self.assertEqual(builder.strip_disambiguation('Re:ゼロから始める異世界生活'), 'Re:ゼロから始める異世界生活')
-        self.assertEqual(builder.normalize_title('無職転生 〜異世界行ったら本気だす〜'),
-                         builder.normalize_title('無職転生 ～異世界行ったら本気だす～'))
+        self.assertEqual(builder.strip_disambiguation('魔道祖师（小说）'), '魔道祖师')
+        self.assertEqual(builder.strip_disambiguation('Re:ゼロから始める异世界生活'), 'Re:ゼロから始める异世界生活')
+        self.assertEqual(builder.normalize_title('无职転生 〜异世界行ったら本気だす〜'),
+                         builder.normalize_title('无职転生 ～异世界行ったら本気だす～'))
         self.assertEqual(builder.normalize_title('ＡＢＣ・def'), builder.normalize_title('abc def'))
 
     def test_both_scripts_read_one_chinese_label_then_convert_it(self):
-        labels = {'zh': {'value': '罗贯中'}, 'zh-tw': {'value': '羅本'}}
+        labels = {'zh': {'value': '罗贯中'}, 'zh-tw': {'value': '罗本'}}
         self.assertEqual(builder.label(labels, builder.REGIONS['zh-Hant'].labels), '罗贯中')
         self.assertEqual(builder.label(labels, builder.REGIONS['zh-Hans'].labels), '罗贯中')
-        self.assertEqual(builder.label({'zh-hant': {'value': '忘語'}}, builder.REGIONS['zh-Hans'].labels), '忘語')
+        self.assertEqual(builder.label({'zh-hant': {'value': '忘语'}}, builder.REGIONS['zh-Hans'].labels), '忘语')
         self.assertIsNone(builder.label({}, ('ja',)))
 
     def test_a_name_kept_only_as_mul_is_every_languages_name(self):
@@ -58,7 +58,7 @@ class BangumiTests(unittest.TestCase):
         self.assertTrue(builder.bangumi_ended(found), '结束 2013-09-23')
 
     def test_a_novel_with_only_a_start_is_not_finished(self):
-        found = builder.bangumi_match(subjects('daomu'), ['盗墓笔记', '盜墓筆記'], ['南派三叔'])
+        found = builder.bangumi_match(subjects('daomu'), ['盗墓笔记', '盗墓笔记'], ['南派三叔'])
         self.assertEqual(found['id'], 10786)
         self.assertFalse(builder.bangumi_ended(found))
 
@@ -73,7 +73,7 @@ class BangumiTests(unittest.TestCase):
                                         'platform': '小说', 'infobox': [{'key': '作者', 'value': '唐七公子'}]}],
                                       ['三生三世十里桃花'], ['唐七'])
         self.assertEqual(found['id'], 304497)
-        self.assertTrue(builder.same_author({'平鳥コウ'}, {builder.normalize_title('平鳥コウ (XPJbox)')}))
+        self.assertTrue(builder.same_author({'平鸟コウ'}, {builder.normalize_title('平鸟コウ (XPJbox)')}))
 
     def test_another_author_is_another_work(self):
         self.assertIsNone(builder.bangumi_match(subjects('fanren'), ['凡人修仙传'], ['南派三叔']))
@@ -81,37 +81,37 @@ class BangumiTests(unittest.TestCase):
 
 
 class NarouClient:
-    """ja.wikipedia's extlinks and 小説家になろう's API, shaped as they answered on 2026-10-22."""
+    """ja.wikipedia's extlinks and 小说家になろう's API, shaped as they answered on 2026-10-22."""
     def json(self, url, params=None, body=None, headers=None):
         if 'syosetu' in url:
             asked = params['ncode'].split('-')
-            novels = [{'title': 'Ｒｅ：ゼロから始める異世界生活', 'ncode': 'N2267BE', 'end': 1},
-                      {'title': 'Re：Monster（リモンスター）――刺殺から始まる怪物転生記――', 'ncode': 'N1782T', 'end': 0},
-                      {'title': '解体新書――刺殺から始まる怪物転生記――【装】の設定集', 'ncode': 'N5909V', 'end': 1}]
+            novels = [{'title': 'Ｒｅ：ゼロから始める异世界生活', 'ncode': 'N2267BE', 'end': 1},
+                      {'title': 'Re：Monster（リモンスター）――刺杀から始まる怪物転生记――', 'ncode': 'N1782T', 'end': 0},
+                      {'title': '解体新书――刺杀から始まる怪物転生记――【装】の设定集', 'ncode': 'N5909V', 'end': 1}]
             shown = [novel for novel in novels if novel['ncode'].lower() in asked]
             return [{'allcount': len(shown)}] + shown
-        links = {'Re:ゼロから始める異世界生活': ['https://ncode.syosetu.com/n2267be/'],
+        links = {'Re:ゼロから始める异世界生活': ['https://ncode.syosetu.com/n2267be/'],
                  'Re:Monster': ['https://ncode.syosetu.com/n1782t/', 'https://ncode.syosetu.com/N5909V/'],
-                 'JKハルは異世界で娼婦になった': ['https://ncode.syosetu.com/n4381dp/'],
+                 'JKハルは异世界で娼妇になった': ['https://ncode.syosetu.com/n4381dp/'],
                  'カクヨムの作品': []}
         return {'query': {'pages': [{'title': title, 'extlinks': [{'url': url} for url in links[title]]}
                                     for title in params['titles'].split('|')]}}
 
 
 class NarouTests(unittest.TestCase):
-    WORKS = {'Re:ゼロから始める異世界生活': {'qid': 'Q1'}, 'Re:Monster': {'qid': 'Q2'},
-             'JKハルは異世界で娼婦になった': {'qid': 'Q3'}, 'カクヨムの作品': {'qid': 'Q4'}}
+    WORKS = {'Re:ゼロから始める异世界生活': {'qid': 'Q1'}, 'Re:Monster': {'qid': 'Q2'},
+             'JKハルは异世界で娼妇になった': {'qid': 'Q3'}, 'カクヨムの作品': {'qid': 'Q4'}}
 
     def test_each_linked_work_is_asked_once_and_a_taken_down_one_is_unknown(self):
         job = builder.Job(NarouClient(), builder.Store(':memory:'), date(2026, 10, 22))
         self.assertEqual(job.narou_finished(builder.POOLS['ja'], self.WORKS), {'Q1': False, 'Q2': True})
 
     def test_of_several_links_the_work_is_the_one_titled_as_the_article(self):
-        novels = {'n1782t': {'title': 'Re：Monster（リモンスター）――刺殺から始まる怪物転生記――'},
-                  'n5909v': {'title': '解体新書――刺殺から始まる怪物転生記――【装】の設定集'}}
+        novels = {'n1782t': {'title': 'Re：Monster（リモンスター）――刺杀から始まる怪物転生记――'},
+                  'n5909v': {'title': '解体新书――刺杀から始まる怪物転生记――【装】の设定集'}}
         self.assertEqual(builder.narou_pick('Re:Monster', ['n1782t', 'n5909v'], novels), 'n1782t')
         self.assertEqual(builder.narou_pick('Re:Monster', ['n5909v'], novels), 'n5909v')
-        self.assertIsNone(builder.narou_pick('別の作品', ['n1782t', 'n5909v'], novels))
+        self.assertIsNone(builder.narou_pick('别の作品', ['n1782t', 'n5909v'], novels))
         self.assertIsNone(builder.narou_pick('JKハル', ['n4381dp'], novels))
         self.assertIn('narou', builder.POOLS['ja'].finished_by)
         self.assertNotIn('narou', builder.POOLS['zh'].finished_by)
@@ -145,7 +145,7 @@ class StoreTests(unittest.TestCase):
 
 class OutputTests(unittest.TestCase):
     def test_a_list_file_names_its_region_list_and_source(self):
-        works = [{'title': '詭秘之主', 'author': ['愛潛水的烏賊'], 'intro': '', 'url': 'u', 'aliases': [], 'wikidata': 'Q1'}]
+        works = [{'title': '诡秘之主', 'author': ['爱潜水的乌贼'], 'intro': '', 'url': 'u', 'aliases': [], 'wikidata': 'Q1'}]
         document = json.loads(builder.list_document('zh-Hant', 'today', works,
                                                     datetime(2026, 10, 21, tzinfo=timezone.utc)))
         self.assertEqual(document['schemaVersion'], 1)
@@ -187,8 +187,8 @@ class OutputTests(unittest.TestCase):
         self.assertEqual(set(builder.entities(Client(), ['Q1'])['Q1']['claims']), {'P31', 'P50', 'P1476'})
 
     def test_classics_are_asked_in_every_written_form_of_the_language(self):
-        self.assertIn('Q783605', builder.REGIONS['zh-Hant'].classic_languages)  # 紅樓夢: written vernacular Chinese
-        self.assertIn('Q182695', builder.REGIONS['ja'].classic_languages)       # 源氏物語: Early Middle Japanese
+        self.assertIn('Q783605', builder.REGIONS['zh-Hant'].classic_languages)  # 红楼梦: written vernacular Chinese
+        self.assertIn('Q182695', builder.REGIONS['ja'].classic_languages)       # 源氏物语: Early Middle Japanese
         self.assertIn('Q36395', builder.REGIONS['en'].classic_languages)        # The Canterbury Tales: Middle English
 
     def test_english_novels_are_every_year_from_1890(self):
@@ -281,20 +281,20 @@ class AuthorTests(unittest.TestCase):
     def test_the_book_infobox_names_the_author(self):
         self.assertEqual(builder.infobox_authors(wikipedia('project-hail-mary')), ['Andy Weir'])
         # 著者 of the Novel box, not the Manga box's 作者, which adds the artist.
-        self.assertEqual(builder.infobox_authors(wikipedia('ja-katainaka')), ['佐賀崎しげる'])
+        self.assertEqual(builder.infobox_authors(wikipedia('ja-katainaka')), ['佐贺崎しげる'])
         self.assertEqual(builder.infobox_authors(wikipedia('zh-xinsong')), ['阿越'])         # author = [[阿越]]
         self.assertEqual(builder.infobox_authors(wikipedia('zh-qieming')), ['灰熊猫'])       # 作者
-        self.assertEqual(builder.infobox_authors(wikipedia('zh-lingjianshan')), ['國王陛下'])
+        self.assertEqual(builder.infobox_authors(wikipedia('zh-lingjianshan')), ['国王陛下'])
         self.assertEqual(builder.infobox_authors(wikipedia('harry-potter')), ['J. K. Rowling'])
         self.assertEqual(builder.infobox_authors('{{Infobox television | writer = X}}'), [])
         self.assertEqual([kind for kind, _ in builder.infoboxes(wikipedia('ja-katainaka'))][:3],
                          ['animanga/header', 'animanga/novel', 'animanga/manga'])
 
     def test_a_value_is_read_as_plain_names(self):
-        self.assertEqual(builder.plain_names('[[忘語|忘语]]<br />[[乙]]'), ['忘语', '乙'])
+        self.assertEqual(builder.plain_names('[[忘语|忘语]]<br />[[乙]]'), ['忘语', '乙'])
         self.assertEqual(builder.plain_names('{{plainlist|\n* [[A B]]\n* [[C D]]}}'), ['A B', 'C D'])
         self.assertEqual(builder.plain_names("'''A''' and [[B]]<ref name=x>{{cite web|title=t}}</ref>"), ['A', 'B'])
-        self.assertEqual(builder.plain_names('國王陛下（小說）、{{nowrap|丙}}'), ['國王陛下', '丙'])
+        self.assertEqual(builder.plain_names('国王陛下（小说）、{{nowrap|丙}}'), ['国王陛下', '丙'])
         self.assertEqual(builder.plain_names(''), [])
 
     def test_a_work_wikidata_names_no_one_for_reads_its_strings_then_its_infobox(self):
@@ -396,6 +396,15 @@ class SeriesTests(unittest.TestCase):
         self.assertEqual(mistborn['seriesCovers'], ['https://upload.wikimedia.org/The Well of Ascension.jpg',
                                                     'https://upload.wikimedia.org/Mistborn: Secret History.jpg'])
         self.assertNotIn('seriesCovers', alone)
+        # The series' books for the app's series page, the entry's own first: each an entry the
+        # app can open, with the entry's author where Wikidata names none for the book.
+        self.assertEqual([volume['title'] for volume in mistborn['volumes']],
+                         ['Mistborn: The Final Empire', 'The Well of Ascension', 'Mistborn: Secret History'])
+        self.assertEqual(mistborn['volumes'][1], {
+            'title': 'The Well of Ascension', 'author': mistborn['author'], 'wikidata': 'Q-2',
+            'url': 'https://en.wikipedia.org/wiki/The_Well_of_Ascension',
+            'cover': 'https://upload.wikimedia.org/The Well of Ascension.jpg'})
+        self.assertNotIn('volumes', alone)
 
     def test_a_series_entry_carries_at_most_four_other_covers(self):
         works = {f'Book {number}': work(f'Q-{number}', 'Q-long', f'20{10 + number}-01-01T00:00:00Z') for number in range(1, 8)}
@@ -424,12 +433,13 @@ class SeriesTests(unittest.TestCase):
 
 
 class VolumeTests(unittest.TestCase):
-    """華語's and 日本's articles are each a whole series: its volumes are Bangumi's 单行本."""
+    """华语's and 日本's articles are each a whole series: its volumes are Bangumi's 单行本."""
 
     @staticmethod
     def related(subject):
         def volume(id, name, cover=True):
-            return {'id': id, 'name': name, 'relation': '单行本', 'type': 1,
+            return {'id': id, 'name': f'薬屋のひとりごと {name}', 'name_cn': f'药屋少女的呢喃 {name}' if name != '6' else '',
+                    'relation': '单行本', 'type': 1,
                     'images': {'common': f'https://lain.bgm.tv/r/400/pic/cover/l/{subject}-{name}.jpg' if cover else ''}}
         return [{'id': 217552, 'name': '薬屋のひとりごと', 'relation': '书籍', 'type': 1,
                  'images': {'common': 'https://lain.bgm.tv/r/400/pic/cover/l/novel.jpg'}},
@@ -449,10 +459,16 @@ class VolumeTests(unittest.TestCase):
                 raise HTTPError(url, 404, 'Not Found', {}, None)
             return VolumeTests.related(subject)
 
-    def test_the_volumes_are_the_单行本_with_a_cover_in_bangumis_order(self):
-        self.assertEqual([cover.rsplit('/', 1)[1] for cover in builder.bangumi_volumes(self.related(156126))],
-                         ['156126-0.jpg', '156126-0-II.jpg', '156126-1.jpg', '156126-3.jpg', '156126-4.jpg',
-                          '156126-5.jpg', '156126-6.jpg'], 'not by id, and a volume without a cover is left out')
+    def test_the_volumes_are_the_单行本_in_bangumis_order(self):
+        volumes = builder.bangumi_volumes(self.related(156126))
+        self.assertEqual([volume['name'] for volume in volumes],
+                         [f'薬屋のひとりごと {name}' for name in ['0', '0-II', '1', '2', '3', '4', '5', '6']], 'not by id')
+        self.assertEqual(volumes[0], {'name': '薬屋のひとりごと 0', 'name_cn': '药屋少女的呢喃 0',
+                                      'cover': 'https://lain.bgm.tv/r/400/pic/cover/l/156126-0.jpg'})
+        self.assertIsNone(volumes[3]['cover'], 'a volume without a cover is still a volume')
+        self.assertEqual([cover.rsplit('/', 1)[1] for cover in builder.fanned_covers(volumes)],
+                         ['156126-0-II.jpg', '156126-1.jpg', '156126-3.jpg', '156126-4.jpg', '156126-5.jpg', '156126-6.jpg'],
+                         "the first is the work's own cover; one without a cover is not fanned")
 
     def test_a_matched_work_fans_its_volumes_after_the_first_asked_once_a_week(self):
         client = self.BangumiClient()
@@ -462,31 +478,57 @@ class VolumeTests(unittest.TestCase):
         store.set_finished('Q-unmatched', None, False, 'now')
         job = builder.Job(client, store, date(2026, 10, 27))
         qids = ['Q-yakuya', 'Q-removed', 'Q-unmatched', 'Q-never-asked']
-        covers = job.volume_covers(qids)
-        self.assertEqual(list(covers), ['Q-yakuya'])
-        self.assertEqual([cover.rsplit('/', 1)[1] for cover in covers['Q-yakuya']],
-                         ['156126-0-II.jpg', '156126-1.jpg', '156126-3.jpg', '156126-4.jpg', '156126-5.jpg', '156126-6.jpg'],
-                         "the first is the work's own cover")
+        series = job.bangumi_series(qids)
+        self.assertEqual(list(series), ['Q-yakuya'])
+        self.assertEqual(series['Q-yakuya'], builder.bangumi_volumes(self.related(156126)))
         self.assertEqual(client.asked, [156126, 9], 'a removed subject has no volumes; an unmatched work is not asked')
-        self.assertEqual(job.volume_covers(qids), covers)
+        self.assertEqual(job.bangumi_series(qids), series)
         self.assertEqual(client.asked, [156126, 9], 'kept a week')
         store.set_volumes(156126, [], (datetime.now(timezone.utc) - timedelta(days=8)).isoformat())
-        self.assertEqual(job.volume_covers(['Q-yakuya']), {'Q-yakuya': covers['Q-yakuya']})
+        self.assertEqual(job.bangumi_series(['Q-yakuya']), {'Q-yakuya': series['Q-yakuya']})
         self.assertEqual(client.asked, [156126, 9, 156126], 'asked again after a week')
+        # Covers alone, as kept until 2026-11-14: asked again for the volumes' names.
+        store.set_volumes(156126, ['https://lain.bgm.tv/r/400/pic/cover/l/a.jpg'], job.now)
+        self.assertEqual(job.bangumi_series(['Q-yakuya']), {'Q-yakuya': series['Q-yakuya']})
+        self.assertEqual(client.asked, [156126, 9, 156126, 156126])
 
     def test_a_whole_series_entry_carries_its_volumes_and_names_no_series(self):
         class Client:
             def json(self, url, params=None, body=None, headers=None):
                 return {'query': {'pages': []}}
         job = builder.Job(Client(), builder.Store(':memory:'), date(2026, 10, 27))
-        works = {'薬屋のひとりごと': work('Q-yakuya'), '異世界食堂': work('Q-shokudo')}
-        totals = {window: {'薬屋のひとりごと': 3, '異世界食堂': 2} for window in builder.WINDOWS}
-        volumes = {'Q-yakuya': [f'https://lain.bgm.tv/r/400/pic/cover/l/{number}.jpg' for number in range(2, 8)]}
+        works = {'薬屋のひとりごと': work('Q-yakuya'), '异世界食堂': work('Q-shokudo')}
+        totals = {window: {'薬屋のひとりごと': 3, '异世界食堂': 2} for window in builder.WINDOWS}
+        volumes = {'Q-yakuya': builder.bangumi_volumes(self.related(156126))}
         lists = builder.build_region(job, 'ja', builder.REGIONS['ja'], works, {}, set(), totals, {}, {}, volumes)
         yakuya, shokudo = lists['year']
-        self.assertEqual(yakuya['seriesCovers'], volumes['Q-yakuya'][:builder.SERIES_COVERS])
+        self.assertEqual(yakuya['seriesCovers'], builder.fanned_covers(volumes['Q-yakuya'])[:builder.SERIES_COVERS])
         self.assertNotIn('series', yakuya, 'its title is the series')
         self.assertNotIn('seriesCovers', shokudo)
+        # Every volume for the series page, as Bangumi names it in Japanese; nothing of its own to open.
+        self.assertEqual([volume['title'] for volume in yakuya['volumes']],
+                         [f'薬屋のひとりごと {name}' for name in ['0', '0-II', '1', '2', '3', '4', '5', '6']])
+        self.assertEqual(yakuya['volumes'][0], {'title': '薬屋のひとりごと 0', 'author': yakuya['author'],
+                                                'cover': 'https://lain.bgm.tv/r/400/pic/cover/l/156126-0.jpg'})
+        self.assertNotIn('cover', yakuya['volumes'][3])
+        self.assertNotIn('volumes', shokudo)
+
+    def test_a_chinese_region_names_the_volumes_in_chinese_in_its_script(self):
+        class Client:
+            def json(self, url, params=None, body=None, headers=None):
+                if params and params.get('action') == 'parse':
+                    lines = [line for line in params['text'].split('\n\n')]
+                    return {'parse': {'text': ''.join(f'<p>{line.replace("药", "药").replace("呢喃", "呢喃")}</p>' for line in lines)}}
+                return {'query': {'pages': []}}
+        job = builder.Job(Client(), builder.Store(':memory:'), date(2026, 11, 14))
+        works = {'药师少女的独语': work('Q-yakuya')}
+        totals = {window: {'药师少女的独语': 3} for window in builder.WINDOWS}
+        volumes = {'Q-yakuya': builder.bangumi_volumes(self.related(156126))}
+        region = next(name for name, region in builder.REGIONS.items() if region.variant == 'zh-tw')
+        lists = builder.build_region(job, region, builder.REGIONS[region], works, {}, set(), totals, {}, {}, volumes)
+        titles = [volume['title'] for volume in lists['year'][0]['volumes']]
+        self.assertEqual(titles[0], '药屋少女的呢喃 0', "Bangumi's Chinese name, in the region's script")
+        self.assertEqual(titles[-1], '薬屋のひとりごと 6', 'as it is named where Bangumi has no Chinese name')
 
     def test_a_store_from_before_volumes_gains_them(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -497,8 +539,9 @@ class VolumeTests(unittest.TestCase):
             old.close()
             store = builder.Store(path)
             self.assertIsNone(store.volumes(156126))
-            store.set_volumes(156126, ['a.jpg'], 'now')
-            self.assertEqual(store.volumes(156126), (['a.jpg'], 'now'))
+            volumes = [{'name': '1', 'name_cn': '', 'cover': 'a.jpg'}]
+            store.set_volumes(156126, volumes, 'now')
+            self.assertEqual(store.volumes(156126), (volumes, 'now'))
 
 
 class ConvertingClient:
@@ -516,7 +559,7 @@ class ConvertingClient:
 
 
 class ConversionTests(unittest.TestCase):
-    MAPPING = {'墨香铜臭': '墨香銅臭', '当年明月': '當年明月', "O'Neil & 乱": "O'Neil & 亂"}
+    MAPPING = {'墨香铜臭': '墨香铜臭', '当年明月': '当年明月', "O'Neil & 乱": "O'Neil & 乱"}
 
     def test_names_are_sent_as_plain_text_and_read_back_in_order(self):
         self.assertEqual(builder.wikitext_literal("O'Neil [x]"), 'O&#39;Neil&#32;&#91;x&#93;')
@@ -640,7 +683,7 @@ class CoverTests(unittest.TestCase):
         self.assertEqual(covers, {'Q-tasty': 'https://lain.bgm.tv/r/400/pic/cover/l/a7/52/260829_9oBCC.jpg',
                                   'Q-coverless': 'https://upload.wikimedia.org/wikipedia/en/thumb/a/ab/Mistborn.jpg/400px-Mistborn.jpg'})
         self.assertEqual(job.covers(builder.POOLS['en'], articles), covers)
-        self.assertEqual(client.asked, [['mistborn', 'Good Omens']], "華語's two scripts ask once")
+        self.assertEqual(client.asked, [['mistborn', 'Good Omens']], "华语's two scripts ask once")
 
     def test_japanese_page_images_are_not_asked_and_bangumis_cover_still_comes(self):
         client = ImagesClient()
@@ -665,16 +708,16 @@ class CoverTests(unittest.TestCase):
                     subject['images'] = {'common': f"https://lain.bgm.tv/r/400/pic/cover/l/{subject['id']}.jpg"}
                 return {'data': found}
         job = builder.Job(BangumiClient(), builder.Store(':memory:'), date(2026, 10, 22))
-        job.refresh_finished({'凡人修仙傳': {'qid': 'Q-fanren'}}, {'Q-fanren': {'authors': ['忘语']}},
+        job.refresh_finished({'凡人修仙传': {'qid': 'Q-fanren'}}, {'Q-fanren': {'authors': ['忘语']}},
                              lambda title, work: ['凡人修仙传'])
         self.assertEqual(job.store.bangumi_cover('Q-fanren'), 'https://lain.bgm.tv/r/400/pic/cover/l/260829.jpg',
                          "the novel's, not its manga's")
 
     def test_a_classic_is_searched_in_simplified_script_then_by_its_article_or_label(self):
-        variants = {'紅樓夢': {'qid': 'Q1', 'variants': {'zh-cn': '红楼梦', 'zh-tw': '紅樓夢'}}}
-        self.assertEqual(builder.classic_names('紅樓夢', variants, None), ['红楼梦', '紅樓夢'])
-        self.assertEqual(builder.classic_names('こころ (小説)', {}, None), ['こころ'])
-        self.assertEqual(builder.classic_names(None, {}, '吶喊'), ['吶喊'])
+        variants = {'红楼梦': {'qid': 'Q1', 'variants': {'zh-cn': '红楼梦', 'zh-tw': '红楼梦'}}}
+        self.assertEqual(builder.classic_names('红楼梦', variants, None), ['红楼梦', '红楼梦'])
+        self.assertEqual(builder.classic_names('こころ (小说)', {}, None), ['こころ'])
+        self.assertEqual(builder.classic_names(None, {}, '呐喊'), ['呐喊'])
 
     def test_a_store_without_covers_asks_bangumi_again_for_its_matches(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -417,7 +417,12 @@ struct SettingsView: View {
             // 缓存管理 was in the tree with no entry either; it owns its own close
             // button, so it is a sheet like 网路设置 rather than a pushed page.
             .sheet(isPresented: $showCacheManagement) {
-                CacheManagementView(service: CacheManagementService(coverOwner: store))
+                CacheManagementView(service: {
+                    let service = CacheManagementService(coverOwner: store)
+                    CacheRetentionProvider.bind(store)
+                    CacheAutoCleaner.shared.bind(service)
+                    return service
+                }())
             }
             // The only file importer on this root (one per view: SwiftUI presents just one).
             .ruleModuleAddFlow(moduleFlow)

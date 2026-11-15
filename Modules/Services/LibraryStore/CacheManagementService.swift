@@ -334,3 +334,130 @@ final class CacheManagementService: @unchecked Sendable {
         }
     }
 }
+
+// MARK: - Automatic cleanup (adapted to this branch's cache roots)
+
+/// What one automatic-cleanup pass found and did.
+struct CacheTrimReport: Equatable, Sendable {
+    var candidateBytes: Int64 = 0
+    var removedBytes: Int64 = 0
+    var removedCount = 0
+    var consideredBooks = false
+}
+
+extension CacheManagementService {
+    /// Deletes the least recently used re-downloadable caches until they fit `limit`.
+    ///
+    /// Never touched: a book's chapters, manga pages and remote-book caches while that book
+    /// is on the shelf and downloaded for offline reading (or being downloaded), or open in a
+    /// reader; imported books and reading positions, which live outside every root here.
+    /// Called off the main thread by `CacheAutoCleaner`.
+    @discardableResult
+    func trimAutomaticCaches(toLimit limit: Int64, reason: String) async -> CacheTrimReport {
+        let started = Date()
+        let retention = await MainActor.run { CacheRetentionProvider.current() }
+        let candidates = automaticCleanupCandidates(retention: retention)
+        var report = CacheTrimReport(
+            candidateBytes: candidates.reduce(0) { $0 + $1.bytes },
+            consideredBooks: retention != nil
+        )
+        if retention == nil {
+            AppLogger.cache("⟐ cache cleanup kept every book's chapters: the shelf did not load completely", level: .notice)
+        }
+        for victim in CacheEvictionPolicy.victims(of: candidates, limit: limit) {
+            var removedAll = true
+            for item in victim.items {
+                do {
+                    try fileManager.removeItem(at: item)
+                } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                    continue
+                } catch {
+                    removedAll = false
+                    AppLogger.cache("⟐ cache cleanup could not remove an item", error: error, context: [
+                        "item": item.lastPathComponent,
+                    ])
+                }
+            }
+            if removedAll {
+                report.removedBytes += victim.bytes
+                report.removedCount += 1
+            }
+        }
+        AppLogger.cache("⟐ cache cleanup", context: [
+            "reason": reason,
+            "limitMB": limit / 1_048_576,
+            "candidateMB": report.candidateBytes / 1_048_576,
+            "removed": report.removedCount,
+            "removedMB": report.removedBytes / 1_048_576,
+            "ms": Int(Date().timeIntervalSince(started) * 1000),
+        ], level: report.removedCount > 0 ? .notice : .trace)
+        return report
+    }
+
+    /// Everything automatic cleanup may delete, each with its size and last use.
+    /// Adapted to this branch's `CacheStorageRoots` (which has no separate TOC / book-info
+    /// roots, but does have video stills and network covers).
+    func automaticCleanupCandidates(retention: CacheRetention?) -> [CacheEvictionCandidate] {
+        var candidates: [CacheEvictionCandidate] = []
+        if let retention {
+            for root in [roots.chapters, roots.mangaImages, roots.remoteBooks, roots.videoStills] {
+                for directory in children(of: root) {
+                    guard let bookID = UUID(uuidString: directory.lastPathComponent),
+                          !retention.keptBooks.contains(bookID) else { continue }
+                    if root == roots.remoteBooks { continue }  // remote-library copies are re-fetched on demand but keep their active readers
+                    guard var candidate = candidate(for: [directory]) else { continue }
+                    if let opened = retention.lastOpened[bookID], opened > candidate.lastUsed {
+                        candidate.lastUsed = opened
+                    }
+                    candidates.append(candidate)
+                }
+            }
+        }
+        // Network covers (never the shelf's saved covers) and synthesized audio: one per file.
+        for root in [roots.networkCovers, roots.ttsAudio] {
+            for file in children(of: root) {
+                if let candidate = candidate(for: [file]) { candidates.append(candidate) }
+            }
+        }
+        return candidates
+    }
+
+    private func children(of directory: URL) -> [URL] {
+        do {
+            return try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return []
+        } catch {
+            AppLogger.cache("⟐ cache cleanup could not list a cache", error: error, context: [
+                "directory": directory.lastPathComponent,
+            ])
+            return []
+        }
+    }
+
+    /// The size and newest modification of `items` (files, or directories walked whole).
+    private func candidate(for items: [URL]) -> CacheEvictionCandidate? {
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .isRegularFileKey, .isDirectoryKey, .contentModificationDateKey]
+        var bytes: Int64 = 0
+        var newest = Date.distantPast
+        func add(_ url: URL) -> Bool {
+            do {
+                let values = try url.resourceValues(forKeys: keys)
+                if let modified = values.contentModificationDate, modified > newest { newest = modified }
+                if values.isRegularFile == true { bytes += Int64(values.fileSize ?? 0) }
+                return values.isDirectory == true
+            } catch {
+                AppLogger.cache("⟐ cache cleanup could not inspect an item", error: error, context: [
+                    "item": url.lastPathComponent,
+                ])
+                return false
+            }
+        }
+        for item in items where add(item) {
+            guard let enumerator = fileManager.enumerator(at: item, includingPropertiesForKeys: Array(keys)) else { continue }
+            for case let url as URL in enumerator { _ = add(url) }
+        }
+        guard newest != .distantPast || bytes > 0 else { return nil }
+        return CacheEvictionCandidate(items: items, bytes: bytes, lastUsed: newest)
+    }
+}

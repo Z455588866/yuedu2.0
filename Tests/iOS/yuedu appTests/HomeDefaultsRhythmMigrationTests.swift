@@ -2,9 +2,10 @@ import Foundation
 import Testing
 @testable import yuedu_app
 
-// The 2026-10-25 layouts for a 預設 saved before them (maintainer, 2026-10-26): a 預設 whose
-// sections are the old defaults' is recognised, each section still as they made it takes today's
-// layout, and the store does it once, on 預設 only.
+// The 2026-10-25 layouts for a 预设 saved before them (maintainer, 2026-10-26): a 预设 whose
+// sections are the old defaults' is recognised, each section still as they made it takes the
+// layout of 2026-10-25 (the defaults until 2026-11-14, frozen in `HomeDefaultsStoreMigration`),
+// and the store does it once, on 预设 only.
 
 private typealias Migration = HomeDefaultsRhythmMigration
 
@@ -22,12 +23,12 @@ private let bangumiNovels = HomeSectionBinding.module(moduleID: "bangumi", entry
 
 @Suite("Home defaults rhythm migration")
 struct HomeDefaultsRhythmMigrationTests {
-    @Test("an untouched old 預設 becomes today's defaults for whom it was made, ids and all")
+    @Test("an untouched old 预设 becomes today's defaults for whom it was made, ids and all")
     func untouched() throws {
         for made in Migration.contexts {
             let saved = Migration.previousDefaults(for: made)
             let outcome = try #require(Migration.apply(to: saved), "\(made)")
-            let today = HomePageDefaults.page(for: made).sections
+            let today = HomeDefaultsStoreMigration.previousDefaults(for: made)
             #expect(outcome.sections.map(\.binding) == today.map(\.binding), "the same sections in the same order: \(made)")
             #expect(outcome.sections.map(\.layout) == today.map(\.layout), "\(made)")
             #expect(outcome.sections.map(\.id) == saved.map(\.id))
@@ -35,14 +36,14 @@ struct HomeDefaultsRhythmMigrationTests {
         }
     }
 
-    @Test("a 預設 of 2026-10-13, before the modules' lists: 熱門 ranked, 精選書單 分類卡片, no band")
+    @Test("a 预设 of 2026-10-13, before the modules' lists: 热门 ranked, 精选书单 分类卡片, no band")
     func beforeModuleLists() throws {
         let outcome = try #require(Migration.apply(to: Migration.previousDefaults(for: context([]))))
         #expect(outcome.sections.map(\.layout) == [.compactReadingCard, .row, .rankedRow, .categoryCards, .row])
         #expect(outcome.changed == 2)
     }
 
-    @Test("a Chinese 預設 of 2026-10-21: Bangumi's novels the band, its manga ranked")
+    @Test("a Chinese 预设 of 2026-10-21: Bangumi's novels the band, its manga ranked")
     func chinese() throws {
         let outcome = try #require(Migration.apply(to: Migration.previousDefaults(for: context(["zh"]))))
         #expect(outcome.sections.map(\.layout)
@@ -65,8 +66,8 @@ struct HomeDefaultsRhythmMigrationTests {
     func editedSectionKept() throws {
         let edits: [(name: String, edit: (inout HomeSection) -> Void)] = [
             ("hidden", { $0.isEnabled = false }),
-            ("titled", { $0.title = "下載排行" }),
-            ("subtitled", { $0.subtitle = "大家都在讀" }),
+            ("titled", { $0.title = "下载排行" }),
+            ("subtitled", { $0.subtitle = "大家都在读" }),
             ("parameters", { $0.parameters = ["sort": "week"] }),
             ("another layout", { $0.layout = .coverGrid }),
         ]
@@ -89,7 +90,7 @@ struct HomeDefaultsRhythmMigrationTests {
     func bandMoves() throws {
         var saved = Migration.previousDefaults(for: context(["zh"]))
         let novels = try position(of: bangumiNovels, in: saved)
-        saved[novels].title = "小說"
+        saved[novels].title = "小说"
         let outcome = try #require(Migration.apply(to: saved))
         #expect(outcome.sections[novels].layout == .rankedList)
         #expect(outcome.sections[novels + 1].layout == .band)
@@ -105,7 +106,7 @@ struct HomeDefaultsRhythmMigrationTests {
         #expect(outcome.sections.filter { $0.layout == .band }.count == 1)
     }
 
-    @Test("a 預設 with a section added, removed or moved is not recognised")
+    @Test("a 预设 with a section added, removed or moved is not recognised")
     func otherPages() {
         let saved = Migration.previousDefaults(for: context(["zh"]))
         var added = saved
@@ -117,7 +118,7 @@ struct HomeDefaultsRhythmMigrationTests {
         for page in [added, removed, moved] { #expect(Migration.apply(to: page) == nil) }
     }
 
-    @Test("a 預設 from before 2026-10-13, a row per 書單, is not recognised")
+    @Test("a 预设 from before 2026-10-13, a row per 书单, is not recognised")
     func beforeOneListSection() {
         let sections = [HomeSection(layout: .compactReadingCard, binding: .continueReading),
                         HomeSection(layout: .row, binding: .nextInSeries),
@@ -151,20 +152,20 @@ struct HomeDefaultsRhythmStoreTests {
 
     private var chinese: HomePageDefaults.Context { context(["zh"]) }
 
-    @Test("an untouched 預設 takes the new layouts at launch, and they are written")
+    @Test("an untouched 预设 takes the new layouts at launch, and they are written")
     func migratesAtLaunch() {
         let made = Migration.previousDefaults(for: chinese)
         let url = savedHome(made)
         let defaults = suite()
         let store = HomePageStore(fileURL: url, defaults: defaults, appliesDefaultsRhythmOnce: true)
         store.waitForPendingWritesForTesting()
-        #expect(store.page?.sections.map(\.layout) == HomePageDefaults.page(for: chinese).sections.map(\.layout))
+        #expect(store.page?.sections.map(\.layout) == HomeDefaultsStoreMigration.previousDefaults(for: chinese).map(\.layout))
         #expect(store.page?.sections.map(\.id) == made.map(\.id))
         #expect(defaults.bool(forKey: HomePageStore.defaultsRhythmKey))
         #expect(HomePageStore(fileURL: url).page == store.page, "the file holds them")
     }
 
-    @Test("once: a reader who puts 熱門 back to 單排 keeps it")
+    @Test("once: a reader who puts 热门 back to 单排 keeps it")
     func once() throws {
         let url = savedHome(Migration.previousDefaults(for: chinese))
         let defaults = suite()
@@ -183,17 +184,15 @@ struct HomeDefaultsRhythmStoreTests {
         let defaults = suite()
         let store = HomePageStore(fileURL: url, defaults: defaults, appliesDefaultsRhythmOnce: true)
         _ = store.pageOrDefaults(mode: .publicLibraries, publicLibrariesAvailable: true, languages: ["zh"])
-        // The reader draws every section the way the old defaults did.
+        // The reader makes their home the old defaults, section for section.
         let previous = Migration.previousDefaults(for: chinese)
-        store.edit { page in
-            for index in page.sections.indices { page.sections[index].layout = previous[index].layout }
-        }
+        store.save(HomePage(sections: previous))
         store.waitForPendingWritesForTesting()
         let reopened = HomePageStore(fileURL: url, defaults: defaults, appliesDefaultsRhythmOnce: true)
         #expect(reopened.page?.sections.map(\.layout) == previous.map(\.layout))
     }
 
-    @Test("預設 only: a 首頁配置 of the reader's own holding the old defaults keeps them, and stays selected")
+    @Test("预设 only: a 首页配置 of the reader's own holding the old defaults keeps them, and stays selected")
     func ownConfigurationsKept() throws {
         let old = Migration.previousDefaults(for: chinese)
         let url = savedHome(old)
@@ -206,28 +205,28 @@ struct HomeDefaultsRhythmStoreTests {
         let store = HomePageStore(fileURL: url, defaults: suite(), appliesDefaultsRhythmOnce: true)
         #expect(store.selectedConfiguration == own)
         #expect(store.page?.sections.map(\.layout) == old.map(\.layout))
-        #expect(store.home?.sections(of: .defaults).map(\.layout) == HomePageDefaults.page(for: chinese).sections.map(\.layout))
+        #expect(store.home?.sections(of: .defaults).map(\.layout) == HomeDefaultsStoreMigration.previousDefaults(for: chinese).map(\.layout))
     }
 
-    /// 為你推薦 as the builds before 2026-10-27 wrote it.
+    /// 为你推荐 as the builds before 2026-10-27 wrote it.
     private var deletedForYou: HomeSection {
         HomeSection(layout: .row, binding: .unknown(.object(["type": .string("forYou")])))
     }
 
-    @Test("a 預設 that still has 為你推薦, after 系列下一本, has it taken off and is recognised")
+    @Test("a 预设 that still has 为你推荐, after 系列下一本, has it taken off and is recognised")
     func withDeletedForYou() throws {
         var saved = Migration.previousDefaults(for: chinese)
         saved.insert(deletedForYou, at: try position(of: .nextInSeries, in: saved) + 1)
         let url = savedHome(saved)
         let store = HomePageStore(fileURL: url, defaults: suite(), appliesDefaultsRhythmOnce: true)
         store.waitForPendingWritesForTesting()
-        let today = HomePageDefaults.page(for: chinese).sections
+        let today = HomeDefaultsStoreMigration.previousDefaults(for: chinese)
         #expect(store.page?.sections.map(\.binding) == today.map(\.binding))
         #expect(store.page?.sections.map(\.layout) == today.map(\.layout))
         #expect(HomePageStore(fileURL: url).page == store.page, "the file holds it")
     }
 
-    @Test("為你推薦, deleted, is taken off 預設 and the reader's own 首頁配置, cards of lists too, and the file is written")
+    @Test("为你推荐, deleted, is taken off 预设 and the reader's own 首页配置, cards of lists too, and the file is written")
     func deletedForYouTakenOffEverywhere() throws {
         let kept = HomeSection(layout: .row, binding: .bookshelf)
         let card = HomeListCard(binding: .unknown(.object(["type": .string("forYou")])))

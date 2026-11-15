@@ -12,15 +12,20 @@ struct TTSNarrationUnit {
     /// reader is not driving, and an offset derived from them would point somewhere
     /// arbitrary. Highlighting falls back to searching for the spoken text there.
     let sourceOffsets: TTSNarrationOffsetMap?
+    /// Who speaks each quoted run and how, from the AI analysis, in `text`'s coordinates.
+    /// `nil` means "not analysed": the engines read the speakers off the prose themselves.
+    var speakerAttributions: [TTSSpeakerAnnotator.Attribution]?
 
     init(
         text: String,
         pronunciationHints: [TTSPronunciationHint] = [],
-        sourceOffsets: TTSNarrationOffsetMap? = nil
+        sourceOffsets: TTSNarrationOffsetMap? = nil,
+        speakerAttributions: [TTSSpeakerAnnotator.Attribution]? = nil
     ) {
         self.text = text
         self.pronunciationHints = pronunciationHints
         self.sourceOffsets = sourceOffsets
+        self.speakerAttributions = speakerAttributions
     }
 }
 

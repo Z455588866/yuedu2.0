@@ -3,13 +3,13 @@ import Testing
 @testable import yuedu_app
 
 // Phase 6c: the module format, its validator, its store, and the list mapping a module shares
-// with 來源配置.
+// with 来源配置.
 
 private let exampleModule = #"""
 {
   "id": "example.newbooks",
-  "title": "新書速報",
-  "description": "某書店的新書與排行。",
+  "title": "新书速报",
+  "description": "某书店的新书与排行。",
   "author": "someone",
   "site": "https://example.com",
   "version": "1.0.0",
@@ -20,14 +20,14 @@ private let exampleModule = #"""
   "modules": [
     {
       "id": "new",
-      "title": "新書",
-      "description": "每週新書",
+      "title": "新书",
+      "description": "每周新书",
       "cacheDuration": 3600,
       "params": [
-        { "name": "category", "title": "分類", "type": "enumeration", "value": "novel",
-          "enumOptions": [{ "title": "小說", "value": "novel" }, { "title": "漫畫", "value": "comic" }] },
-        { "name": "size", "title": "數量", "type": "count", "value": 20 },
-        { "name": "page", "title": "頁", "type": "page" }
+        { "name": "category", "title": "分类", "type": "enumeration", "value": "novel",
+          "enumOptions": [{ "title": "小说", "value": "novel" }, { "title": "漫画", "value": "comic" }] },
+        { "name": "size", "title": "数量", "type": "count", "value": 20 },
+        { "name": "page", "title": "页", "type": "page" }
       ],
       "request": { "url": "https://example.com/new/{{category}}?p={{page}}&n={{size}}", "method": "GET", "headers": {}, "charset": "utf-8" },
       "list": { "items": ".book-list li", "title": "h3@text", "author": ".author@text", "cover": "img@src",
@@ -35,7 +35,7 @@ private let exampleModule = #"""
     }
   ],
   "search": {
-    "title": "搜尋",
+    "title": "搜寻",
     "request": { "url": "https://example.com/search?q={{keyword}}&p={{page}}" },
     "list": { "items": "$.data[*]", "title": "$.name", "author": "$.author", "cover": "$.cover", "url": "$.link" }
   }
@@ -158,7 +158,7 @@ struct RuleModuleValidatorTests {
     @Test("ids must be file-safe and entries unique")
     func ids() {
         #expect(rejection(example { $0["id"] = "../escape" }) == .invalidID("../escape"))
-        #expect(rejection(example { $0["id"] = "新書" }) == .invalidID("新書"))
+        #expect(rejection(example { $0["id"] = "新书" }) == .invalidID("新书"))
         #expect(rejection(example { $0["id"] = ".." }) == .invalidID(".."))
         #expect(rejection(example { object in
             let entry = (object["modules"] as! [[String: Any]])[0]
@@ -255,6 +255,10 @@ struct RuleModuleValidatorTests {
         }) == .needsRequiredVersion(field: "modules[0].list.seriesCovers", minimum: "3.0"))
         #expect(rejection(v3 { editList(&$0, "seriesCovers", ".volume img@src") }) == nil)
         #expect(rejection(v3 { editList(&$0, "seriesCovers", "@js:'1'") }) == .javaScript(field: "modules[0].list.seriesCovers"))
+        // A series' books are 3.0.1's: a module that lists them must ask for it.
+        #expect(rejection(v3 { editList(&$0, "volumes", ".volume") })
+                == .needsRequiredVersion(field: "modules[0].list.volumes", minimum: "3.0.1"))
+        #expect(rejection(v3 { $0["requiredVersion"] = "3.0.1"; editList(&$0, "volumes", ".volume") }, appVersion: "3.0.1") == nil)
 
         #expect(rejection(v3 { editRequest(&$0, "bodyEncoding", "xml") })
                 == .unknownValue(field: "modules[0].request.bodyEncoding", value: "xml"))
@@ -285,7 +289,7 @@ struct RuleModuleValidatorTests {
                     var params = $0["params"] as! [[String: Any]]
                     params[0] = ["name": "category", "type": type, "followsLanguage": follows,
                                  "enumOptions": [["title": "日本", "value": "jp", "language": language],
-                                                 ["title": "英語", "value": "en"]]]
+                                                 ["title": "英语", "value": "en"]]]
                     $0["params"] = params
                 }
             }
@@ -299,7 +303,7 @@ struct RuleModuleValidatorTests {
         #expect(rejection(v3(region(true))) == nil)
         #expect(rejection(example(region(true))) == .needsRequiredVersion(field: "modules[0].params[0].followsLanguage", minimum: "3.0"))
         #expect(rejection(v3(region(true, type: "input"))) == .unknownValue(field: "modules[0].params[0].followsLanguage", value: "true"))
-        #expect(rejection(v3(region(true, language: "日本語"))) == .unknownValue(field: "modules[0].params[0].enumOptions[0].language", value: "日本語"))
+        #expect(rejection(v3(region(true, language: "日本语"))) == .unknownValue(field: "modules[0].params[0].enumOptions[0].language", value: "日本语"))
     }
 }
 
@@ -413,7 +417,7 @@ struct RuleListMappingTests {
     private let html = #"""
     <ul>
       <li class="book"><a href="/book/1">First</a><span class="author">甲</span><img src="/c/1.jpg"/>
-        <p class="desc">One</p><i class="tag">奇幻</i><i class="tag">冒險</i><b>12萬字</b><em>第10章</em></li>
+        <p class="desc">One</p><i class="tag">奇幻</i><i class="tag">冒险</i><b>12万字</b><em>第10章</em></li>
       <li class="book"><a href="/book/2"></a><span class="author">乙</span></li>
       <li class="book"><a href="/book/3">Third</a><span class="author">丙</span></li>
     </ul>
@@ -440,7 +444,7 @@ struct RuleListMappingTests {
                        intro: rule.intro, wordCount: rule.wordCount, lastChapter: rule.lastChapter, kind: rule.kind)
     }
 
-    @Test("a 來源配置's search list reads the same through the bridge and the mapping")
+    @Test("a 来源配置's search list reads the same through the bridge and the mapping")
     func searchParity() throws {
         let source = source()
         let base = "https://example.com/search?key=x"
@@ -449,8 +453,8 @@ struct RuleListMappingTests {
                                            listRule: source.ruleSearch.bookList, fields: fields(source.ruleSearch))
         #expect(mapped.map(\.name) == ["First", "Third"], "an item with no name is skipped")
         #expect(mapped.first == RuleListItem(name: "First", author: "甲", bookUrl: "https://example.com/book/1",
-                                             coverUrl: "https://example.com/c/1.jpg", intro: "One", wordCount: "12萬字",
-                                             lastChapter: "第10章", kind: "奇幻,冒險"))
+                                             coverUrl: "https://example.com/c/1.jpg", intro: "One", wordCount: "12万字",
+                                             lastChapter: "第10章", kind: "奇幻,冒险"))
         #expect(bridged.map(\.name) == mapped.map(\.name))
         #expect(bridged.map(\.bookUrl) == mapped.map(\.bookUrl))
         #expect(bridged.map(\.coverUrl) == mapped.map(\.coverUrl))
@@ -477,13 +481,13 @@ struct RuleListMappingTests {
         let first = books.first
         #expect(books.count == 1, "only the first item has an em")
         #expect(first?.name == "第10章")
-        #expect(first?.author == "12萬字")
+        #expect(first?.author == "12万字")
         #expect(first?.bookUrl == "https://example.com/c/1.jpg")
         #expect(first?.coverUrl == "https://example.com/book/1")
         #expect(first?.intro == "甲")
         #expect(first?.wordCount == "One")
         #expect(first?.lastChapter == "First")
-        #expect(first?.kind == "奇幻,冒險")
+        #expect(first?.kind == "奇幻,冒险")
     }
 
     @Test("the early filter skips an item before its other fields are read")
@@ -498,10 +502,10 @@ struct RuleListMappingTests {
     func moduleJSON() throws {
         let module = try RuleModuleValidator.validate(Data(exampleModule.utf8), appVersion: "3.0")
         let list = try #require(module.search?.list)
-        let json = #"{"data":[{"name":"甲書","author":"甲","cover":"https://img.example.com/1.jpg","link":"/b/1"},{"name":"","link":"/b/2"}]}"#
+        let json = #"{"data":[{"name":"甲书","author":"甲","cover":"https://img.example.com/1.jpg","link":"/b/1"},{"name":"","link":"/b/2"}]}"#
         let items = RuleListMapping.items(engine: ModernRuleEngine(), content: json, baseURL: "https://example.com/search",
                                           listRule: list.items, fields: list.fields)
-        #expect(items == [RuleListItem(name: "甲書", author: "甲", bookUrl: "https://example.com/b/1",
+        #expect(items == [RuleListItem(name: "甲书", author: "甲", bookUrl: "https://example.com/b/1",
                                        coverUrl: "https://img.example.com/1.jpg", intro: "", wordCount: "", lastChapter: "", kind: "")])
     }
 

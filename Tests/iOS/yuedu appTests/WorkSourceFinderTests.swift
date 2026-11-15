@@ -2,9 +2,9 @@ import Foundation
 import Testing
 @testable import yuedu_app
 
-/// Discovery 7b-2: 「尋找可用來源」 searches the enabled sources for a work, and the books found
-/// of it join 作品詳情's 來源 (maintainer, 2026-10-13). Since 2026-10-17 the page searches on
-/// its own when it opens (maintainer: 「點進去自動尋找並列出可用來源」).
+/// Discovery 7b-2: 「寻找可用来源」 searches the enabled sources for a work, and the books found
+/// of it join 作品详情's 来源 (maintainer, 2026-10-13). Since 2026-10-17 the page searches on
+/// its own when it opens (maintainer: 「点进去自动寻找并列出可用来源」).
 @Suite("Work source finder")
 @MainActor
 struct WorkSourceFinderTests {
@@ -50,15 +50,47 @@ struct WorkSourceFinderTests {
         #expect(found.compactMap(Self.url) == ["https://b.example/book/1", "https://c.example/book/9"])
     }
 
+    @Test("the work in its other form: a book's audiobook from an audio source, matched as its versions are, never among them")
+    func otherForm() {
+        let text = source("text")
+        var audio = source("audio")
+        audio.bookSourceType = 1
+        let tapped = WorkDetailRoute(.gutenberg(GutenbergBook(id: 2701, title: "Moby Dick", author: "Herman Melville")))
+        let results = [
+            SearchBook(name: "Moby Dick", author: "Herman Melville", origins: [origin(text, path: "1"), origin(audio, path: "7")]),
+            // An audiobook under its reader's name is not known to be the work.
+            SearchBook(name: "Moby Dick", author: "A Narrator", origins: [origin(audio, path: "narrated")]),
+        ]
+        let all = sources(text, audio)
+        #expect(WorkSourceFinder.matches(of: tapped, in: results, sources: all).compactMap(Self.url)
+                == ["https://text.example/book/1"])
+        let others = WorkSourceFinder.matches(of: tapped, in: results, sources: all, kind: .audio)
+        #expect(others.compactMap(Self.url) == ["https://audio.example/book/7"])
+        #expect(others.first?.record.contentKind == .audio)
+        // And the other way: an audiobook's page finds the book.
+        let listened = try! #require(others.first)
+        #expect(WorkSourceFinder.matches(of: listened, in: results, sources: all, kind: .text).compactMap(Self.url)
+                == ["https://text.example/book/1"])
+        // Stricter than a version (maintainer, 2026-11-14): the author by name, never a longer
+        // name that holds it, and never for a work that names no author.
+        let longer = [SearchBook(name: "Moby Dick", author: "Herman Melville Jr.", origins: [origin(audio, path: "jr")])]
+        #expect(WorkSourceFinder.matches(of: tapped, in: longer, sources: all, kind: .audio).isEmpty)
+        let unnamed = dataOnly("Moby Dick", by: "")
+        #expect(WorkSourceFinder.matches(of: unnamed, in: results, sources: all, kind: .audio).isEmpty)
+        #expect(ContentKind.text.otherForm == .audio)
+        #expect(ContentKind.audio.otherForm == .text)
+        #expect(ContentKind.comic.otherForm == nil && ContentKind.video.otherForm == nil)
+    }
+
     @Test("a found book joins after the listed versions, unless its source is listed already")
     func joined() {
         let a = source("a"), b = source("b"), c = source("c")
-        let tapped = route(book("三體", by: "劉慈欣", in: a, path: "1"), in: a)
-        let cached = route(book("三體", by: "劉慈欣", in: b, path: "1"), in: b)
+        let tapped = route(book("三体", by: "刘慈欣", in: a, path: "1"), in: a)
+        let cached = route(book("三体", by: "刘慈欣", in: b, path: "1"), in: b)
         let listed = [tapped, cached]
-        let found = [route(book("三體", by: "劉慈欣", in: b, path: "2"), in: b),
-                     route(book("三體", by: "劉慈欣", in: c, path: "1"), in: c),
-                     route(book("三體", by: "劉慈欣", in: a, path: "1"), in: a)]
+        let found = [route(book("三体", by: "刘慈欣", in: b, path: "2"), in: b),
+                     route(book("三体", by: "刘慈欣", in: c, path: "1"), in: c),
+                     route(book("三体", by: "刘慈欣", in: a, path: "1"), in: a)]
         let versions = WorkSourceFinder.joined(listed, found: found)
         #expect(versions.compactMap(Self.url) == ["https://a.example/book/1", "https://b.example/book/1",
                                                    "https://c.example/book/1"])
@@ -67,7 +99,7 @@ struct WorkSourceFinderTests {
     @Test("nothing found joins nothing")
     func joinedEmpty() {
         let a = source("a")
-        let listed = [route(book("三體", by: "劉慈欣", in: a, path: "1"), in: a)]
+        let listed = [route(book("三体", by: "刘慈欣", in: a, path: "1"), in: a)]
         #expect(WorkSourceFinder.joined(listed, found: []).map(\.nodeKey) == listed.map(\.nodeKey))
     }
 
@@ -85,12 +117,12 @@ struct WorkSourceFinderTests {
     @Test("a work with nothing to read takes on the first book found; one that reads, or a version picked, stays")
     func shownOnFinding() {
         let a = source("a"), b = source("b")
-        let data = dataOnly("十二國記", by: "小野不由美")
-        let found = [route(book("十二國記", by: "小野不由美", in: a, path: "1"), in: a),
-                     route(book("十二國記", by: "小野不由美", in: b, path: "1"), in: b)]
+        let data = dataOnly("十二国记", by: "小野不由美")
+        let found = [route(book("十二国记", by: "小野不由美", in: a, path: "1"), in: a),
+                     route(book("十二国记", by: "小野不由美", in: b, path: "1"), in: b)]
         #expect(WorkSourceFinder.shownOnFinding(listed: [data], found: found, chosen: nil) == found[0].nodeKey)
         #expect(WorkSourceFinder.shownOnFinding(listed: [data], found: [], chosen: nil) == nil)
-        // Picked from 來源 by hand: the page stays on it.
+        // Picked from 来源 by hand: the page stays on it.
         #expect(WorkSourceFinder.shownOnFinding(listed: [data], found: found, chosen: data.nodeKey) == nil)
         // A Gutenberg book reads: a book source never takes its page.
         let gutenberg = WorkDetailRoute(.gutenberg(GutenbergBook(id: 2701, title: "Moby Dick", author: "Herman Melville")))
@@ -117,7 +149,7 @@ struct WorkSourceFinderTests {
     func noSources() {
         let finder = WorkSourceFinder()
         let a = source("a")
-        finder.find(route(book("三體", by: "劉慈欣", in: a, path: "1"), in: a), sources: [source("off", enabled: false)])
+        finder.find(route(book("三体", by: "刘慈欣", in: a, path: "1"), in: a), sources: [source("off", enabled: false)])
         #expect(finder.state == .noSources)
         #expect(finder.found.isEmpty)
     }
@@ -125,11 +157,11 @@ struct WorkSourceFinderTests {
     @Test("opening the page searches once; with no enabled source it stays quiet")
     func findOnOpen() {
         let a = source("a")
-        let work = route(book("三體", by: "劉慈欣", in: a, path: "1"), in: a)
+        let work = route(book("三体", by: "刘慈欣", in: a, path: "1"), in: a)
 
         let quiet = WorkSourceFinder()
         quiet.findOnOpen(work, sources: [source("off", enabled: false)])
-        #expect(quiet.state == .idle, "no 請先啟用 on every page of someone who reads without sources")
+        #expect(quiet.state == .idle, "no 请先启用 on every page of someone who reads without sources")
 
         let finder = WorkSourceFinder()
         finder.findOnOpen(work, sources: [a])
@@ -143,13 +175,13 @@ struct WorkSourceFinderTests {
     }
 }
 
-/// AI 推薦 8e, decision 4: a work with no readable version says so beside 「尋找可用來源」.
+/// AI 推荐 8e, decision 4: a work with no readable version says so beside 「寻找可用来源」.
 @Suite("Work source finder status")
 struct WorkSourceFinderStatusTests {
-    @Test("before a search, nothing readable reads 「未找到可用來源」, once the versions are read")
+    @Test("before a search, nothing readable reads 「未找到可用来源」, once the versions are read")
     func idle() {
         let state = WorkSourceFinder.State.idle
-        #expect(state.findSourcesValue(added: 0, versionsLoaded: true, hasReadable: false) == localized("未找到可用來源"))
+        #expect(state.findSourcesValue(added: 0, versionsLoaded: true, hasReadable: false) == localized("未找到可用来源"))
         #expect(state.findSourcesValue(added: 0, versionsLoaded: true, hasReadable: true) == "")
         // Shelf copies arrive after the page opens: no verdict before they are read.
         #expect(state.findSourcesValue(added: 0, versionsLoaded: false, hasReadable: false) == "")
@@ -158,14 +190,14 @@ struct WorkSourceFinderStatusTests {
     @Test("a search's outcome reads as before")
     func searched() {
         #expect(WorkSourceFinder.State.searching.findSourcesValue(added: 0, versionsLoaded: true, hasReadable: false)
-                    == localized("搜尋來源配置中…"))
+                    == localized("搜寻来源配置中…"))
         #expect(WorkSourceFinder.State.done(more: false).findSourcesValue(added: 0, versionsLoaded: true, hasReadable: false)
-                    == localized("未找到其他來源配置"))
+                    == localized("未找到其他来源配置"))
         #expect(WorkSourceFinder.State.done(more: true).findSourcesValue(added: 2, versionsLoaded: true, hasReadable: true)
-                    == String(format: localized("找到 %d 個來源"), 2))
+                    == String(format: localized("找到 %d 个来源"), 2))
         #expect(WorkSourceFinder.State.failed.findSourcesValue(added: 0, versionsLoaded: true, hasReadable: false)
-                    == localized("搜索失敗"))
+                    == localized("搜索失败"))
         #expect(WorkSourceFinder.State.noSources.findSourcesValue(added: 0, versionsLoaded: true, hasReadable: false)
-                    == localized("沒有可用的來源配置，請先啟用來源配置"))
+                    == localized("没有可用的来源配置，请先启用来源配置"))
     }
 }

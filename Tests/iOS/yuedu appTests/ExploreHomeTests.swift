@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import yuedu_app
 
-/// Unified library 5c-3: the home's default sections, saved once; its 範圍; and the pages its
+/// Unified library 5c-3: the home's default sections, saved once; its 范围; and the pages its
 /// tiles, row headers and chips open.
 @MainActor
 @Suite("Explore home root", .serialized)
@@ -23,6 +23,9 @@ struct ExploreHomeTests {
             case .gutenbergLists: "lists"
             case .gutenbergShelf("popular"): "popular"
             case .nextInSeries: "nextInSeries"
+            // The store's sections (2026-11-14): 热门精选, then 趋势's lists by their entry.
+            case .lists(HomePageDefaults.pickCards): "picks"
+            case .module(HomePageDefaults.trendsID, let entry): entry
             default: "other"
             }
         }
@@ -37,8 +40,10 @@ struct ExploreHomeTests {
         let sources = HomePageStore(fileURL: url)
         #expect(sources.page == nil)
         let saved = sources.pageOrDefaults(mode: .bookSources, publicLibrariesAvailable: true, languages: [])
-        // 精選書單, one section of the bundled lists, since 專題集合 (decision 37).
-        #expect(bindings(saved) == ["continueReading", "nextInSeries", "latest", "popular", "lists"])
+        // 精选书单, one section of the bundled lists, since 专题集合 (decision 37); among the store's
+        // sections since 2026-11-14.
+        #expect(bindings(saved) == ["continueReading", "nextInSeries", "latest", "picks", "today", "month", "lists",
+                                    "completed", "year", "classics", "popular"])
         sources.waitForPendingWritesForTesting()
 
         // Read again in another mode: the saved page stands.
@@ -46,22 +51,23 @@ struct ExploreHomeTests {
         #expect(reopened.pageOrDefaults(mode: .publicLibraries, publicLibrariesAvailable: true, languages: []) == saved)
     }
 
-    @Test("a new install starts with 繼續閱讀; China gets no public-library section; no default has 我的書庫")
+    @Test("a new install starts with 继续阅读; China gets no public-library section; no default has 我的书库")
     func defaultsByReader() throws {
         let folder = try temporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let newInstall = HomePageStore(fileURL: folder.appendingPathComponent("a.json"))
         #expect(bindings(newInstall.pageOrDefaults(mode: .publicLibraries, publicLibrariesAvailable: true, languages: []))
-                == ["continueReading", "nextInSeries", "popular", "lists", "latest"])
+                == ["continueReading", "nextInSeries", "picks", "today", "month", "lists", "completed", "year", "classics",
+                    "popular", "latest"])
 
         let china = HomePageStore(fileURL: folder.appendingPathComponent("b.json"))
         #expect(bindings(china.pageOrDefaults(mode: .bookSources, publicLibrariesAvailable: false, languages: []))
-                == ["continueReading", "nextInSeries", "latest"])
+                == ["continueReading", "nextInSeries", "latest", "picks", "today", "month", "completed", "year", "classics"])
         newInstall.waitForPendingWritesForTesting()
         china.waitForPendingWritesForTesting()
     }
 
-    @Test("範圍 is stored as a string; one this build cannot read is 全部")
+    @Test("范围 is stored as a string; one this build cannot read is 全部")
     func scopeRoundTrip() {
         let key = SourceInstanceKey(type: .bookSource, id: "https://src.test/a:b")
         #expect(ExploreScope(rawValue: ExploreScope.source(key).rawValue) == .source(key))
@@ -70,7 +76,7 @@ struct ExploreHomeTests {
         #expect(ExploreScope(rawValue: "webDAV:") == .all)
     }
 
-    @Test("a stored 範圍 holds while its source is there: an explore source, a saved connection, a library outside China")
+    @Test("a stored 范围 holds while its source is there: an explore source, a saved connection, a library outside China")
     func scopeAvailability() throws {
         let folder = try temporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -81,7 +87,7 @@ struct ExploreHomeTests {
 
         var explore = BookSource()
         explore.bookSourceUrl = "https://src.test"
-        explore.exploreUrl = "分類::https://src.test/c"
+        explore.exploreUrl = "分类::https://src.test/c"
         explore.enabledExplore = true
         var searchOnly = BookSource()
         searchOnly.bookSourceUrl = "https://only.test"
@@ -114,7 +120,7 @@ struct ExploreHomeTests {
                                   connections: connections) == .explore(.source(sourceURL: "https://src.test")))
         #expect(ExplorePlace.page(of: SourceInstanceKey(type: .opds, id: opds.id), name: "Feed", connections: connections)
                 == .feed(OPDSFeedRoute(catalogID: opds.id, url: opds.url, title: "Feed")))
-        // 古騰堡 and 青空文庫 are official modules: their page says what they offer, no shelves.
+        // 古腾堡 and 青空文库 are official modules: their page says what they offer, no shelves.
         let gutenberg = SourceInstanceKey(type: .gutenberg, id: PublicLibraryID.gutenberg.rawValue)
         let aozora = SourceInstanceKey(type: .aozora, id: PublicLibraryID.aozora.rawValue)
         #expect(ExplorePlace.page(of: gutenberg, name: "", connections: connections) == .explore(.library(gutenberg)))
@@ -126,7 +132,7 @@ struct ExploreHomeTests {
     private func row(_ binding: HomeSectionBinding, source: SourceInstanceKey, parameters: [String: String] = [:]) -> HomeModel.Row {
         let section = HomeSection(layout: .row, binding: binding, parameters: parameters)
         return HomeModel.Row(id: HomeModel.rowID(section: section.id, source: source), section: section, source: source,
-                             sourceName: "來源", policy: .local, state: .idle)
+                             sourceName: "来源", policy: .local, state: .idle)
     }
 
     @Test("查看全部 pushes the whole of what a row starts; rows drawn from every source have none")
@@ -157,12 +163,12 @@ struct ExploreHomeTests {
     @Test("a chip opens the feed or folder it names; the shelf's groups open nothing yet")
     func chipPages() {
         let opds = row(.opdsFeed(connectionID: "c", url: "https://feed.test/opds"), source: SourceInstanceKey(type: .opds, id: "c"))
-        #expect(ExplorePlace.page(of: CollectionLocation(id: "https://feed.test/new", title: "新書"), in: opds, aozoraIndex: nil)
-                == .feed(OPDSFeedRoute(catalogID: "c", url: "https://feed.test/new", title: "新書")))
+        #expect(ExplorePlace.page(of: CollectionLocation(id: "https://feed.test/new", title: "新书"), in: opds, aozoraIndex: nil)
+                == .feed(OPDSFeedRoute(catalogID: "c", url: "https://feed.test/new", title: "新书")))
         let dav = row(.latest, source: SourceInstanceKey(type: .webDAV, id: "d"))
         #expect(ExplorePlace.page(of: CollectionLocation(id: "https://dav.test/books/", title: "books"), in: dav, aozoraIndex: nil)
                 == .folder(WebDAVDirectoryRoute(connectionID: "d", url: URL(string: "https://dav.test/books/")!, title: "books")))
-        #expect(ExplorePlace.page(of: CollectionLocation(id: "group/小說", title: "小說"),
+        #expect(ExplorePlace.page(of: CollectionLocation(id: "group/小说", title: "小说"),
                                   in: row(.continueReading, source: .localLibrary), aozoraIndex: nil) == nil)
     }
 }

@@ -65,6 +65,23 @@ struct OfficialModuleFilesTests {
             let module = try official(list.moduleID)
             #expect(module.modules.contains { $0.id == list.entryID }, "\(list.moduleID) has \(list.entryID)")
         }
+        // Today's page (2026-11-14): 趋势's lists as sections and collages, the rankings as columns.
+        let page = HomePageDefaults.page(mode: .publicLibraries, publicLibrariesAvailable: true, languages: ["zh", "ja", "en"])
+        var named: [(module: String, entry: String)] = []
+        for section in page.sections {
+            switch section.binding {
+            case .module(let moduleID, let entryID): named.append((moduleID, entryID))
+            case .lists(let cards):
+                for card in cards {
+                    if case .module(let moduleID, let entryID) = card.binding { named.append((moduleID, entryID)) }
+                }
+            default: break
+            }
+        }
+        #expect(Set(named.map(\.module)) == ["trends", "bangumi", "narou", "anilist"])
+        for list in named {
+            #expect(try official(list.module).modules.contains { $0.id == list.entry }, "\(list.module) has \(list.entry)")
+        }
         let aniList = ModuleProvider(module: try official("anilist").localized(for: "en"))
         let section = HomeSection(layout: .row, binding: .module(moduleID: "anilist", entryID: "trending-manga"))
         #expect(aniList.rowName(for: section) == "Trending Manga", "the list's title in the app's language")
@@ -88,7 +105,7 @@ struct OfficialModuleFilesTests {
         #expect(Array(found.map(\.summary.title).prefix(2)) == ["葬送的芙莉莲", "葬送のフリーレン (1)"],
                 "its Chinese name, else its own (a volume has no Chinese name)")
         #expect(found[0].record.key.item == "https://bgm.tv/subject/305429")
-        #expect(found[0].record.authors == ["山田鐘人"], "原作 before 作者")
+        #expect(found[0].record.authors == ["山田钟人"], "原作 before 作者")
         #expect(found.allSatisfy { $0.record.contentKind == .comic })
         guard case .remote(let cover, _) = found[0].summary.cover else { Issue.record("no cover"); return }
         #expect(cover.host == "lain.bgm.tv")
@@ -165,25 +182,25 @@ struct OfficialModuleFilesTests {
         let search = try #require(bangumi.search)
         ModuleStub.install(["api.bgm.tv/v0/search/subjects": .json(try reply("Bangumi/bangumi-search.json"))])
         let provider = ModuleProvider(module: bangumi, client: f.client)
-        let found = try #require(try await provider.searchItems("葬送的芙莉蓮"))
+        let found = try #require(try await provider.searchItems("葬送的芙莉莲"))
         let work = try #require(found.first)
         let key = SourceItemKey(instance: provider.instance, item: "w")
 
-        let result = ModuleFillProvider.result(from: found, of: search, query: query("葬送的芙莉蓮", ["山田鐘人"]), record: { _ in key })
+        let result = ModuleFillProvider.result(from: found, of: search, query: query("葬送的芙莉莲", ["山田钟人"]), record: { _ in key })
         #expect(result.values[.intro] == .text(OnlineBookDetailPresentationPolicy.sanitizeIntro(work.intro, indentParagraphs: false)),
                 "the whole summary, matched by its 中文名 in Traditional characters")
         #expect(result.values[.tags] == .texts(["旅行", "寿命论", "奇幻", "治愈", "勇者"]))
         #expect(result.sourceItem == key)
 
-        #expect(ModuleFillProvider.result(from: found, of: search, query: query("葬送的芙莉蓮", ["山田鐘人"], kind: .text),
+        #expect(ModuleFillProvider.result(from: found, of: search, query: query("葬送的芙莉莲", ["山田钟人"], kind: .text),
                                           record: { _ in key }).values.isEmpty, "a novel copy is not the manga")
-        #expect(ModuleFillProvider.result(from: found, of: search, query: query("葬送的芙莉蓮", ["別人"]),
+        #expect(ModuleFillProvider.result(from: found, of: search, query: query("葬送的芙莉莲", ["别人"]),
                                           record: { _ in key }).values.isEmpty)
         var twice = work
         twice.bookUrl = "https://bgm.tv/subject/1"
-        #expect(ModuleFillProvider.result(from: found + [twice], of: search, query: query("葬送的芙莉蓮", ["山田鐘人"]),
+        #expect(ModuleFillProvider.result(from: found + [twice], of: search, query: query("葬送的芙莉莲", ["山田钟人"]),
                                           record: { _ in key }).values.isEmpty, "two works by that name: neither")
-        #expect(ModuleFillProvider.result(from: found + [work], of: search, query: query("葬送的芙莉蓮", ["山田鐘人"]),
+        #expect(ModuleFillProvider.result(from: found + [work], of: search, query: query("葬送的芙莉莲", ["山田钟人"]),
                                           record: { _ in key }).values.count == 2, "one work listed twice is one")
     }
 
@@ -214,26 +231,26 @@ struct OfficialModuleFilesTests {
     func japaneseSummary() {
         let entry = RuleModule.Entry(id: nil, title: nil, request: RuleModule.Request(url: "https://example.com/s?q={{keyword}}"),
                                      list: RuleModule.ListRules(items: "li", title: "h3"))
-        let item = RuleListItem(name: "三体", author: "劉慈欣", bookUrl: "", coverUrl: "",
-                                intro: "地球の文明が三体世界と接触する物語です。", wordCount: "", lastChapter: "", kind: "")
+        let item = RuleListItem(name: "三体", author: "刘慈欣", bookUrl: "", coverUrl: "",
+                                intro: "地球の文明が三体世界と接触する物语です。", wordCount: "", lastChapter: "", kind: "")
         let key = SourceItemKey(instance: ModuleProvider.instanceKey(moduleID: "m"), item: "w")
-        #expect(ModuleFillProvider.result(from: [item], of: entry, query: query("三體", ["劉慈欣"], kind: .text),
+        #expect(ModuleFillProvider.result(from: [item], of: entry, query: query("三体", ["刘慈欣"], kind: .text),
                                           record: { _ in key }).values.isEmpty)
         var kana = item
         kana.name = "三体　ぜんぶ"
-        #expect(ModuleFillProvider.result(from: [kana], of: entry, query: query("三体　ぜんぶ", ["劉慈欣"], kind: .text),
+        #expect(ModuleFillProvider.result(from: [kana], of: entry, query: query("三体　ぜんぶ", ["刘慈欣"], kind: .text),
                                           record: { _ in key }).values[.intro] != nil)
     }
 
-    @Test("a comic is asked only of a module whose search can list comics; Open Library and 來源配置 take text only")
+    @Test("a comic is asked only of a module whose search can list comics; Open Library and 来源配置 take text only")
     func comicCopies() async throws {
-        let comic = query("葬送の", ["山田鐘人"])
+        let comic = query("葬送の", ["山田钟人"])
         #expect(ModuleFillProvider(provider: ModuleProvider(module: try official("bangumi"))).canLookUp(comic))
         #expect(ModuleFillProvider(provider: ModuleProvider(module: try official("anilist"))).canLookUp(comic))
         var plain = try official("bangumi")
         plain.search?.list.contentKind = nil
         #expect(!ModuleFillProvider(provider: ModuleProvider(module: plain)).canLookUp(comic))
-        #expect(ModuleFillProvider(provider: ModuleProvider(module: plain)).canLookUp(query("葬送の", ["山田鐘人"], kind: .text)))
+        #expect(ModuleFillProvider(provider: ModuleProvider(module: plain)).canLookUp(query("葬送の", ["山田钟人"], kind: .text)))
 
         var withISBN = comic
         withISBN.identifiers = [try #require(ExternalIdentifier.normalized(.isbn13, "9784091294562"))]
@@ -243,7 +260,7 @@ struct OfficialModuleFilesTests {
         #expect(openLibrary.canLookUp(withISBN))
         let sources = BookSourceFillProvider(search: { _, _, _ in .init(origins: [], answered: 0, queried: 0) }, hasSources: { true })
         #expect(!sources.canLookUp(comic))
-        #expect(sources.canLookUp(query("葬送の", ["山田鐘人"], kind: .text)))
+        #expect(sources.canLookUp(query("葬送の", ["山田钟人"], kind: .text)))
     }
 
     // MARK: - Localizations
@@ -254,7 +271,7 @@ struct OfficialModuleFilesTests {
         #expect(bangumi.localized(for: "en").title == "Bangumi")
         #expect(bangumi.localized(for: "en").modules.map(\.title) == ["Top Manga", "Top Novels"])
         #expect(bangumi.localized(for: "zh-Hans").modules.first?.title == "漫画排行")
-        #expect(bangumi.localized(for: "zh-Hant").modules.first?.title == "漫畫排行", "as written: zh-Hans is another script")
+        #expect(bangumi.localized(for: "zh-Hant").modules.first?.title == "漫画排行", "as written: zh-Hans is another script")
         #expect(bangumi.localized(for: "en-GB").modules.first?.title == "Top Manga")
         #expect(bangumi.localized(for: "fr") == bangumi)
         let anilist = try official("anilist")
@@ -295,8 +312,8 @@ struct OfficialModuleFilesTests {
     func localizationRules() {
         func file(_ localizations: String, required: String = "3.0") -> Data {
             Data("""
-            {"id":"m","title":"模組","version":"1.0","requiredVersion":"\(required)","hosts":["example.com"],
-             "modules":[{"id":"new","title":"新書","request":{"url":"https://example.com/"},"list":{"items":"li","title":"h3"}}],
+            {"id":"m","title":"模组","version":"1.0","requiredVersion":"\(required)","hosts":["example.com"],
+             "modules":[{"id":"new","title":"新书","request":{"url":"https://example.com/"},"list":{"items":"li","title":"h3"}}],
              "localizations":\(localizations)}
             """.utf8)
         }
@@ -314,16 +331,16 @@ struct OfficialModuleFilesTests {
         // A parameter's words: only a parameter the list has, only options it has.
         func picked(_ params: String) -> Data {
             Data("""
-            {"id":"m","title":"模組","version":"1.0","requiredVersion":"3.0","hosts":["example.com"],
-             "modules":[{"id":"new","title":"新書","request":{"url":"https://example.com/{{area}}"},"list":{"items":"li","title":"h3"},
-                         "params":[{"name":"area","title":"地區","type":"enumeration","enumOptions":[{"title":"日本","value":"ja"}]}]}],
+            {"id":"m","title":"模组","version":"1.0","requiredVersion":"3.0","hosts":["example.com"],
+             "modules":[{"id":"new","title":"新书","request":{"url":"https://example.com/{{area}}"},"list":{"items":"li","title":"h3"},
+                         "params":[{"name":"area","title":"地区","type":"enumeration","enumOptions":[{"title":"日本","value":"ja"}]}]}],
              "localizations":{"en":{"entries":{"new":{"params":\(params)}}}}}
             """.utf8)
         }
         let module = try? RuleModuleValidator.validate(picked(#"{"area":{"title":"Region","options":{"ja":"Japan"}}}"#), appVersion: "3.0")
         #expect(module?.localized(for: "en").modules.first?.params.first?.title == "Region")
         #expect(module?.localized(for: "en").modules.first?.params.first?.enumOptions?.first?.title == "Japan")
-        #expect(module?.localized(for: "ja").modules.first?.params.first?.title == "地區", "no ja words: as written")
+        #expect(module?.localized(for: "ja").modules.first?.params.first?.title == "地区", "no ja words: as written")
         #expect(throws: RuleModuleRejection.unknownValue(field: "localizations.en.entries.new.params", value: "gone")) {
             try RuleModuleValidator.validate(picked(#"{"gone":{"title":"G"}}"#), appVersion: "3.0")
         }
@@ -362,9 +379,9 @@ struct OfficialModuleFilesTests {
         let result = try await filler.lookUp(query)
         #expect(ModuleStub.urls == ["https://api.openbd.jp/v1/get?isbn=9784750320236", "https://cover.openbd.jp/9784750320236.jpg"])
         #expect(ModuleStub.userAgents.first == Self.userAgent)
-        #expect(result.values[.publisher] == .text("明石書店"))
+        #expect(result.values[.publisher] == .text("明石书店"))
         guard case .text(let intro) = result.values[.intro] else { Issue.record("no intro: \(result.values)"); return }
-        #expect(intro.hasPrefix("自然環境の中で英語を体得した"), "the long description (03), not the table of contents (04)")
+        #expect(intro.hasPrefix("自然环境の中で英语を体得した"), "the long description (03), not the table of contents (04)")
         #expect(result.values[.cover] == .text("module-openbd-9784750320236.jpg"))
         #expect(FileManager.default.fileExists(atPath: covers.appendingPathComponent("module-openbd-9784750320236.jpg").path))
         #expect(result.sourceItem?.instance == ModuleProvider.instanceKey(moduleID: "openbd"))
@@ -390,7 +407,7 @@ struct OfficialModuleFilesTests {
         var comic = try isbnQuery("9784040729183")
         comic.contentKind = .comic
         #expect(!filler.canLookUp(comic), "its lookup lists books, not comics")
-        #expect(!filler.canLookUp(MetadataFillQuery(copyID: UUID(), title: "三體", authors: ["劉慈欣"], identifiers: [],
+        #expect(!filler.canLookUp(MetadataFillQuery(copyID: UUID(), title: "三体", authors: ["刘慈欣"], identifiers: [],
                                                     copySource: .localLibrary, missing: [.intro])), "no search: a title is never sent")
     }
 
@@ -398,7 +415,7 @@ struct OfficialModuleFilesTests {
     func lookupRules() {
         func file(_ lookup: String, required: String = "3.0") -> Data {
             Data("""
-            {"id":"m","title":"模組","version":"1.0","requiredVersion":"\(required)","hosts":["example.com"],"modules":[],
+            {"id":"m","title":"模组","version":"1.0","requiredVersion":"\(required)","hosts":["example.com"],"modules":[],
              "lookup":\(lookup)}
             """.utf8)
         }
@@ -417,7 +434,7 @@ struct OfficialModuleFilesTests {
             try RuleModuleValidator.validate(file(good, required: "2.0"), appVersion: "3.0")
         }
         let searchWithPrefixes = Data("""
-            {"id":"m","title":"模組","version":"1.0","requiredVersion":"3.0","hosts":["example.com"],"modules":[],
+            {"id":"m","title":"模组","version":"1.0","requiredVersion":"3.0","hosts":["example.com"],"modules":[],
              "search":{"request":{"url":"https://example.com/s?q={{keyword}}"},"isbnPrefixes":["9784"],"list":{"items":"li","title":"h3"}}}
             """.utf8)
         #expect(throws: RuleModuleRejection.unknownValue(field: "search.isbnPrefixes", value: "9784"), "only a lookup is asked by ISBN") {
@@ -425,7 +442,7 @@ struct OfficialModuleFilesTests {
         }
     }
 
-    @Test("a module with only a lookup is a 資料來源 place")
+    @Test("a module with only a lookup is a 资料来源 place")
     func lookupFills() throws {
         let openBD = try official("openbd")
         #expect(openBD.search == nil && openBD.canFill)
@@ -444,15 +461,15 @@ struct OfficialModuleFilesTests {
         let module = try official("narou")
         let provider = ModuleProvider(module: module, client: f.client)
 
-        let page = try #require(try await provider.search("無職転生"))
+        let page = try #require(try await provider.search("无职転生"))
         let url = try #require(ModuleStub.urls.first.flatMap(URLComponents.init(string:)))
         #expect(url.host == "api.syosetu.com" && url.path == "/novelapi/api/", "novelapi has no R18 work; novel18api is not a host")
-        #expect(url.queryItems?.first { $0.name == "word" }?.value == "無職転生")
+        #expect(url.queryItems?.first { $0.name == "word" }?.value == "无职転生")
         #expect(ModuleStub.userAgents == [Self.userAgent])
         let found = items(page.entries)
         #expect(found.count == 3, "the count the reply opens with is no work")
-        #expect(found[0].summary.title.hasPrefix("無職転生"))
-        #expect(found[0].record.authors == ["理不尽な孫の手"])
+        #expect(found[0].summary.title.hasPrefix("无职転生"))
+        #expect(found[0].record.authors == ["理不尽な孙の手"])
         #expect(found[0].record.key.item == "https://ncode.syosetu.com/N9669BK/")
         #expect(found[0].summary.blurb?.isEmpty == false)
         guard case .item(_, _, .moduleBook(let book)) = page.entries[0] else { Issue.record("not a book the module reads"); return }
@@ -486,8 +503,8 @@ struct OfficialModuleFilesTests {
     func pagingStart() throws {
         func file(_ value: String, required: String = "3.0") -> Data {
             Data("""
-            {"id":"m","title":"模組","version":"1.0","requiredVersion":"\(required)","hosts":["example.com"],
-             "modules":[{"id":"new","title":"新書","params":[{"name":"offset","type":"offset","value":\(value)}],
+            {"id":"m","title":"模组","version":"1.0","requiredVersion":"\(required)","hosts":["example.com"],
+             "modules":[{"id":"new","title":"新书","params":[{"name":"offset","type":"offset","value":\(value)}],
               "request":{"url":"https://example.com/?st={{offset}}"},"list":{"items":"li","title":"h3"}}]}
             """.utf8)
         }
@@ -526,7 +543,7 @@ struct OfficialModuleFilesTests {
         #expect(found[0].record.language == nil, "a work in twelve languages is in none of them")
         #expect(found[2].record.language == "en")
         #expect(found[0].record.identifiers.contains(ExternalIdentifier.normalized(.isbn13, "1427265836")!))
-        #expect(found[0].record.acquisitions == [.viewOnly], "data only: 只有資料")
+        #expect(found[0].record.acquisitions == [.viewOnly], "data only: 只有资料")
         guard case .remote(let cover, _) = found[0].summary.cover else { Issue.record("no cover: \(found[0].summary.cover)"); return }
         #expect(cover.absoluteString == "https://covers.openlibrary.org/b/id/9157544-M.jpg")
         guard case .generated = found[3].summary.cover else { Issue.record("a work without cover_i has no cover address"); return }
@@ -591,7 +608,7 @@ struct OfficialModuleFilesTests {
         #expect(ModuleStub.urls.last == "https://openlibrary.org/works/OL45804W.json")
     }
 
-    @Test("AI 推薦 looks a work up through the Open Library module: one search by title and author, the work's page for its blurb; turned off, nothing is asked")
+    @Test("AI 推荐 looks a work up through the Open Library module: one search by title and author, the work's page for its blurb; turned off, nothing is asked")
     func openLibraryRecommendation() async throws {
         let f = makeFixture()
         defer { try? FileManager.default.removeItem(at: f.folder) }
@@ -621,12 +638,12 @@ struct OfficialModuleFilesTests {
         ModuleStub.install([:])
         library.setEnabled(false, id: OfficialRuleModules.openLibraryID)
         #expect(try await resolver.match(work) == nil)
-        #expect(ModuleStub.urls.isEmpty, "停用 turns AI 推薦's lookups off with the rest")
+        #expect(ModuleStub.urls.isEmpty, "停用 turns AI 推荐's lookups off with the rest")
     }
 
-    // MARK: - 趨勢
+    // MARK: - 趋势
 
-    @Test("趨勢: each list is the gateway's file for a region, which follows 中繼資料語言偏好推薦 until the reader picks one")
+    @Test("趋势: each list is the gateway's file for a region, which follows 中继资料语言偏好推荐 until the reader picks one")
     func trendsRegion() async throws {
         let module = try official("trends")
         #expect(module.modules.compactMap(\.id) == ["today", "month", "year", "completed", "classics"])
@@ -649,7 +666,7 @@ struct OfficialModuleFilesTests {
         #expect(ko.enumOptions?.map(\.title) == ["중국어(번체)", "중국어(간체)", "일본", "영어"])
     }
 
-    @Test("趨勢: a work is its title, its authors, its intro, its cover and its article; a folded series names the series")
+    @Test("趋势: a work is its title, its authors, its intro, its cover and its article; a folded series names the series")
     func trendsItems() async throws {
         let f = makeFixture()
         defer { try? FileManager.default.removeItem(at: f.folder) }
@@ -668,13 +685,35 @@ struct OfficialModuleFilesTests {
         }
         #expect(covers == ["https://upload.wikimedia.org/wikipedia/en/thumb/4/44/Mistborn-cover.jpg/500px-Mistborn-cover.jpg",
                            "https://thumb.wikimedia.org/wikipedia/en/thumb/a/a1/Good_Omens_cover.jpg/500px-Good_Omens_cover.jpg"])
-        #expect(module.hosts.contains("lain.bgm.tv"), "華語 and 日本 take a matched work's cover from Bangumi")
-        // A folded series' other books, for 作品詳情's fan: only from the module's hosts.
+        #expect(module.hosts.contains("lain.bgm.tv"), "华语 and 日本 take a matched work's cover from Bangumi")
+        // A folded series' other books, for 作品详情's fan: only from the module's hosts.
         #expect(found[0].summary.seriesCovers.map { cover -> String? in
             if case .remote(let url, _) = cover { url.absoluteString } else { nil }
         } == ["https://upload.wikimedia.org/wikipedia/en/thumb/2/2a/The_Well_of_Ascension.jpg/500px-The_Well_of_Ascension.jpg",
               "https://thumb.wikimedia.org/wikipedia/en/thumb/d/d4/Hero_of_Ages.jpg/500px-Hero_of_Ages.jpg"])
         #expect(found[1].summary.seriesCovers.isEmpty)
+
+        // The series' books, for its page (2026-11-14): each read as an item is, the item's own
+        // first. One with an article is a work of its own; one only named opens nothing.
+        let volumes = found[0].summary.volumes
+        #expect(volumes.map(\.title) == ["Mistborn: The Final Empire", "The Well of Ascension", "The Hero of Ages",
+                                         "Mistborn: Secret History"])
+        #expect(volumes.map { $0.work?.record.key.item } == [
+            "https://en.wikipedia.org/wiki/Mistborn:_The_Final_Empire", "https://en.wikipedia.org/wiki/The_Well_of_Ascension",
+            "https://en.wikipedia.org/wiki/The_Hero_of_Ages", nil])
+        #expect(volumes[1].work?.record.authors == ["Brandon Sanderson"])
+        #expect(volumes.allSatisfy { $0.work?.summary.volumes.isEmpty != false }, "a volume lists none: no way back into the series")
+        // Artwork only from the module's hosts, as the item's own; none is no cover, not a drawn one.
+        #expect(volumes.map { $0.cover != nil } == [true, true, false, false])
+        #expect(found[1].summary.volumes.isEmpty)
+        // The card opens the series first; the series' button, and a book alone, open 作品详情.
+        let series = WorkDetailRoute(record: found[0].record, summary: found[0].summary, opening: .bibliographic)
+        #expect(ExplorePush.item(series) == .series(ListedSeriesRoute(work: series)))
+        #expect(ExplorePush.item(ListedSeriesRoute(work: series).workAlone) == .work(ListedSeriesRoute(work: series).workAlone))
+        #expect(ListedSeriesRoute(work: series).workAlone.record == series.record)
+        #expect(ListedSeriesRoute(work: series).workAlone.summary.seriesCovers.isEmpty, "the book's page has the book's cover alone")
+        let alone = WorkDetailRoute(record: found[1].record, summary: found[1].summary, opening: .bibliographic)
+        #expect(ExplorePush.item(alone) == .work(alone))
 
         let entry = try #require(module.modules.first { $0.id == "year" })
         let listed = try await f.client.page(of: entry, in: module, values: ["region": "en"]).items

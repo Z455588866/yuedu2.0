@@ -97,6 +97,10 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
         // Absorb any stale page-turn command so a rebuilt controller (page-style
         // switch recreates the coordinator) never replays an old intent.
         context.coordinator.lastExecutedTurnVersion = pageTurnCommand?.version ?? 0
+        // 自动阅读正等着这笔被吸收的命令的答复：这个控制器开在哪一页，屏幕上就是哪一页。
+        if pageTurnCommand?.isAutoRead == true {
+            autoReadRevealHandle?.onPageTurnResolved?()
+        }
         // Sync the binding (display output) so ReaderView.currentPage aligns with
         // the engine-restored position.
         if initialPage != currentPage {
@@ -207,6 +211,11 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
         context.coordinator.applyAutoReadReveal(
             page: autoReadRevealPage,
             handle: autoReadRevealHandle,
+            // `autoReadRevealPage` 已经是「正在翻向的那一页」（命令一发出绑定就动了）：
+            // 在那笔翻页落地之前，帘子上还是它要翻过去的那一页的图。
+            turnArriving: pageTurnCommand.map {
+                $0.isAutoRead && $0.version != context.coordinator.lastExecutedTurnVersion
+            } ?? false,
             on: uiViewController
         )
         if context.coordinator.lastAppliedPageBarsRevision != pageBarsRevision {
@@ -317,10 +326,12 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
             }
             guard let target = context.coordinator.displayPage(command.step, from: base) else {
                 traceRefused(base, "edge")
+                if command.isAutoRead { context.coordinator.resolveAutoReadTurn() }
                 return
             }
             guard target != visiblePage else {
                 traceRefused(target, "samePage")
+                if command.isAutoRead { context.coordinator.resolveAutoReadTurn() }
                 return
             }
             // Rapid-tap speed-up: register cadence now, before the cover / slide /
@@ -355,6 +366,8 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
                     let targetVC = context.coordinator.displayViewController(at: target)
                     _ = context.coordinator.setPage(targetVC, on: uiViewController, direction: direction, layoutNow: true)
                 }
+                // 刚刚在上面落了页，或掉在一笔还没播完的「覆盖」转场后面：这条命令不会再往下走了。
+                if command.isAutoRead { context.coordinator.resolveAutoReadTurn() }
                 return
             }
 
@@ -372,6 +385,10 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
                 if !context.coordinator.isAnimatingTransition {
                     let targetVC = context.coordinator.displayViewController(at: target)
                     _ = context.coordinator.setPage(targetVC, on: uiViewController, direction: direction, layoutNow: true)
+                    if command.isAutoRead { context.coordinator.resolveAutoReadTurn() }
+                } else if command.isAutoRead {
+                    // 前面有一笔转场在播：这笔等它的落定（`commitRippleLanding` 会答复）。
+                    context.coordinator.autoReadTurn = .queued
                 }
                 return
             }
@@ -385,6 +402,7 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
                 // transition's settle chains to it (latest intent wins).
                 guard effects.contains(.requestPageTransition(targetPage: target)) else {
                     traceCommand("queued")
+                    if command.isAutoRead { context.coordinator.autoReadTurn = .queued }
                     // The turn on screen finishes before this one starts; draw its
                     // pages meanwhile.
                     context.coordinator.prefetchPages(around: target)
@@ -396,11 +414,13 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
                     visiblePage: visiblePage
                 )
                 traceCommand("queued")
+                if command.isAutoRead { context.coordinator.autoReadTurn = .queued }
                 context.coordinator.prefetchPages(around: target)
                 return
             }
 
             traceCommand(shouldAnimate ? "start" : "instant")
+            if command.isAutoRead { context.coordinator.autoReadTurn = .running }
             context.coordinator.performProgrammaticTransition(
                 on: uiViewController,
                 to: target,
@@ -1615,12 +1635,15 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
             on pageViewController: UIPageViewController,
             showing visiblePage: Int
         ) {
-            guard let sessionCoordinator else { return }
-            let effects = sessionCoordinator.send(.pageTransitionSettled(visiblePage: visiblePage))
-            guard !effects.isEmpty else { return }
-            if effects.contains(where: { if case .requestPageTransition = $0 { true } else { false } }) {
+            let effects = sessionCoordinator?.send(.pageTransitionSettled(visiblePage: visiblePage)) ?? []
+            let chains = effects.contains(where: { if case .requestPageTransition = $0 { true } else { false } })
+            if chains {
                 pageTurnTrace.queueChained(visible: visiblePage)
+            } else if autoReadTurn == .queued {
+                // 队列把自动阅读这笔丢了（刚落定的那笔已经显示了它要去的页）：不会再有人落地了。
+                resolveAutoReadTurn()
             }
+            guard !effects.isEmpty else { return }
             // This runs inside the *completion* of the previous animated setViewControllers.
             // Starting the next animated transition synchronously here makes
             // _UIQueuingScrollView raise NSInternalInconsistencyException — it is still
@@ -1675,6 +1698,11 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
                     ? self.readingPage(of: pageViewController) ?? shownViewController
                     : shownViewController
                 let resolvedPage = self.syncStablePosition(afterShowing: landedViewController, notifyFallback: true)
+                // 自动阅读这笔翻页上屏了：它自己的转场，或它排队后变成的那笔链式转场。
+                // （排队时本来就在播的那笔在这里结束，但没有链上，不算它的答复。）
+                if self.autoReadTurn == .running || (chained && self.autoReadTurn == .queued) {
+                    self.resolveAutoReadTurn()
+                }
                 self.continueQueuedTransitionIfNeeded(on: pageViewController, showing: resolvedPage ?? targetPage)
                 self.endAnimatedTransition(on: pageViewController)
                 if animated { self.turnFrameRate.end() }
@@ -1802,22 +1830,40 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
 
         var lastAppliedPageBarsRevision: UInt = 0
 
-        /// Sits above every page, outside `UIPageViewController`'s own hierarchy,
-        /// exactly like `coverOverlayView`. It never receives touches.
+        /// A subview of the page view controller's view, drawn above every page it
+        /// holds (`AutoReadRevealView` says how). It never receives touches.
         let autoReadRevealView = AutoReadRevealView()
+
+        /// 自动阅读要的一笔翻页，执行器已经接下、还没落地。
+        enum AutoReadTurn {
+            /// 它自己那次写栈正在进行。
+            case running
+            /// 停在一笔还在播的转场后面；落定后由链式转场把它翻过去。
+            case queued
+        }
+        var autoReadTurn: AutoReadTurn?
+        private var autoReadRevealPage: Int?
+        private weak var autoReadHandle: ReaderAutoReadRevealHandle?
 
         /// Puts the next page over the current one and moves the clip line.
         ///
         /// The snapshot already carries 页眉／页脚 because it comes from
         /// `renderSnapshot` → `renderPage`, the same function that draws the live
         /// page — so the revealed page brings its own bars, as it does in legado.
+        ///
+        /// - Parameter turnArriving: 这一趟带着一笔执行器还没跑的自动阅读翻页。帘子要等到
+        ///   `resolveAutoReadTurn` 才换图，和「已经接下、还没落地」是同一件事（`autoReadTurn`）。
         func applyAutoReadReveal(
             page: Int?,
             handle: ReaderAutoReadRevealHandle?,
+            turnArriving: Bool,
             on pageViewController: UIPageViewController
         ) {
+            autoReadRevealPage = page
+            autoReadHandle = handle
             guard let page else {
                 handle?.setProgress = nil
+                // `autoReadTurn` 留着：没有帘子的宿主（固定版式）照样欠着一笔翻页的答复。
                 autoReadRevealView.removeFromSuperview()
                 autoReadRevealView.setPageImage(nil, pageIndex: nil)
                 return
@@ -1827,18 +1873,40 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
             }
             autoReadRevealView.frame = pageViewController.view.bounds
             pageViewController.view.bringSubviewToFront(autoReadRevealView)
-            if autoReadRevealView.imagePageIndex != page {
-                autoReadRevealView.setPageImage(
-                    currentEngine.renderSnapshot(forPage: page),
-                    pageIndex: page
-                )
-                // A new page starts its curtain closed, whatever the last frame of
-                // the previous one left behind.
-                autoReadRevealView.setProgress(0)
-            }
             autoReadRevealView.setEdgeColor(.tintColor)
             handle?.setProgress = { [weak autoReadRevealView] progress in
                 autoReadRevealView?.setProgress(CGFloat(progress))
+            }
+            guard !turnArriving, autoReadTurn == nil else { return }
+            if autoReadRevealView.imagePageIndex != page {
+                // 读者自己翻过来的一页，或者模式刚开始：不管上一帧留下什么，帘子都从头拉上。
+                autoReadRevealView.setProgress(0)
+                showAutoReadRevealPicture(of: page)
+            }
+        }
+
+        private func showAutoReadRevealPicture(of page: Int) {
+            guard autoReadRevealView.imagePageIndex != page else { return }
+            autoReadRevealView.setPageImage(
+                currentEngine.renderSnapshot(forPage: page),
+                pageIndex: page
+            )
+        }
+
+        /// 自动阅读这笔翻页结了：帘子下面那页就是它翻过去的那页，或者这笔被拒、什么都没动。
+        ///
+        /// 只在写栈之后调用，下面这个顺序就是「每翻一页闪一下上一页」的修法。帘子原本是
+        /// 新页整幅画在旧页上面。每一步在屏幕上留下的都是一整页，无论步骤怎么跨帧分开：
+        /// 实测帘子归位比换页早到屏幕一两帧，而画下一页要几十毫秒：
+        /// 1.（调用方已完成）帘子下面那页换成新页——与帘子上的图一模一样；
+        /// 2. 帘子回到顶部，露出同一页；
+        /// 3. 帘子的图（此时已在屏幕外）换成再下一页。
+        /// 以前是 2 → 3 → 1，在 2 和 1 之间，刚读完的那页会回来一两帧。
+        fileprivate func resolveAutoReadTurn() {
+            autoReadTurn = nil
+            autoReadHandle?.onPageTurnResolved?()
+            if let page = autoReadRevealPage {
+                showAutoReadRevealPicture(of: page)
             }
         }
 
@@ -2819,6 +2887,8 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
             warmUpNext(currentGlobalPage: targetPage)
             finishRippleOverlay()
             endAnimatedTransition(on: pageViewController)
+            // 这笔翻页落地了：自动阅读若是停在「涟漪」动画后面等，就是等这个。
+            if autoReadTurn != nil { resolveAutoReadTurn() }
         }
 
         private func finishRippleOverlay() {

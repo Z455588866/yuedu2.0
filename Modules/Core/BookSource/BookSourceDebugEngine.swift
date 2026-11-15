@@ -28,6 +28,34 @@ struct DebugLogEntry: Identifiable {
     }
 }
 
+// MARK: - Plain text (copying a log out of the app)
+
+extension DebugLogEntry {
+    /// 复制出去的形态：时间、等级、步骤一行，然后**完整**的 summary 与 detail ——
+    /// 列表里被截断成两行、或被折叠起来的正文，复制时一个字都不少。
+    ///
+    /// 等级写成名字：列表里它是颜色加一个图标，粘到别处就什么都看不出来了。
+    var plainText: String {
+        var lines = ["\(Self.plainTimeFormatter.string(from: timestamp)) [\(level.rawValue)] \(step)", summary]
+        if let detail, !detail.isEmpty {
+            lines.append(detail)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// 一次调试的完整日志，按发生顺序，条目之间空一行。
+    static func plainText(of entries: [DebugLogEntry]) -> String {
+        entries.map(\.plainText).joined(separator: "\n\n")
+    }
+
+    private static let plainTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+}
+
 // MARK: - Engine
 
 /// Wraps `ModernParserBridge` to provide structured, per-step debug logs

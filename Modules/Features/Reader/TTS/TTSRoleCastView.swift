@@ -137,6 +137,8 @@ struct TTSRoleCastView: View {
             return supportsMultiRole
                 ? localized("为每个角色指派不同的汇入语音源。角色越多，每章需要的请求也越多。")
                 : localized("汇入的语音源一个就是一个声音，目前只汇入了一个。到语音朗读设置再汇入几个（语音包通常一个音色一笔），就能指派给不同角色。")
+        case .azure, .openAI, .mimo:
+            return localized("云端语音可在「语音朗读设置 → 云端语音」里挑选音色，角色指派会自动沿用同一套音色。")
         }
     }
 
@@ -293,6 +295,13 @@ struct TTSRoleVoicePickerView: View {
             case .system: systemVoiceSections
             case .edge: edgeVoiceSection
             case .bookSource: importedSourceSection
+            case .azure, .openAI, .mimo:
+                Section {
+                    Text(localized("云端语音的音色在「语音朗读设置 → 云端语音」中统一选择；已指派的角色会自动沿用。"))
+                        .font(.footnote)
+                        .foregroundStyle(DSColor.textSecondary)
+                }
+                .interfaceSectionSurface()
             }
         }
         .softScrollEdges()

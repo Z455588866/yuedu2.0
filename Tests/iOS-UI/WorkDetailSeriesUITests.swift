@@ -1,16 +1,17 @@
 import XCTest
 import zlib
 
-/// 同系列 on 作品詳情 (maintainer, 2026-10-12): the hero names the series and its number and
+/// 同系列 on 作品详情 (maintainer, 2026-10-12): the hero names the series and its number and
 /// opens the series page; the section lists the other volumes, each numbered in place of its
 /// author.
 ///
-/// The books are three EPUB 3 files the test writes (`belongs-to-collection` + `group-position`),
+/// The books are five EPUB 3 files the test writes (`belongs-to-collection` + `group-position`,
+/// each with a cover of its own colour, so the series page fans them as it does real artwork),
 /// imported one per launch (`-auto-import-epub` with an absolute path, DEBUG). The test deletes
 /// them from the shelf at the end.
 final class WorkDetailSeriesUITests: XCTestCase {
-    private let series = "系列驗收"
-    private let titles = ["系列驗收一", "系列驗收二", "系列驗收三"]
+    private let series = "系列验收"
+    private let titles = ["系列验收一", "系列验收二", "系列验收三", "系列验收四", "系列验收五"]
     private var folder: URL!
 
     override func setUpWithError() throws {
@@ -34,7 +35,7 @@ final class WorkDetailSeriesUITests: XCTestCase {
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW",
                                "-auto-import-epub", file(title).path, "-auto-import-title", title]
         app.launch()
-        let shelfTab = app.tabBars.buttons["書架"].firstMatch
+        let shelfTab = app.tabBars.buttons["书架"].firstMatch
         XCTAssertTrue(shelfTab.waitForExistence(timeout: 30))
         shelfTab.tap()
         XCTAssertTrue(shelfBook(app, title).waitForExistence(timeout: 30), app.debugDescription)
@@ -75,24 +76,24 @@ final class WorkDetailSeriesUITests: XCTestCase {
             app = launch(importing: title)
         }
 
-        // Volume 2's 作品詳情: the hero names the series, 同系列 lists volumes 1 and 3.
+        // Volume 2's 作品详情: the hero names the series, 同系列 lists volumes 1 and 3.
         openMenu(app, titles[1])
-        let detailItem = app.buttons["作品詳情"].firstMatch
+        let detailItem = app.buttons["作品详情"].firstMatch
         XCTAssertTrue(detailItem.waitForExistence(timeout: 5), app.debugDescription)
         detailItem.tap()
         let link = app.buttons["detail.link.series"].firstMatch
         XCTAssertTrue(link.waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertEqual(link.label, "\(series) · 第 2 冊")
+        XCTAssertEqual(link.label, "\(series) · 第 2 册")
         let volumes = app.descendants(matching: .any).matching(identifier: "detail.series.book")
         let first = volumes.firstMatch
         if !first.exists { app.swipeUp() }
         XCTAssertTrue(first.waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertEqual(volumes.count, 2, "the page's own volume is not listed again")
+        XCTAssertEqual(volumes.count, titles.count - 1, "the page's own volume is not listed again")
         // A shelf copy says what the shelf says of it (title, author, status), then its number.
         XCTAssertTrue(volumes.element(boundBy: 0).label.hasPrefix(titles[0] + "，"), app.debugDescription)
-        XCTAssertEqual(volumes.element(boundBy: 0).value as? String, "第 1 冊")
+        XCTAssertEqual(volumes.element(boundBy: 0).value as? String, "第 1 册")
         XCTAssertTrue(volumes.element(boundBy: 1).label.hasPrefix(titles[2] + "，"), app.debugDescription)
-        XCTAssertEqual(volumes.element(boundBy: 1).value as? String, "第 3 冊")
+        XCTAssertEqual(volumes.element(boundBy: 1).value as? String, "第 3 册")
         screenshot(app, "work-detail-series-section")
 
         // The hero's link: every volume, in series order, under the series' name.
@@ -100,31 +101,43 @@ final class WorkDetailSeriesUITests: XCTestCase {
         link.tap()
         let page = app.navigationBars[series].firstMatch
         XCTAssertTrue(page.waitForExistence(timeout: 10), app.debugDescription)
-        for title in titles {
-            XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title + "，")).firstMatch.waitForExistence(timeout: 5),
-                          "\(title)\n\(app.debugDescription)")
-        }
+        // As Apple Books' store draws a series (2026-11-14): its name and how many it holds on
+        // the hero, one button to the first volume, then a row for each, numbered.
+        XCTAssertTrue(app.staticTexts["系列 · 5 本"].firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["检视第 1 册"].firstMatch.exists, app.debugDescription)
+        // The author the volumes share opens their page, as 作品详情's does.
+        XCTAssertTrue(app.buttons["publicLibrary.author.系列验收作者"].firstMatch.exists, app.debugDescription)
         screenshot(app, "work-detail-series-page")
+        let rows = app.buttons.matching(identifier: "detail.series.volume")
+        for (offset, title) in titles.enumerated() {
+            let row = rows.matching(NSPredicate(format: "label BEGINSWITH %@", title + "，")).firstMatch
+            for _ in 0..<4 where !row.exists { app.swipeUp() }
+            XCTAssertTrue(row.waitForExistence(timeout: 5), "\(title)\n\(app.debugDescription)")
+            XCTAssertEqual(row.value as? String, "第 \(offset + 1) 册")
+        }
+        // Books only, so no 书籍｜有声书 to choose between.
+        XCTAssertFalse(app.buttons["detail.series.form.books"].exists)
+        screenshot(app, "work-detail-series-page-volumes")
 
-        // A volume opens its own 作品詳情.
+        // A volume opens its own 作品详情.
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", titles[2] + "，")).firstMatch.tap()
         let third = app.buttons["detail.link.series"].firstMatch
         XCTAssertTrue(third.waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertEqual(third.label, "\(series) · 第 3 冊")
+        XCTAssertEqual(third.label, "\(series) · 第 3 册")
 
         // The books leave the shelf, so the next run starts from the same place.
         app.terminate()
         app.launchArguments = ["-no-official-modules", "-onboarding.completed", "YES", "-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW"]
         app.launch()
-        let shelfTab = app.tabBars.buttons["書架"].firstMatch
+        let shelfTab = app.tabBars.buttons["书架"].firstMatch
         XCTAssertTrue(shelfTab.waitForExistence(timeout: 30))
         shelfTab.tap()
         for title in titles {
             openMenu(app, title)
-            let delete = app.buttons["刪除書籍"].firstMatch
+            let delete = app.buttons["删除书籍"].firstMatch
             XCTAssertTrue(delete.waitForExistence(timeout: 5), app.debugDescription)
             delete.tap()
-            let confirm = app.alerts.buttons["刪除"].firstMatch
+            let confirm = app.alerts.buttons["删除"].firstMatch
             XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
             confirm.tap()
             XCTAssertTrue(shelfBook(app, title).waitForNonExistence(timeout: 10))
@@ -141,13 +154,14 @@ final class WorkDetailSeriesUITests: XCTestCase {
           <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
             <dc:identifier id="bookid">urn:uuid:series-acceptance-\(position)</dc:identifier>
             <dc:title>\(title)</dc:title>
-            <dc:creator>系列驗收作者</dc:creator>
+            <dc:creator>系列验收作者</dc:creator>
             <dc:language>zh-Hant</dc:language>
             <meta property="belongs-to-collection" id="series">\(series)</meta>
             <meta refines="#series" property="collection-type">series</meta>
             <meta refines="#series" property="group-position">\(position)</meta>
           </metadata>
           <manifest>
+            <item id="cover" href="cover.png" media-type="image/png" properties="cover-image"/>
             <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
             <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
           </manifest>
@@ -172,7 +186,22 @@ final class WorkDetailSeriesUITests: XCTestCase {
             ("OPS/package.opf", Data(opf.utf8)),
             ("OPS/nav.xhtml", Data(xhtml(#"<nav epub:type="toc"><ol><li><a href="chapter1.xhtml">一</a></li></ol></nav>"#).utf8)),
             ("OPS/chapter1.xhtml", Data(xhtml("<p>\(title)的正文。</p>").utf8)),
+            ("OPS/cover.png", cover(title, hue: CGFloat(position) / 6)),
         ])
+    }
+
+    /// A jacket in one colour with the title on it: real artwork to the app, which fans only
+    /// volumes that have some.
+    private static func cover(_ title: String, hue: CGFloat) -> Data {
+        let size = CGSize(width: 400, height: 600)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).pngData { context in
+            UIColor(hue: hue, saturation: 0.75, brightness: 0.78, alpha: 1).setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            (title as NSString).draw(in: CGRect(x: 40, y: 70, width: 320, height: 400),
+                                     withAttributes: [.font: UIFont.boldSystemFont(ofSize: 72), .foregroundColor: UIColor.white])
+        }
     }
 }
 

@@ -164,7 +164,9 @@ private struct ExploreHomeRoot: View {
         // 中继资料语言偏好推荐: a module's 地区 that follows it reads it.
         [tabModel.isLoaded, pageStore.page, connections.catalogs.map(\.id), exploreSources.map(\.bookSourceUrl), availability.isAvailable,
          aozora.catalog != nil, aggregation.settings.hiddenFromLatest, aggregation.readingLanguages.language,
-         modules.modules.map { "\($0.module.id)@\($0.module.version)" }]
+         modules.modules.map { "\($0.module.id)@\($0.module.version)" },
+         // A module's own settings (`globalParams`) set on its page build its rows again.
+         modules.modules.map { $0.module.globalValues(language: nil) }]
     }
 
     /// Every section is settled with nothing in it, so the home would be blank: a China
@@ -209,7 +211,7 @@ private struct ExploreHomeRoot: View {
                 .toolbar { toolbar }
                 // 编辑首页 hides the tab bar while the home is being edited, as 书架's 选取 does, and
                 // its ＋ takes the bar's place (maintainer, 2026-10-17).
-                .hidesRootTabBar(showsEditorBars)
+                .hidesRootTabBar(showsEditorBars, hasBottomBar: true)
                 .exploreRouteDestinations(openBrowser: openBrowser)
                 .homeEditDestinations()
                 .remoteLibraryDestinations()
@@ -342,6 +344,8 @@ private struct ExploreHomeRoot: View {
                             // still scrolling there, below its capsule (iOS 27 simulator).
                             .geometryGroup()
                             .frame(maxWidth: .infinity)
+                            // Clear of the last section's ground, whose foot its row's room ends at.
+                            .padding(.top, DSSpacing.xl)
                             .accessibilityLabel(localized(isEditing ? "完成" : "编辑首页"))
                             .accessibilityIdentifier(isEditing ? "home.editDone" : "home.edit")
                     }
@@ -434,7 +438,8 @@ private struct ExploreHomeRoot: View {
         .onAppear {
             model.reloadLocal()
         }
-        .background(PageBackgroundView(scope: .explore).ignoresSafeArea())
+        // A white page, which each section shades to its foot (`HomeSectionShade`).
+        .background(PageBackgroundView(scope: .explore, base: DSColor.background).ignoresSafeArea())
         .pageBackgroundToolbar(for: .explore)
         // While the home is edited the bar stays, for its 完成 (maintainer, 2026-10-17).
         .rootTabTitle(localized("探索"), onScroll: isEditing ? .fadesTitle : .minimizesBar, overColor: barIsOverColor)
@@ -708,7 +713,7 @@ struct HomeRowHost: View {
     private var content: HomeRowContent? {
         guard case .loaded(let entries) = group.state else { return nil }
         return SourcePerfTrace.span("home.rowContent", "entries=\(entries.count)", thresholdMs: 16) {
-            HomeRowContent(entries: entries, store: store, withLists: group.section.layout.style == .chart)
+            HomeRowContent(entries: entries, store: store, withLists: group.section.layout.style.drawsListBooks)
         }
     }
 
@@ -781,6 +786,8 @@ struct LibraryListing: Identifiable, Hashable {
     let key: SourceInstanceKey
     let name: String
     let systemImage: String
+    /// A module's, whose own `icon` (format 3.0.2) its row draws in place of `systemImage`.
+    var module: RuleModule? = nil
 
     var id: SourceInstanceKey { key }
 

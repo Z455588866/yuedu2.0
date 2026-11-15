@@ -39,11 +39,11 @@ struct ProviderManifestTests {
         let sources = BookSourceStore(directory: folder.appendingPathComponent("sources"))
         var explore = BookSource()
         explore.bookSourceUrl = "https://explore.example"
-        explore.bookSourceName = "發現源"
-        explore.exploreUrl = "熱門::/hot"
+        explore.bookSourceName = "发现源"
+        explore.exploreUrl = "热门::/hot"
         var searchOnly = BookSource()
         searchOnly.bookSourceUrl = "https://search.example"
-        searchOnly.bookSourceName = "搜尋源"
+        searchOnly.bookSourceName = "搜寻源"
         sources.replaceSourcesFromSync([explore, searchOnly])
         // The bundled official modules and nothing imported, as on a fresh install.
         let modules = RuleModuleLibrary(store: RuleModuleStore(directory: folder.appendingPathComponent("modules")),
@@ -62,7 +62,7 @@ struct ProviderManifestTests {
 
     // MARK: - The registry's lists, as they are
 
-    @Test("browsable providers: the shelf, connections in their order, then Gutenberg and 青空文庫; the region hides the last two")
+    @Test("browsable providers: the shelf, connections in their order, then Gutenberg and 青空文库; the region hides the last two")
     func browsableOrder() async throws {
         let f = try await makeFixture()
         defer { try? FileManager.default.removeItem(at: f.folder) }
@@ -82,7 +82,7 @@ struct ProviderManifestTests {
         #expect(f.registry.opdsProvider(catalogID: PublicLibraryID.gutenberg.rawValue) != nil)
     }
 
-    @Test("home providers: the shelf, 訂閱, connections, Gutenberg, 青空文庫, the modules, AI 推薦, then the explore sources; the region hides the public libraries and なろう")
+    @Test("home providers: the shelf, 订阅, connections, Gutenberg, 青空文库, the modules, AI 推荐, then the explore sources; the region hides the public libraries and なろう")
     func homeOrder() async throws {
         let f = try await makeFixture()
         defer { try? FileManager.default.removeItem(at: f.folder) }
@@ -105,6 +105,7 @@ struct ProviderManifestTests {
             ModuleProvider.instanceKey(moduleID: "openlibrary"),
             ModuleProvider.instanceKey(moduleID: "narou"),
             ModuleProvider.instanceKey(moduleID: "trends"),
+            ModuleProvider.instanceKey(moduleID: "zlibrary"),
             AIRecommendationProvider.instanceKey,
             SourceInstanceKey(type: .bookSource, id: "https://explore.example"),
         ], "a source with no explore rule puts nothing on the home")
@@ -115,7 +116,8 @@ struct ProviderManifestTests {
                                                firstPages: firstPages(f.folder))
         #expect(!inChina.contains { [.gutenberg, .aozora].contains($0.instance.type) })
         #expect(!inChina.contains { $0.instance == ModuleProvider.instanceKey(moduleID: "narou") })
-        #expect(inChina.count == providers.count - 3)
+        #expect(!inChina.contains { $0.instance == ModuleProvider.instanceKey(moduleID: "zlibrary") })
+        #expect(inChina.count == providers.count - 4)
     }
 
     // MARK: - Manifests

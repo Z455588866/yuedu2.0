@@ -87,7 +87,7 @@ struct HomeListCardsTests {
             if case .module = $0 { return true }
             return $0 == .latest
         }
-        provider.names = [hot: "熱門", new: "新書", empty: "空", broken: "壞"]
+        provider.names = [hot: "热门", new: "新书", empty: "空", broken: "坏"]
         return provider
     }
 
@@ -105,16 +105,16 @@ struct HomeListCardsTests {
         #expect(HomeLayoutStyle.choices(for: .lists([HomeListCard(binding: hot)])) == lists)
     }
 
-    @Test("a section's cards: none in a layout of books; its list as one card; a 來源配置's categories a card each, up to eight")
+    @Test("a section's cards: none in a layout of books; its list as one card; a 来源配置's categories a card each, up to eight")
     func listCards() {
         #expect(HomeSection(layout: .row, binding: hot).listCards.isEmpty)
         #expect(HomeSection(layout: .collageCards, binding: hot, parameters: ["sort": "new"]).listCards
                 == [HomeListCard(binding: hot, parameters: ["sort": "new"])])
-        // A feed cannot name itself: its card keeps the name 選擇內容來源 gave the section.
+        // A feed cannot name itself: its card keeps the name 选择内容来源 gave the section.
         let feed = HomeSectionBinding.opdsFeed(connectionID: "c", url: "/new")
-        #expect(HomeSection(layout: .collection, title: "新書", binding: feed).listCards == [HomeListCard(binding: feed, title: "新書")])
+        #expect(HomeSection(layout: .collection, title: "新书", binding: feed).listCards == [HomeListCard(binding: feed, title: "新书")])
 
-        let references = (1...10).map { category("分類\($0)") }
+        let references = (1...10).map { category("分类\($0)") }
         let cards = HomeSection(layout: .categoryCards, binding: .sourceCategories(references), parameters: ["f": "1"]).listCards
         #expect(cards.count == HomeSection.listCardLimit)
         #expect(cards.first == HomeListCard(binding: .sourceCategories([references[0]]), parameters: ["f": "1"]))
@@ -128,7 +128,7 @@ struct HomeListCardsTests {
         let one = section.settingCards([HomeListCard(binding: hot, parameters: ["sort": "hot"])])
         #expect(one.binding == hot && one.parameters == ["sort": "hot"])
 
-        let filters = HomeSection.filterParameters(["類型": "男頻"], sourceURL: "https://cards.test")
+        let filters = HomeSection.filterParameters(["类型": "男频"], sourceURL: "https://cards.test")
         let sameSource = section.settingCards([category("玄幻"), category("都市")].map {
             HomeListCard(binding: .sourceCategories([$0]), parameters: filters)
         })
@@ -184,16 +184,16 @@ struct HomeListCardsTests {
 
     // MARK: The form
 
-    @Test("加入清單 adds each list once, up to eight; the last card stays; a card's own values and order")
+    @Test("加入清单 adds each list once, up to eight; the last card stays; a card's own values and order")
     func editor() {
         let store = HomePageStore(fileURL: scratch().appendingPathComponent("explore_home.json"))
         let editor = HomeSectionEditor(newSectionIn: store, layout: .collageCards,
                                        preview: HomeModel(providers: { [] }, waitForSources: {}))
-        editor.addCards([.picked(hot, name: "熱門")])
+        editor.addCards([.picked(hot, name: "热门")])
         #expect(editor.draft.binding == hot, "one list is written as that list")
         #expect(editor.draft.layout == .collageCards)
 
-        editor.addCards([.picked(hot, name: "熱門"), .picked(.gutenbergShelf(id: "popular"), name: "熱門")])
+        editor.addCards([.picked(hot, name: "热门"), .picked(.gutenbergShelf(id: "popular"), name: "热门")])
         #expect(editor.listCards.map(\.binding) == [hot, .gutenbergShelf(id: "popular")])
 
         editor.setCardParameter(at: 0, "sort", to: "new")
@@ -208,16 +208,16 @@ struct HomeListCardsTests {
         for _ in 0..<HomeSection.listCardLimit { editor.removeCard(at: 0) }
         #expect(editor.listCards.count == 1, "the last card stays")
 
-        // A feed picked alone titles the section, as 選擇內容來源 does; with more cards, the source does.
+        // A feed picked alone titles the section, as 选择内容来源 does; with more cards, the source does.
         let feed = HomeSectionBinding.opdsFeed(connectionID: "c", url: "/new")
-        editor.replaceCard(at: 0, with: .picked(feed, name: "新書"))
-        #expect(editor.draft.title == "新書")
-        editor.addCards([.picked(hot, name: "熱門")])
+        editor.replaceCard(at: 0, with: .picked(feed, name: "新书"))
+        #expect(editor.draft.title == "新书")
+        editor.addCards([.picked(hot, name: "热门")])
         #expect(editor.draft.title.isEmpty)
-        #expect(editor.listCards.first == HomeListCard(binding: feed, title: "新書"))
+        #expect(editor.listCards.first == HomeListCard(binding: feed, title: "新书"))
     }
 
-    @Test("what is lists alone, chosen in a layout of books, turns the section to 專題集合")
+    @Test("what is lists alone, chosen in a layout of books, turns the section to 专题集合")
     func chooseLists() {
         let store = HomePageStore(fileURL: scratch().appendingPathComponent("explore_home.json"))
         let editor = HomeSectionEditor(newSectionIn: store, layout: .row, preview: HomeModel(providers: { [] }, waitForSources: {}))
@@ -261,13 +261,13 @@ struct HomeListCardsTests {
         await until(home) { $0.allSatisfy(isSettled) }
         let group = home.groups(in: nil).first
         let cards = collections(group?.state ?? .loading) ?? []
-        #expect(cards.map(\.title) == ["熱門", "m", "新書"], "the empty list, the failed one and the failing library are left out")
+        #expect(cards.map(\.title) == ["热门", "m", "新书"], "the empty list, the failed one and the failing library are left out")
         #expect(cards.first?.books.map(\.title) == ["甲", "乙"])
         #expect(cards.first?.sourceName == "m")
         #expect(module.loads.count == 5)
         #expect(Set(module.loads.map(\.binding)) == [hot, empty, .latest, broken, new])
         #expect(module.loads.allSatisfy { $0.id == section.id && $0.layout == .collageCards })
-        #expect(group?.title == localized("清單"), "cards from several sources")
+        #expect(group?.title == localized("热门精选"), "collages are named as the store names them, whatever their sources")
     }
 
     @Test("the section fails only when every card failed")
@@ -284,7 +284,7 @@ struct HomeListCardsTests {
         }
     }
 
-    @Test("a section of one module's lists is titled by the module; a layout change reloads, a layout of lists to another does not")
+    @Test("a section of one module's lists is named by its layout, never by the module; a layout change reloads, a layout of lists to another does not")
     func titleAndReload() async {
         let module = module()
         let home = HomeModel(providers: { [module] }, waitForSources: {})
@@ -292,11 +292,13 @@ struct HomeListCardsTests {
         await home.sync(with: HomePage(sections: [section]))
         for row in home.rows { home.load(row.id) }
         await until(home) { $0.allSatisfy(isSettled) }
-        #expect(home.groups(in: nil).first?.title == "m")
+        // The home does not print a module's name (maintainer, 2026-11-14); its header still opens the module.
+        #expect(home.groups(in: nil).first?.title == localized("热门精选"))
         #expect(ExplorePlace.listsPage(home.rows) == .explore(.module(id: "m")))
 
         section.layout = .bannerCards
         await home.sync(with: HomePage(sections: [section]))
+        #expect(home.groups(in: nil).first?.title == localized("探索更多"))
         #expect(home.rows.allSatisfy(isSettled), "another layout of lists draws the same cards")
         #expect(module.loads.count == 2)
 
@@ -306,13 +308,13 @@ struct HomeListCardsTests {
 
     // MARK: Opening
 
-    @Test("a card opens its list's page; a list with none, the books it drew; AI 推薦, its page")
+    @Test("a card opens its list's page; a list with none, the books it drew; AI 推荐, its page")
     func opening() {
         let source = SourceInstanceKey(type: .module, id: "m")
         func card(_ binding: HomeSectionBinding, entries: [CollectionEntry] = [], source: SourceInstanceKey) -> CollectionSummary {
             let opening = HomeListOpening(section: HomeSection(layout: .row, binding: binding), source: source,
-                                          sourceName: "熱門", title: "熱門", entries: entries)
-            return CollectionSummary(id: "card", title: "熱門", books: [], languages: [], opening: .list(opening))
+                                          sourceName: "热门", title: "热门", entries: entries)
+            return CollectionSummary(id: "card", title: "热门", books: [], languages: [], opening: .list(opening))
         }
         guard case .explore(.moduleList(let route)) = ExplorePlace.page(of: card(hot, source: source), aozoraIndex: nil) else {
             Issue.record("expected the module list's page"); return
@@ -325,8 +327,8 @@ struct HomeListCardsTests {
         #expect(ExplorePlace.page(of: card(.aiRecommendations, source: AIRecommendationProvider.instanceKey),
                                   aozoraIndex: nil) == .explore(.aiRecommendations))
         #expect(ExplorePlace.page(of: card(.continueReading, entries: [book("甲")], source: .localLibrary), aozoraIndex: nil)
-                == .list(HomeListRoute(title: "熱門", binding: .continueReading, entries: [book("甲")])))
-        #expect(card(.continueReading, source: .localLibrary).homeIdentifier == "home.collection.list.熱門")
+                == .list(HomeListRoute(title: "热门", binding: .continueReading, entries: [book("甲")])))
+        #expect(card(.continueReading, source: .localLibrary).homeIdentifier == "home.collection.list.热门")
     }
 
     @Test("the header of cards from several sources opens nothing")
@@ -345,8 +347,8 @@ struct HomeListCardsTests {
     @Test("a module list's card names the options its own values pick")
     func moduleCardName() throws {
         let entry = try #require(RuleModulePreviewData.module().modules.first { $0.id == "new" })
-        #expect(entry.cardName("新書", parameters: ["sort": "hot"]) == "新書 · 熱門")
-        #expect(entry.cardName("新書", parameters: [:]) == "新書")
-        #expect(entry.cardName("新書", parameters: ["q": "龍"]) == "新書", "only a choice is named")
+        #expect(entry.cardName("新书", parameters: ["sort": "hot"]) == "新书 · 热门")
+        #expect(entry.cardName("新书", parameters: [:]) == "新书")
+        #expect(entry.cardName("新书", parameters: ["q": "龙"]) == "新书", "only a choice is named")
     }
 }

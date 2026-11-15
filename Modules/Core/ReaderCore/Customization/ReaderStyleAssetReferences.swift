@@ -2,7 +2,7 @@ import Foundation
 
 /// Every `ReaderStyleAssetStore` image a reader-style value points at.
 ///
-/// One place for the whole app: 章節標題樣式, 正則高亮 and 整套閱讀設定 all export
+/// One place for the whole app: 章节标题样式, 正则高亮 and 整套阅读设置 all export
 /// through `ReaderStylePackage`, which packs exactly the asset IDs it is handed.
 /// A caller that computes its own list and misses a reference ships a package
 /// that imports as a rule with a blank background — which is why this is a
@@ -71,5 +71,32 @@ enum ReaderStyleAssetReferences {
     private static func ordered(_ values: [UUID]) -> [UUID] {
         var seen: Set<UUID> = []
         return values.filter { seen.insert($0).inserted }
+    }
+}
+
+/// Every font a reading setup names by PostScript name — the reading face and the faces
+/// chosen inside the chapter-title design, the highlight rules and the dialogue bubbles.
+/// 汇出阅读设置 packs the imported ones among these, so a shared setup reads in the same
+/// type on the receiving device instead of falling back to the system face.
+enum ReaderStyleFontReferences {
+    static func postScriptNames(in settings: AppearanceThemeReadingSettings) -> [String] {
+        var values: [String?] = [settings.fontPostScript]
+        if let title = settings.chapterTitleStyle {
+            values += [title.numberFontPostScript, title.nameFontPostScript]
+            for layer in title.design?.layers ?? [] {
+                values += [
+                    layer.lightStyle.ruleStyle.text.fontPostScriptName,
+                    layer.darkStyle.ruleStyle.text.fontPostScriptName,
+                ]
+            }
+        }
+        for rule in settings.regexHighlights?.rules ?? [] {
+            values += [rule.lightStyle.text.fontPostScriptName, rule.darkStyle.text.fontPostScriptName]
+        }
+        if let bubble = settings.dialogueBubbleStyle {
+            values += ReaderDialogueBubbleSide.allCases.map { bubble.side($0).fontPostScriptName }
+        }
+        var seen: Set<String> = []
+        return values.compactMap { $0 }.filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 }

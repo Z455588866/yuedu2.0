@@ -16,6 +16,8 @@ struct TTSSettingsView: View {
     @Environment(\.presentationMode) private var presentationMode
     @StateObject private var testCoordinator = TTSCoordinator()
     @State private var sourceListURL = ""
+    /// 云端语音（Azure / OpenAI / MiMo）的金钥与音色设置入口。
+    @State private var showCloudVoiceSettings = false
     @State private var sourceImportMessage: String?
     @State private var isImportingSources = false
     @State private var showSourceFileImporter = false
@@ -82,6 +84,11 @@ struct TTSSettingsView: View {
             .onDisappear {
                 testCoordinator.stop()
             }
+            .sheet(isPresented: $showCloudVoiceSettings) {
+                NavigationStack {
+                    CloudVoiceServiceChooser()
+                }
+            }
     }
 
     private var settingsPage: some View {
@@ -114,6 +121,12 @@ struct TTSSettingsView: View {
                 }
             }
             ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button {
+                    showCloudVoiceSettings = true
+                } label: {
+                    Image(systemName: "cloud.fill")
+                }
+                .accessibilityLabel(localized("云端语音"))
                 importToolbarControl
                 .disabled(isImportingSources)
             }

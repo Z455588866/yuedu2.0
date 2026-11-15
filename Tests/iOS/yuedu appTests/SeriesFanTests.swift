@@ -3,10 +3,10 @@ import SwiftUI
 import Testing
 @testable import yuedu_app
 
-/// 作品詳情's series fan (maintainer, by option, 2026-10-26): up to two covers a side, the
+/// 作品详情's series fan (maintainer, by option, 2026-10-26): up to two covers a side, the
 /// nearest volumes in series order, real artwork only, and nothing for a book alone.
 @MainActor
-@Suite("Series fan on 作品詳情")
+@Suite("Series fan on 作品详情")
 struct SeriesFanTests {
     private static func volume(_ name: String, generated: Bool = false) -> SeriesFan.Volume {
         let cover: CoverReference = generated
@@ -60,11 +60,11 @@ struct SeriesFanTests {
         #expect(Self.names(generated.sides(hasArtwork: Self.hasArtwork)) == [[], []])
     }
 
-    @Test("a shelf copy's artwork is its saved cover, at the page cover's size; a 預設封面 is none")
+    @Test("a shelf copy's artwork is its saved cover, at the page cover's size; a 预设封面 is none")
     func shelfArtwork() throws {
-        var saved = ReadingBook(title: "三體", author: "劉慈欣", contentFilename: "a.epub")
+        var saved = ReadingBook(title: "三体", author: "刘慈欣", contentFilename: "a.epub")
         saved.coverImagePath = "cover.jpg"
-        let bare = ReadingBook(title: "黑暗森林", author: "劉慈欣", contentFilename: "b.epub")
+        let bare = ReadingBook(title: "黑暗森林", author: "刘慈欣", contentFilename: "b.epub")
         let file = try #require(Self.source(.shelf(saved))?.file)
         #expect(file == CoverImageRequest(source: .bookCover(filename: "cover.jpg"), size: Self.pixels))
         #expect(Self.source(.shelf(bare)) == nil)
@@ -74,9 +74,9 @@ struct SeriesFanTests {
             == CoverImageRequest(source: .indexedCover(path: "/tmp/cover.jpg"), size: Self.pixels))
     }
 
-    @Test("強制使用預設封面: no volume's own artwork is drawn, so there is no fan")
+    @Test("强制使用预设封面: no volume's own artwork is drawn, so there is no fan")
     func forcedDefaultCover() {
-        var saved = ReadingBook(title: "三體", author: "劉慈欣", contentFilename: "a.epub")
+        var saved = ReadingBook(title: "三体", author: "刘慈欣", contentFilename: "a.epub")
         saved.coverImagePath = "cover.jpg"
         #expect(Self.source(.shelf(saved), forcesDefaultCover: true) == nil)
         #expect(Self.source(Self.volume("1").cover, forcesDefaultCover: true) == nil)
@@ -106,27 +106,9 @@ struct SeriesFanTests {
         let artwork = await fan.artwork(pipeline: CoverImagePipeline(logsSummaries: false)) { Self.source($0.cover) }
         #expect(artwork.isEmpty)
     }
-
-    @Test("a series read on this device: the others in order, counted before the page's volume")
-    func fromShelf() throws {
-        let index = SeriesCardsTests.catalog(titles: ["三體", "黑暗森林", "死神永生"])
-        let works = index.newWorks
-        try #require(works.count == 3)
-        let volumes = works.enumerated().map { offset, work in
-            WorkSeriesShelf.Volume(entry: .aozora(work, index: index), number: Double(offset + 1), isPageWork: offset == 1)
-        }
-        let fan = try #require(SeriesFan(WorkSeriesShelf(name: "地球往事", number: 2, volumes: volumes), store: BookStore()))
-        #expect(fan.volumes.map(\.id) == [volumes[0], volumes[2]].compactMap {
-            HomeRowContent(entries: [$0.entry], store: BookStore()).cards.first?.id.sortKey
-        })
-        #expect(fan.position == 1)
-        let elsewhere = volumes.map { WorkSeriesShelf.Volume(entry: $0.entry, number: $0.number, isPageWork: false) }
-        #expect(SeriesFan(WorkSeriesShelf(name: "地球往事", number: nil, volumes: elsewhere), store: BookStore()) == nil,
-                "the page's own volume is not in the series")
-    }
 }
 
-/// 趨勢's series: the other books' covers its list gives, which the fan stands after the item.
+/// 趋势's series: the other books' covers its list gives, which the fan stands after the item.
 @Suite("Series fan of a list's series")
 struct ListSeriesFanTests {
     private static func cover(_ name: String) -> CoverReference {

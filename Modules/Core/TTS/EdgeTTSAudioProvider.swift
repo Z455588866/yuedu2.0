@@ -113,12 +113,35 @@ private final class EdgeTTSRequestDeadline: @unchecked Sendable {
 }
 
 enum TTSAudioProviderSelection {
+    /// The narrator's provider for the voice source the reader picked.
+    ///
+    /// Cloud voices read their key from the Keychain here, once per chapter, and the
+    /// per-segment providers copy that configuration rather than reading it again.
+    @MainActor
     static func make(template: String, isDirectChapterAudio: Bool) throws -> any TTSAudioProvider {
-        if !isDirectChapterAudio, EdgeTTSVoice.isEdgeSource(template) {
+        guard !isDirectChapterAudio else { return CustomHTTPProvider() }
+        if EdgeTTSVoice.isEdgeSource(template) {
             guard let voice = EdgeTTSVoice.voice(sourceIdentifier: template) else {
                 throw EdgeTTSError.invalidVoice
             }
             return EdgeTTSAudioProvider(voice: voice)
+        }
+        if let service = CloudTTSService.service(forSourceIdentifier: template) {
+            let voice = CloudTTSService.voiceID(inSourceIdentifier: template)
+            switch service {
+            case .azure:
+                let ref = AzureTTSVoiceRef(storage: voice)
+                return AzureTTSAudioProvider(
+                    configuration: try AzureTTSConfiguration.current(),
+                    voice: ref,
+                    supportedStyles: AzureTTSVoiceCatalog.shared.voice(named: ref.shortName).map { Set($0.styles) }
+                )
+            case .openAI, .mimo:
+                return OpenAICompatibleTTSAudioProvider(
+                    configuration: try OpenAICompatibleTTSConfiguration.current(service: service),
+                    voice: voice
+                )
+            }
         }
         return CustomHTTPProvider()
     }

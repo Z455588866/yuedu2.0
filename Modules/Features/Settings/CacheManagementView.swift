@@ -230,5 +230,10 @@ struct CacheManagementView: View {
 }
 
 #Preview {
-    CacheManagementView(service: CacheManagementService(coverOwner: BookStore()))
+    CacheManagementView(service: {
+        let store = BookStore()
+        let service = CacheManagementService(coverOwner: store)
+        CacheRetentionProvider.bind(store)
+        return service
+    }())
 }

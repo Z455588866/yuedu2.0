@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import yuedu_app
 
-/// Unified library 5d-3b: one section per group, 最新's sources in turn, and 範圍 as a filter
+/// Unified library 5d-3b: one section per group, 最新's sources in turn, and 范围 as a filter
 /// over the same home (Phase 5 plan, decision 19).
 @MainActor
 @Suite("Home section groups")
@@ -60,6 +60,75 @@ struct HomeSectionGroupTests {
         #expect(groups[1].title == localized("最新"))
     }
 
+    /// A module's ranking as the model makes its row: named by the list, its module's name beside.
+    private func ranking(_ section: HomeSection, card: HomeListCard, index: Int, name: String) -> HomeModel.Row {
+        let module = SourceInstanceKey(type: .module, id: "bangumi")
+        return HomeModel.Row(id: HomeModel.rowID(section: section.id, card: index, source: module), section: section,
+                             source: module, sourceName: name, policy: .parallel, state: .loading, card: card,
+                             cardIndex: index, providerName: "Bangumi 番组计划")
+    }
+
+    @Test("排行榜 of one ranking is named by the ranking, which its column does not head; of several, 热门排行榜; no module is named")
+    func chartOfOneRankingIsNamedByIt() throws {
+        // The defaults' 漫画排行: one list of a module, drawn as 排行榜.
+        let manga = HomeSectionBinding.module(moduleID: "bangumi", entryID: "manga-rank")
+        let one = HomeSection(layout: .rankedRow, binding: manga)
+        #expect(one.headerNamesItsList)
+        let lone = HomeScopeFilter.groups([ranking(one, card: try #require(one.listCards.first), index: 0, name: "漫画排行")], in: nil)
+        #expect(lone.map(\.title) == ["漫画排行"])
+
+        // Two rankings head their own columns: the section is 热门排行榜, as the store's, not their module's.
+        let cards = [HomeListCard(binding: manga), HomeListCard(binding: .module(moduleID: "bangumi", entryID: "novel-rank"))]
+        let two = HomeSection(layout: .rankedRow, binding: .lists(cards))
+        #expect(!two.headerNamesItsList)
+        func rows(of section: HomeSection) -> [HomeModel.Row] {
+            [ranking(section, card: cards[0], index: 0, name: "漫画排行"), ranking(section, card: cards[1], index: 1, name: "小说排行")]
+        }
+        #expect(HomeScopeFilter.groups(rows(of: two), in: nil).map(\.title) == [localized("热门排行榜")])
+        // 类型清单's rows name themselves too: 类型.
+        let genres = HomeSection(layout: .genreList, binding: .lists(cards))
+        #expect(HomeScopeFilter.groups(rows(of: genres), in: nil).map(\.title) == [localized("栏目：类型")])
+        // The reader's own title stays.
+        let titled = HomeSection(layout: .rankedRow, title: "我的排行", binding: .lists(cards))
+        #expect(HomeScopeFilter.groups(rows(of: titled), in: nil).map(\.title) == ["我的排行"])
+
+        // A card names its list in the other layouts of lists, and the section is named as the
+        // store names such a section, never by the module: 热门精选 over collages, 探索更多 over cards.
+        for (layout, name) in [(HomeSectionLayout.categoryCards, "探索更多"), (.bannerCards, "探索更多"), (.collection, "探索更多"),
+                               (.collageCards, "热门精选"), (.groupedShelves, "分类浏览")] {
+            let card = HomeSection(layout: layout, binding: manga)
+            #expect(!card.headerNamesItsList)
+            let carded = HomeScopeFilter.groups([ranking(card, card: try #require(card.listCards.first), index: 0, name: "漫画排行")],
+                                                in: nil)
+            #expect(carded.map(\.title) == [localized(name)], "\(layout.rawValue)")
+        }
+        // A 来源配置's categories stay under the 来源配置's own name, as before.
+        let reference = ExploreCategoryReference(sourceURL: "https://source.test", title: "玄幻", url: "https://source.test/xuanhuan")
+        let categories = HomeSection(layout: .categoryCards, binding: .sourceCategories([reference, reference]))
+        let source = SourceInstanceKey(type: .bookSource, id: "https://source.test")
+        let sourced = HomeModel.Row(id: "category", section: categories, source: source, sourceName: "某书源", policy: .parallel,
+                                    state: .loading, card: categories.listCards.first, cardIndex: 0, providerName: "某书源")
+        #expect(HomeScopeFilter.groups([sourced], in: nil).map(\.title) == ["某书源"])
+    }
+
+    @Test("色带书架's band is its section's own ground while it loads and once it has books; not failed, not AI 推荐's")
+    func colorBandIsItsOwnGround() {
+        func group(_ section: HomeSection, _ state: HomeModel.RowState) -> HomeSectionGroup {
+            HomeScopeFilter.groups([row(section, gutenberg, state)], in: nil)[0]
+        }
+        let band = HomeSection(layout: .colorBand, binding: .gutenbergShelf(id: "popular"))
+        #expect(group(band, .idle).drawsColorBand)
+        #expect(group(band, .loading).drawsColorBand)
+        #expect(group(band, .loaded([gutenbergItem(1)])).drawsColorBand)
+        #expect(!group(band, .failed("offline")).drawsColorBand)
+        // Nothing in it: no band, and the home gives it no room anyway.
+        #expect(!group(band, .loaded([])).drawsColorBand)
+        // Another layout shades as every section does.
+        #expect(!group(HomeSection(layout: .largeRow, binding: .gutenbergShelf(id: "popular")), .loading).drawsColorBand)
+        // AI 推荐's header stays on the page, over its covers' own band.
+        #expect(!group(HomeSection(layout: .colorBand, binding: .aiRecommendations), .loading).drawsColorBand)
+    }
+
     @Test("a section shows books as soon as one source has some; else it loads, fails, or takes no room")
     func mergedState() {
         let latest = HomeSection(layout: .row, binding: .latest)
@@ -75,15 +144,15 @@ struct HomeSectionGroupTests {
         #expect(HomeScopeFilter.groups([row(latest, gutenberg, .loaded([]))], in: nil)[0].isSettledEmpty)
     }
 
-    @Test("範圍 keeps the chosen source's rows and its copies in the shelf's rows; the rest goes")
+    @Test("范围 keeps the chosen source's rows and its copies in the shelf's rows; the rest goes")
     func scopeFilters() {
         let reading = HomeSection(layout: .readingCard, binding: .continueReading)
         let featured = HomeSection(layout: .row, binding: .gutenbergCollection(id: "chinese"))
         let latest = HomeSection(layout: .row, binding: .latest)
         let rows = [
             row(reading, .localLibrary, .loaded([
-                shelfCopy(of: gutenberg, title: "紅樓夢"), shelfCopy(of: aozora, title: "こころ"),
-                shelfCopy(of: nil, title: "本機檔案"), .location(CollectionLocation(id: "group/x", title: "分組")),
+                shelfCopy(of: gutenberg, title: "红楼梦"), shelfCopy(of: aozora, title: "こころ"),
+                shelfCopy(of: nil, title: "本机档案"), .location(CollectionLocation(id: "group/x", title: "分组")),
             ])),
             row(featured, gutenberg, .loaded([gutenbergItem(24264)])),
             row(latest, gutenberg, .loaded([gutenbergItem(1)])),
@@ -92,7 +161,7 @@ struct HomeSectionGroupTests {
 
         let all = HomeScopeFilter.groups(rows, in: nil)
         #expect(all.count == 3)
-        #expect(titles(all[0].state) == ["紅樓夢", "こころ", "本機檔案"])
+        #expect(titles(all[0].state) == ["红楼梦", "こころ", "本机档案"])
 
         let onlyAozora = HomeScopeFilter.groups(rows, in: aozora)
         #expect(onlyAozora.map(\.section.id) == [reading.id, latest.id])
@@ -102,7 +171,7 @@ struct HomeSectionGroupTests {
 
         let onlyGutenberg = HomeScopeFilter.groups(rows, in: gutenberg)
         #expect(onlyGutenberg.map(\.section.id) == [reading.id, featured.id, latest.id])
-        #expect(titles(onlyGutenberg[0].state) == ["紅樓夢"])
+        #expect(titles(onlyGutenberg[0].state) == ["红楼梦"])
 
         // A source no section draws from: the shelf's rows stay, with nothing of it in them.
         let other = HomeScopeFilter.groups(rows, in: SourceInstanceKey(type: .opds, id: "nas"))

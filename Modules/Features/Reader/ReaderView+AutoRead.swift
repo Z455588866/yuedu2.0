@@ -31,6 +31,9 @@ extension ReaderView {
         autoReader.onProgressChanged = { progress in
             reveal.setProgress?(progress)
         }
+        reveal.onPageTurnResolved = { [weak autoReader] in
+            autoReader?.pageTurnResolved()
+        }
     }
 
     /// Entering the mode: legado stops 朗读 first, keeps the screen awake, and

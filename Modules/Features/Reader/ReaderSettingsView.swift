@@ -1003,10 +1003,10 @@ struct ReaderSettingsView: View {
 
     // MARK: - 阅读设置备份
 
-    /// 汇出/汇入 the whole of 阅读设置 in one file: layout parameters, the chapter
-    /// title style, and the regex highlight rules. Each of those two styles keeps
-    /// its own single-purpose export on its own page; this is the "move my whole
-    /// reading setup to the new phone" file.
+    /// 汇出/汇入 the whole of 阅读设置 in one file — every row of this page except
+    /// 排版生效范围, plus the fonts, saved backgrounds and custom bubble the setup wears
+    /// (`ReaderSettingsBundle`). 章节标题样式 and 正则高亮 keep their own single-purpose
+    /// exports on their pages; this is the "share my whole reading setup" file.
     private var readerSettingsBackupSection: some View {
         Section {
             if premiumVisibility.showsLayoutPresetImport {
@@ -1043,7 +1043,7 @@ struct ReaderSettingsView: View {
             Text(localized("阅读设置备份"))
                 .foregroundStyle(DSColor.textSecondary)
         } footer: {
-            Text(localized("包含排版、章节标题样式与正则高亮。汇入也接受 legado 的 readConfig.json。"))
+            Text(localized("ReaderSettings.Backup.Footer"))
                 .dsSectionFooter()
         }
         .interfaceSectionSurface()

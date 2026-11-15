@@ -180,16 +180,8 @@ struct HomeRowView: View {
         .task { load() }
     }
 
-    /// The 顶部轮播图, and 色带书架, draw their band while their covers load and once they have;
-    /// one that failed, or that holds no books (订阅的最新文章's articles), is drawn without it.
-    private var drawsBand: Bool {
-        guard isCarousel || group.section.layout.style == .colorBand else { return false }
-        switch group.state {
-        case .idle, .loading: return true
-        case .failed: return false
-        case .loaded: return !(content?.cards.isEmpty ?? true)
-        }
-    }
+    /// 色带书架's band (`HomeSectionGroup.drawsColorBand`, which the home's ground reads too).
+    private var drawsBand: Bool { group.drawsColorBand }
 
     // MARK: Header
 

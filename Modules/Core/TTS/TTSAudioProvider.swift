@@ -534,15 +534,31 @@ final class CustomHTTPProvider: TTSAudioProvider {
     /// class used to do — meant every segment came back in the same voice no matter what the
     /// cast said.
     private let overrideSource: ImportedTTSSource?
+    /// The line's emotion, for sources whose template asks for it: `{{emotion}}` gets the
+    /// emotion's name (`angry`), `{{instruct}}` a sentence of direction for servers that
+    /// follow instructions. A JS rule reads the same two values as `speakEmotion` and
+    /// `speakInstruct`.
+    private let delivery: TTSDelivery?
 
-    init(source: ImportedTTSSource? = nil) {
+    init(source: ImportedTTSSource? = nil, delivery: TTSDelivery? = nil) {
         self.overrideSource = source
+        self.delivery = delivery
     }
+
+    /// Whether a template uses the per-line emotion at all — only then is it worth asking
+    /// the AI for a direction per line.
+    static func templateTakesDelivery(_ template: String) -> Bool {
+        template.contains("instruct") || template.contains("{{emotion}}") || template.contains("speakEmotion")
+            || template.contains("speakInstruct")
+    }
+
+    private var emotionValue: String { delivery?.emotion.rawValue ?? TTSEmotion.neutral.rawValue }
+    private var instructValue: String { CloudTTSInstructions.text(for: delivery) }
 
     var displayName: String { overrideSource?.name ?? "网路语音" }
 
-    static func buildURL(template: String, text: String, title: String, rate: Float) -> URL? {
-        let provider = CustomHTTPProvider()
+    static func buildURL(template: String, text: String, title: String, rate: Float, delivery: TTSDelivery? = nil) -> URL? {
+        let provider = CustomHTTPProvider(delivery: delivery)
         return provider.buildLegacyURL(template: template, text: text, title: title, rate: rate)
     }
 
@@ -1033,6 +1049,11 @@ final class CustomHTTPProvider: TTSAudioProvider {
 
         resolved = replaceTemplate("speakText", in: resolved, with: speakText)
         resolved = replaceTemplate("speakSpeed", in: resolved, with: "\(speed)")
+        let instruct = instructValue.replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: "\\", with: "")
+        resolved = replaceTemplate("emotion", in: resolved, with: emotionValue)
+        resolved = replaceTemplate("speakEmotion", in: resolved, with: emotionValue)
+        resolved = replaceTemplate("instruct", in: resolved, with: instruct)
+        resolved = replaceTemplate("speakInstruct", in: resolved, with: instruct)
         resolved = replaceTemplate("text", in: resolved, with: encodedText)
         resolved = replaceTemplate("title", in: resolved, with: encodedTitle)
         return resolved

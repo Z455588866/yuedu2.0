@@ -2,9 +2,9 @@ import Foundation
 import Testing
 @testable import yuedu_app
 
-/// Decisions 30 and 37: 專題集合, one card per list. Gutenberg's bundled lists are one section
-/// of cards (精選書單), and a new install's home has that section in place of a row per list.
-@Suite("專題集合 layout and 精選書單")
+/// Decisions 30 and 37: 专题集合, one card per list. Gutenberg's bundled lists are one section
+/// of cards (精选书单), and a new install's home has that section in place of a row per list.
+@Suite("专题集合 layout and 精选书单")
 @MainActor
 struct CollectionLayoutTests {
     private func lists() async throws -> [CollectionSummary] {
@@ -52,22 +52,22 @@ struct CollectionLayoutTests {
                 return nil
             }
         }
-        // 小說與文學 holds 吶喊.
+        // 小说与文学 holds 呐喊.
         #expect(Array(ids(ReadingLanguagePreferences(language: "zh-Hant")).prefix(3)) == ["chinese", "fiction", "thought"])
         #expect(ids(ReadingLanguagePreferences(language: "en")) == ["fiction", "children", "chinese", "thought"])
         #expect(ids(ReadingLanguagePreferences(language: "ja")) == PublicLibraryCollection.all.map(\.id))
     }
 
-    @Test("A new install's home: one 精選書單 section in place of a row per list; none in China")
+    @Test("A new install's home: one 精选书单 section in place of a row per list; none in China")
     func defaults() {
         for mode in [ExploreMode.publicLibraries, .bookSources] {
             let page = HomePageDefaults.page(mode: mode, publicLibrariesAvailable: true, languages: [])
             let lists = page.sections.filter { $0.binding == .gutenbergLists }
             #expect(lists.count == 1)
-            // 分類卡片 since 2026-10-25, after Apple Books' More to Explore.
-            #expect(lists.first?.layout == .categoryCards)
+            // 大图卡片 since 2026-11-14, as Apple Books' store draws its 探索更多 (分类卡片 from 2026-10-25).
+            #expect(lists.first?.layout == .bannerCards)
             #expect(!page.sections.contains { if case .gutenbergCollection = $0.binding { true } else { false } })
-            #expect(lists.first?.displayTitle(sourceName: "") == localized("精選書單"))
+            #expect(lists.first?.displayTitle(sourceName: "") == localized("精选书单"))
         }
         let china = HomePageDefaults.page(mode: .bookSources, publicLibrariesAvailable: false, languages: [])
         #expect(!china.sections.contains { $0.binding == .gutenbergLists })
@@ -90,13 +90,13 @@ struct CollectionLayoutTests {
 
     @Test("A list section offers the layouts of lists alone; a section of books every layout, its list a card")
     func choices() {
-        #expect(HomeLayoutStyle.choices(for: .gutenbergLists) == [.collection, .categoryCards, .collageCards, .bannerCards, .chart])
+        #expect(HomeLayoutStyle.choices(for: .gutenbergLists) == [.collection, .categoryCards, .collageCards, .bannerCards, .chart, .groupedShelves, .genreList])
         for binding: HomeSectionBinding in [.latest, .continueReading, .gutenbergCollection(id: "chinese"), .aozoraNew] {
             #expect(HomeLayoutStyle.choices(for: binding) == HomeLayoutStyle.allCases)
         }
     }
 
-    @Test("分類卡片 and 拼貼卡片 are written as their own values; a section of books given one draws a row")
+    @Test("分类卡片 and 拼贴卡片 are written as their own values; a section of books given one draws a row")
     func listLayoutValues() {
         for (layout, style) in [(HomeSectionLayout.categoryCards, HomeLayoutStyle.categoryCards), (.collageCards, .collageCards)] {
             #expect(layout.isKnown)
@@ -106,7 +106,7 @@ struct CollectionLayoutTests {
         }
     }
 
-    @Test("隱藏已讀 leaves the lists alone: a list is not a book")
+    @Test("隐藏已读 leaves the lists alone: a list is not a book")
     func readFilter() {
         let filter = HomeReadFilter(hides: true, isRead: { _ in true })
         #expect(!filter.hides(in: .gutenbergLists))

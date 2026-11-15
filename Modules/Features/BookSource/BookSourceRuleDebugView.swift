@@ -13,6 +13,7 @@ struct BookSourceRuleDebugView: View {
     @State private var keyword: String = ""
     @State private var inputURL: String = ""
     @State private var page: Int = 1
+    @State private var showCopiedAlert = false
     @Environment(\.dismiss) private var dismiss
     @Bindable private var gs = GlobalSettings.shared
 
@@ -135,6 +136,22 @@ struct BookSourceRuleDebugView: View {
                     }
                     .accessibilityLabel(localized("关闭"))
                 }
+                // 整场调试的日志，一次复制成纯文本，好贴到别处看（单条用行内的长按菜单）。
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        UIPasteboard.general.string = DebugLogEntry.plainText(of: engine.logs)
+                        showCopiedAlert = true
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .accessibilityLabel(localized("复制全部日志"))
+                    .disabled(engine.logs.isEmpty)
+                }
+            }
+            .alert(localized("已复制"), isPresented: $showCopiedAlert) {
+                Button(localized("好"), role: .cancel) {}
+            } message: {
+                Text(localized("调试记录已复制到剪贴板。"))
             }
         }
     }
@@ -195,6 +212,7 @@ private struct DebugLogRow: View {
                 Text(detail)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(DSColor.textSecondary)
+                    .textSelection(.enabled)
                     .padding(.leading, 28)
                     .padding(.vertical, 4)
                     .padding(.horizontal, 8)
@@ -212,6 +230,14 @@ private struct DebugLogRow: View {
             }
         }
         .padding(.vertical, 2)
+        // 复制的是整条：summary 超出两行的部分、以及折叠状态下的 detail 都带上。
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = entry.plainText
+            } label: {
+                Label(localized("复制"), systemImage: "doc.on.doc")
+            }
+        }
     }
 
     private var icon: String {

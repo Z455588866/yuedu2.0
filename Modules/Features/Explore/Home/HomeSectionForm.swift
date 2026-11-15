@@ -813,37 +813,9 @@ private struct HomeModuleParameters: View {
 
     var body: some View {
         Section {
-            ForEach(entry.editableParams, id: \.name) { param in
-                let title = param.title ?? param.name
-                let value = param.currentValue(in: values, language: aggregation.readingLanguages.language)
-                switch param.kind {
-                case .enumeration:
-                    let follows = param.followsLanguage == true
-                    let selection = follows && values[param.name] == nil ? Self.followsLanguageTag : value
-                    Picker(title, selection: Binding(get: { selection }, set: { picked in
-                        set(param.name, picked == Self.followsLanguageTag ? nil : picked)
-                    })) {
-                        if follows {
-                            Text(localized("跟随中继资料语言偏好推荐")).tag(Self.followsLanguageTag)
-                        }
-                        ForEach(param.enumOptions ?? [], id: \.value) { option in
-                            Text(option.title).tag(option.value)
-                        }
-                    }
-                    .accessibilityIdentifier("homeSection.parameter.\(param.name)")
-                case .count:
-                    let count = Int(value) ?? 1
-                    Stepper(value: Binding(get: { count }, set: { set(param.name, String($0)) }),
-                            in: 1...max(100, count)) {
-                        LabeledContent(title, value: String(count))
-                    }
-                    .accessibilityValue(String(count))
-                    .accessibilityIdentifier("homeSection.parameter.\(param.name)")
-                default:
-                    HomeModuleTextParameter(title: title, committed: value) { set(param.name, $0) }
-                        .accessibilityIdentifier("homeSection.parameter.\(param.name)")
-                }
-            }
+            RuleModuleParameterRows(params: entry.shownParams(in: values, language: aggregation.readingLanguages.language),
+                                    values: values, identifier: "homeSection.parameter", set: set)
+
         } header: {
             Text(localized("筛选"))
         }

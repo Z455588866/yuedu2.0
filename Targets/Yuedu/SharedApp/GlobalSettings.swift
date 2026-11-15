@@ -632,6 +632,9 @@ class GlobalSettings {
     private static let ttsSystemVoiceIdentifiersKey = "yd_tts_system_voice_ids"
     private static let ttsMultiRoleEnabledKey = "yd_tts_multi_role_enabled"
     private static let ttsRoleVoicesKey = "yd_tts_role_voices"
+    private static let ttsAIDialogueEnabledKey = "yd_tts_ai_dialogue_enabled"
+    private static let ttsAutoCastEnabledKey = "yd_tts_auto_cast_enabled"
+    private static let ttsEmotionEnabledKey = "yd_tts_emotion_enabled"
     private static let readerTextColorOverridesKey = "yd_reader_text_color_overrides"
     static let readerCustomBackgroundsKey = "yd_reader_custom_backgrounds"
     nonisolated static let readerCustomBackgroundIDKey = "yd_reader_custom_background_id"
@@ -2016,6 +2019,70 @@ class GlobalSettings {
         didSet { UserDefaults.standard.set(ttsRoleVoices, forKey: Self.ttsRoleVoicesKey) }
     }
 
+    /// read. On by default once the reader has multi-role on and an AI service set up — it is
+    /// what makes the feature work at all for dialogue without a “某某说”.
+    var ttsAIDialogueEnabled: Bool {
+        didSet { UserDefaults.standard.set(ttsAIDialogueEnabled, forKey: Self.ttsAIDialogueEnabledKey) }
+    }
+    /// Characters nobody cast get a voice matched to their gender and age.
+    var ttsAutoCastEnabled: Bool {
+        didSet { UserDefaults.standard.set(ttsAutoCastEnabled, forKey: Self.ttsAutoCastEnabledKey) }
+    }
+    /// Lines are spoken with the emotion the AI marked.
+    var ttsEmotionEnabled: Bool {
+        didSet { UserDefaults.standard.set(ttsEmotionEnabled, forKey: Self.ttsEmotionEnabledKey) }
+    }
+
+    /// Azure AI Speech: the resource's region. The key lives in the Keychain.
+    var azureTtsRegion: String {
+        didSet { UserDefaults.standard.set(azureTtsRegion, forKey: "yd_tts_azure_region") }
+    }
+    /// `AzureTTSVoiceRef.storage` of the narrator voice Azure was last set to.
+    var azureTtsVoice: String {
+        didSet { UserDefaults.standard.set(azureTtsVoice, forKey: "yd_tts_azure_voice") }
+    }
+    var openAITtsBaseURL: String {
+        didSet { UserDefaults.standard.set(openAITtsBaseURL, forKey: "yd_tts_openai_base_url") }
+    }
+    var openAITtsModel: String {
+        didSet { UserDefaults.standard.set(openAITtsModel, forKey: "yd_tts_openai_model") }
+    }
+    var openAITtsVoice: String {
+        didSet { UserDefaults.standard.set(openAITtsVoice, forKey: "yd_tts_openai_voice") }
+    }
+    var mimoTtsBaseURL: String {
+        didSet { UserDefaults.standard.set(mimoTtsBaseURL, forKey: "yd_tts_mimo_base_url") }
+    }
+    var mimoTtsVoice: String {
+        didSet { UserDefaults.standard.set(mimoTtsVoice, forKey: "yd_tts_mimo_voice") }
+    }
+
+    /// The cloud service in use, if the narrator is one of them.
+    var activeCloudTTSService: CloudTTSService? {
+        guard !ttsUseSystemVoice else { return nil }
+        return CloudTTSService.service(forSourceIdentifier: httpTtsUrlTemplate)
+    }
+
+    /// The voice each cloud service was last set to, so switching back restores it.
+    func cloudTTSVoice(for service: CloudTTSService) -> String {
+        switch service {
+        case .azure: return azureTtsVoice
+        case .openAI: return openAITtsVoice
+        case .mimo: return mimoTtsVoice
+        }
+    }
+
+    func selectCloudTTSVoice(_ voice: String, service: CloudTTSService) {
+        switch service {
+        case .azure: azureTtsVoice = voice
+        case .openAI: openAITtsVoice = voice
+        case .mimo: mimoTtsVoice = voice
+        }
+        httpTtsUrlTemplate = service.sourceIdentifier(voice: voice)
+        httpTtsHeaders = [:]
+        ttsUseSystemVoice = false
+    }
+
     /// Whether the AI assistant is limited to what the reader has already read.
     ///
     /// On by default, off by choice. A reader who has just opened a book has almost no
@@ -2548,6 +2615,22 @@ class GlobalSettings {
         ttsRoleVoices =
             (UserDefaults.standard.dictionary(forKey: Self.ttsRoleVoicesKey)
                 as? [String: String]) ?? [:]
+        ttsAIDialogueEnabled =
+            (UserDefaults.standard.object(forKey: Self.ttsAIDialogueEnabledKey) as? Bool) ?? true
+        ttsAutoCastEnabled =
+            (UserDefaults.standard.object(forKey: Self.ttsAutoCastEnabledKey) as? Bool) ?? true
+        ttsEmotionEnabled =
+            (UserDefaults.standard.object(forKey: Self.ttsEmotionEnabledKey) as? Bool) ?? true
+        azureTtsRegion = UserDefaults.standard.string(forKey: "yd_tts_azure_region") ?? "eastasia"
+        azureTtsVoice = UserDefaults.standard.string(forKey: "yd_tts_azure_voice") ?? "zh-CN-XiaoxiaoNeural"
+        openAITtsBaseURL = UserDefaults.standard.string(forKey: "yd_tts_openai_base_url")
+            ?? OpenAICompatibleTTSConfiguration.defaultOpenAIBaseURL
+        openAITtsModel = UserDefaults.standard.string(forKey: "yd_tts_openai_model")
+            ?? OpenAICompatibleTTSConfiguration.defaultOpenAIModel
+        openAITtsVoice = UserDefaults.standard.string(forKey: "yd_tts_openai_voice") ?? OpenAITTSVoices.defaultVoice
+        mimoTtsBaseURL = UserDefaults.standard.string(forKey: "yd_tts_mimo_base_url")
+            ?? OpenAICompatibleTTSConfiguration.defaultMiMoBaseURL
+        mimoTtsVoice = UserDefaults.standard.string(forKey: "yd_tts_mimo_voice") ?? MiMoTTSVoices.defaultVoice
         aiSpoilerSafe = (UserDefaults.standard.object(forKey: "yd_ai_spoiler_safe") as? Bool) ?? true
         sourceDisclaimerAccepted = UserDefaults.standard.bool(forKey: "yd_source_disclaimer_accepted")
         bookSourceListGrouped =

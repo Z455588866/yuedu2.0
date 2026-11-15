@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Build 趨勢's lists from Wikipedia, Wikidata and Bangumi, once a day.
+"""Build 趋势's lists from Wikipedia, Wikidata and Bangumi, once a day.
 
 Plan: docs/superpowers/plans/2026-10-21-trends-module.md. No web-novel platform is ever asked
 (maintainer, 2026-10-21): the works come from Wikipedia's categories, their popularity from
-Wikipedia's pageviews, whether a web novel is finished from Bangumi (and 小説家になろう's
+Wikipedia's pageviews, whether a web novel is finished from Bangumi (and 小说家になろう's
 API), whether an English novel is from its Wikipedia infobox, and the classics from Wikidata.
 A series' books are one entry, under its first book (maintainer, 2026-10-22). Each list is
-written as <output>/<region>/<list>.json, for the official module 趨勢.
+written as <output>/<region>/<list>.json, for the official module 趋势.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -26,12 +26,15 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 USER_AGENT = 'Yuedu-trends/1 (+https://yuedureader.com/support)'
-ATTRIBUTION = '資料：維基百科、維基數據（CC BY-SA 4.0）、Bangumi'
+ATTRIBUTION = '资料：维基百科、维基数据（CC BY-SA 4.0）、Bangumi'
 LICENSE = 'https://creativecommons.org/licenses/by-sa/4.0/'
 SCHEMA_VERSION = 1
 LIST_LENGTH = 50
-# A series' entry carries its other books' covers for 作品詳情's fan, two a side (app, 2026-10-26).
+# A series' entry carries its other books' covers for 作品详情's fan, two a side (app, 2026-10-26).
 SERIES_COVERS = 4
+# A series' entry lists its books for the app's series page, which a card opens first
+# (maintainer, 2026-11-14): this many at most.
+SERIES_VOLUMES = 60
 # A list's works: Wikidata's classes for a written story. A page in a pool's categories whose
 # item is something else (most often the TV series adapted from it) is left out.
 WORK_CLASSES = {
@@ -46,32 +49,32 @@ WORK_CLASSES = {
     'Q136441690',  # Chinese web novel
     'Q137169253',  # Japanese web novel
 }
-# 經典名著's works. Wikidata types most classics as a literary work whose form (P7937) is a novel
-# (紅樓夢, Pride and Prejudice), so the class novel alone missed nearly all of them, while literary
-# work alone brings in 毛主席語錄, 永樂大典, SCP and treaties (measured 2026-10-21). A classic is a
+# 经典名著's works. Wikidata types most classics as a literary work whose form (P7937) is a novel
+# (红楼梦, Pride and Prejudice), so the class novel alone missed nearly all of them, while literary
+# work alone brings in 毛主席语录, 永乐大典, SCP and treaties (measured 2026-10-21). A classic is a
 # novel or novel series by class, a novel, novella, short story or collection by form, or a
-# monogatari or wuxia novel by genre (源氏物語, a 作り物語, and 射鵰英雄傳 have no form).
+# monogatari or wuxia novel by genre (源氏物语, a 作り物语, and 射雕英雄传 have no form).
 CLASSIC_CLASSES = ['Q8261', 'Q1667921']                     # novel, novel series
 CLASSIC_FORMS = ['Q8261', 'Q149537', 'Q49084', 'Q1279564']  # novel, novella, short story, short story collection
 CLASSIC_GENRES = ['Q1503147', 'Q11385322', 'Q9378888']      # monogatari, tsukuri monogatari, wuxia novel
-# A classic's language (P407) is often a stage or a written form of the language: 紅樓夢 is in
-# written vernacular Chinese, 西遊記 in written Chinese, 源氏物語 in Early Middle Japanese, The
+# A classic's language (P407) is often a stage or a written form of the language: 红楼梦 is in
+# written vernacular Chinese, 西游记 in written Chinese, 源氏物语 in Early Middle Japanese, The
 # Canterbury Tales in Middle English, Harry Potter in British English.
 CHINESE = ('Q7850', 'Q783605', 'Q3110592', 'Q37041', 'Q727694', 'Q9192')
 JAPANESE = ('Q5287', 'Q182695', 'Q1816184', 'Q1332057', 'Q5736700', 'Q5326692')
 ENGLISH = ('Q1860', 'Q7979', 'Q7976', 'Q36395', 'Q1472196')
 # Both scripts read the same Chinese label and convert it (`convert_variant`): the zh-tw label is
-# its own editor's choice and can be another name (羅本 for 三國演義's 羅貫中, measured 2026-10-21).
+# its own editor's choice and can be another name (罗本 for 三国演义's 罗贯中, measured 2026-10-21).
 CHINESE_LABELS = ('zh', 'zh-hant', 'zh-hans', 'zh-tw', 'zh-cn', 'zh-hk', 'zh-sg')
 REFRESH_POOL = timedelta(days=7)
 REFRESH_TEXT = timedelta(days=7)
-# 華語's and 日本's articles are each a whole series (346 of 日本's 381 works are a light novel
+# 华语's and 日本's articles are each a whole series (346 of 日本's 381 works are a light novel
 # series, and no work of either pool has a P179, measured 2026-10-27), so none folds: the fan's
 # volumes are the matched Bangumi subject's 单行本 (maintainer, 2026-10-27), read once a week.
 REFRESH_VOLUMES = timedelta(days=7)
 FIRST_DAYS = 366
 WINDOWS = {'today': 1, 'month': 30, 'year': 365}
-# 英語's 完結推薦 reads the infoboxes of the year's most viewed entries, enough of them to fill a
+# 英语's 完结推荐 reads the infoboxes of the year's most viewed entries, enough of them to fill a
 # list: about half are a book alone, finished; a series says so or not (measured 2026-10-22).
 INFOBOX_CANDIDATES = LIST_LENGTH * 4
 # Wikimedia's limit for a bot whose User-Agent names it: 200 requests a minute, one budget across
@@ -80,7 +83,7 @@ INFOBOX_CANDIDATES = LIST_LENGTH * 4
 # answered 429 after four minutes (2026-10-22). One request every 0.35 s is 171 a minute.
 WIKIMEDIA_INTERVAL = 0.35
 # Pageview requests in flight at once, together no faster than WIKIMEDIA_INTERVAL: one at a time,
-# each waits on its answer (0.81 s from the host), so 英語's 9 604 works took 2 h 10 min.
+# each waits on its answer (0.81 s from the host), so 英语's 9 604 works took 2 h 10 min.
 VIEW_WORKERS = 3
 # A request is asked again once (maintainer, 2026-10-22) when it went unanswered for 120 s (one in
 # ~13 000 pageview requests from this Mac on 2026-10-22), or was answered 429 or 503, which
@@ -94,7 +97,7 @@ MAX_RETRY_WAIT = 300
 @dataclass(frozen=True)
 class Pool:
     """The works one Wikipedia holds for a region: its categories, walked `depth` levels, what
-    tells which ended: Bangumi, the 小説家になろう pages its articles link (whose API says),
+    tells which ended: Bangumi, the 小说家になろう pages its articles link (whose API says),
     or the articles' infoboxes; and whether its articles' page images are book covers."""
     wiki: str
     categories: tuple
@@ -109,7 +112,7 @@ class Pool:
 
 @dataclass(frozen=True)
 class Region:
-    """A 地區 option: the pool it ranks, the script it is written in, Wikidata's label languages
+    """A 地区 option: the pool it ranks, the script it is written in, Wikidata's label languages
     in the order they are taken, and the languages its classics are written in."""
     pool: str
     variant: str = None
@@ -128,8 +131,8 @@ POOLS = {
     'zh': Pool('zh.wikipedia.org', ('Category:中华人民共和国网络小说',), 4),
     # ja.wikipedia keeps no non-free file, so no cover: its listed works' page images are title
     # logos, anime stills and photos (46 of 151, measured on the host 2026-10-22; はたらく魔王さま!
-    # is a Shibuya street, 吾輩は猫である a cat).
-    'ja': Pool('ja.wikipedia.org', ('Category:小説家になろうの小説', 'Category:カクヨムの小説'), 2, ('bangumi', 'narou'),
+    # is a Shibuya street, 吾辈は猫である a cat).
+    'ja': Pool('ja.wikipedia.org', ('Category:小说家になろうの小说', 'Category:カクヨムの小说'), 2, ('bangumi', 'narou'),
                article_covers=False),
     # Not Bangumi: English novels are not there, and 9 604 searches a day would take 2.7 hours.
     'en': Pool('en.wikipedia.org', english_categories(date.today()), 1, ('infobox',)),
@@ -263,7 +266,7 @@ def series_link(value):
 
 
 def infobox_finished(article, page):
-    """英語's 完結 (maintainer, 2026-10-22): a book outside any series is finished, and a book of
+    """英语's 完结 (maintainer, 2026-10-22): a book outside any series is finished, and a book of
     a series is when the series' infobox says it ended. True, False, or None when the infoboxes
     cannot tell (no infobox, a series named without a link, a series giving no dates).
     `page(title)` reads a linked article; a series' own article, or a character's linking the
@@ -310,15 +313,23 @@ def bangumi_cover(subject):
 
 
 def bangumi_volumes(related):
-    """A series subject's volumes' covers, from its related subjects: each 单行本 with a cover, in
-    the order Bangumi's editors keep them, the series' own (はたらく魔王さま!'s (0) and 0-II before
-    its (1); 11 of the 81 listed series are not in id order, measured 2026-10-27)."""
-    return [cover for item in related if item.get('relation') == '单行本' and (cover := bangumi_cover(item))]
+    """A series subject's volumes, from its related subjects: each 单行本 as its name, its Chinese
+    name and its cover (None without one), in the order Bangumi's editors keep them, the series'
+    own (はたらく魔王さま!'s (0) and 0-II before its (1); 11 of the 81 listed series are not in id
+    order, measured 2026-10-27). So a volume's place is not its number: its name says which it is."""
+    return [{'name': item.get('name') or '', 'name_cn': item.get('name_cn') or '', 'cover': bangumi_cover(item)}
+            for item in related if item.get('relation') == '单行本' and (item.get('name') or item.get('name_cn'))]
+
+
+def fanned_covers(volumes):
+    """The covers a whole series' entry fans behind its own: its volumes' after the first with
+    one, which the work's own cover stands for."""
+    return [volume['cover'] for volume in volumes if volume['cover']][1:]
 
 
 def narou_pick(title, codes, novels):
     """The なろう work an article is about, among the `codes` it links (`novels`: what the API
-    knows of them). One known code is the work; of several (Re:Monster links its 設定集 too),
+    knows of them). One known code is the work; of several (Re:Monster links its 设定集 too),
     the one whose title holds the article's. None when the API knows none, as for a work
     taken down (JKハル).
     """
@@ -334,7 +345,7 @@ def narou_pick(title, codes, novels):
 
 def same_author(ours, theirs):
     """Whether two sets of folded names share a person. A pen name is written longer or shorter
-    on one side (Wikidata 唐七, Bangumi 唐七公子; 平鳥コウ and 平鳥コウ (XPJbox), 2026-10-21), so
+    on one side (Wikidata 唐七, Bangumi 唐七公子; 平鸟コウ and 平鸟コウ (XPJbox), 2026-10-21), so
     one name containing the other is the same person; the titles already matched exactly."""
     return any(mine in other or other in mine for mine in ours for other in theirs)
 
@@ -374,7 +385,7 @@ def article_url(wiki, title, variant=None):
 
 def one_per_series(order, found):
     """`order` with a series kept once, at its best place: Harry Potter's seven volumes and the
-    series itself, 三體 and 地球往事, are one entry. A work's series is its P179, else itself."""
+    series itself, 三体 and 地球往事, are one entry. A work's series is its P179, else itself."""
     seen, kept = set(), []
     for qid in order:
         series = (claim_ids(found.get(qid, {}), 'P179') or [qid])[0]
@@ -392,7 +403,7 @@ def work_authors(entity):
 
 
 # A work's authors as its article's book infobox names them: ja's Infobox animanga/Novel as 著者
-# (its Manga box's 作者 adds the artist, as 片田舎のおっさん、剣聖になる's does), zh's and en's
+# (its Manga box's 作者 adds the artist, as 片田舎のおっさん、剣圣になる's does), zh's and en's
 # Infobox book as `author` or `作者`.
 AUTHOR_PARAMS = ('author', 'authors', '著者', '作者')
 _BOOK_BOX = re.compile(r'^(animanga/)?(book|novel)\b|\b(book|novel|literary) series\b')
@@ -407,8 +418,8 @@ def infobox_authors(wikitext):
 
 
 def plain_names(value):
-    """A value's names as text: `[[忘語|忘语]]` → 忘语, `{{nowrap|X}}` → X, one name to a line,
-    `<br />`, 、, comma or `and`; refs and a trailing note (`國王陛下（小說）`) left out."""
+    """A value's names as text: `[[忘语|忘语]]` → 忘语, `{{nowrap|X}}` → X, one name to a line,
+    `<br />`, 、, comma or `and`; refs and a trailing note (`国王陛下（小说）`) left out."""
     text = re.sub(r'<ref[^>]*/>|<ref[^>]*>.*?</ref>', '', value, flags=re.S | re.IGNORECASE)
     text = re.sub(r'\[\[(?:[^\]|]*\|)?([^\]|]*)\]\]', r'\1', text)
     while True:
@@ -435,7 +446,7 @@ def series_groups(works):
     with two or more books in the pool, their views summed with those of the series' own
     article when it is in the pool too, under its first book — the earliest published, as
     Mistborn: The Final Empire; a prequel comes out later, and Wikidata gives no volume number
-    for 6 of the 22 series on 英語's year list. A book alone in the pool keeps its own entry."""
+    for 6 of the 22 series on 英语's year list. A book alone in the pool keeps its own entry."""
     members = {}
     for title, work in works.items():
         members.setdefault(work.get('series') or work['qid'], []).append(title)
@@ -477,7 +488,7 @@ def shown_entries(totals, done):
 
 def ended_entries(entries, groups, works, finished, by_series):
     """Which `entries` (titles, a series' by its head) are finished. A book alone goes by its own
-    answer; a series by the series' own (`by_series`: 英語's infoboxes, whose series article says
+    answer; a series by the series' own (`by_series`: 英语's infoboxes, whose series article says
     whether it ended), else when every book of it has ended (Bangumi and なろう answer for books)."""
     done = set()
     for title in entries:
@@ -610,7 +621,7 @@ def page_items(client, wiki, titles, variants=False):
 
 def entities(client, qids, props='claims|labels|sitelinks', keep=None, site=None):
     """Wikidata items, 50 a request, holding only the claims in `keep` when given: a novel's
-    whole claims take ~38 KB in memory, 英語's 9 800 works ~370 MB (measured 2026-10-22), on a
+    whole claims take ~38 KB in memory, 英语's 9 800 works ~370 MB (measured 2026-10-22), on a
     host with 1.3 GB free. `site` (`enwiki`) keeps the one article link asked for."""
     found = {}
     qids = sorted(set(qids))
@@ -659,7 +670,7 @@ def page_images(client, wiki, titles):
     """`{title: url}`: each article's page image, which for a novel is its infobox's cover, 50 at
     a time. Non-free ones too: en and zh Wikipedia keep book covers as such. A cover stands
     taller than it is wide; a wider image is a photo, a still or a logo, and an SVG a logo or a
-    diagram (measured on the host 2026-10-22: 英語 117 of 120 page images stand, 華語 35 of 46,
+    diagram (measured on the host 2026-10-22: 英语 117 of 120 page images stand, 华语 35 of 46,
     the rest a café, a TV still, an open old book). The address is kept without Wikipedia's
     tracking query."""
     found = {}
@@ -703,7 +714,7 @@ def wikitext_literal(text):
 def convert_variant(client, wiki, texts, variant):
     """`{text: text in variant's script}`, by the wiki's own converter, the one that gives its
     titles and extracts: Wikidata's `zh` label is in whichever script its editor wrote
-    (墨香铜臭, 当年明月 on 華語（繁）, measured 2026-10-21)."""
+    (墨香铜臭, 当年明月 on 华语（繁）, measured 2026-10-21)."""
     texts = sorted({text for text in texts if text})
     converted = {}
     for start in range(0, len(texts), 100):
@@ -735,7 +746,7 @@ def sparql(client, query):
 
 
 def narou_codes(client, wiki, titles):
-    """`{title: [ncode, …]}`: the 小説家になろう works each article links, 20 articles a request."""
+    """`{title: [ncode, …]}`: the 小说家になろう works each article links, 20 articles a request."""
     found = {}
     for start in range(0, len(titles), 20):
         cont = {}
@@ -754,7 +765,7 @@ def narou_codes(client, wiki, titles):
 
 
 def narou_novels(client, codes):
-    """`{ncode: {'title': …, 'end': …}}` from 小説家になろう's API, 100 codes a request; `end` 0
+    """`{ncode: {'title': …, 'end': …}}` from 小说家になろう's API, 100 codes a request; `end` 0
     is a finished serial or a short story, 1 still running. A code the API leaves out has been
     taken down."""
     found = {}
@@ -848,7 +859,7 @@ class Store:
 
     def window_totals(self, project, spans):
         """`(latest day, {title: (views over each of spans, …)})`: each span the days that end on
-        the last day counted, summed here — 英語's year of daily views held in Python took 531 MB
+        the last day counted, summed here — 英语's year of daily views held in Python took 531 MB
         and 40 s (9 604 works, measured 2026-10-22), more than the host can spare."""
         row = self.db.execute('select max(day) from views where project = ?', (project,)).fetchone()
         if not row or not row[0]:
@@ -922,8 +933,8 @@ class Job:
 
     def covers(self, pool, articles):
         """`{qid: cover}` for `articles` (`{qid: article title or None}`): the work's own book
-        cover on Bangumi where it was matched there and has one (華語, 日本), else its article's
-        page image where the pool's are covers. A page image is asked once a run: 華語's two
+        cover on Bangumi where it was matched there and has one (华语, 日本), else its article's
+        page image where the pool's are covers. A page image is asked once a run: 华语's two
         scripts share it."""
         wiki = pool.wiki
         asked = [title for title in dict.fromkeys(articles.values())
@@ -957,7 +968,7 @@ class Job:
     def limited(self, works):
         """A local run's first `limit` stories. The store keeps the whole pool, so a later run
         without `--limit` on the same database sees all of it; stories, not pages, since most of
-        the 華語 tree's first pages are TV series."""
+        the 华语 tree's first pages are TV series."""
         return dict(list(works.items())[:self.limit]) if self.limit else works
 
     def refresh_views(self, pool, titles):
@@ -1005,27 +1016,29 @@ class Job:
             self.store.set_finished(qid, subject['id'] if subject else None, bool(subject and bangumi_ended(subject)), self.now,
                                     bangumi_cover(subject) if subject else None)
 
-    def volume_covers(self, qids):
-        """`{qid: [cover, …]}` for works that are a whole series and were matched on Bangumi: its
-        volumes' covers after the first, which the work's own cover stands for. Each subject's
-        volumes are asked once a week."""
-        covers, asked = {}, 0
+    def bangumi_series(self, qids):
+        """`{qid: [volume, …]}` for works that are a whole series and were matched on Bangumi: its
+        volumes (`bangumi_volumes`), where it has more than one. Each subject's volumes are asked
+        once a week; an answer kept from before their names were (covers alone, until 2026-11-14)
+        is asked again."""
+        series, asked = {}, 0
         for qid in qids:
             subject = (self.store.finished(qid) or (None,))[0]
             if not subject:
                 continue
             known = self.store.volumes(subject)
-            if not known or datetime.fromisoformat(known[1]) < datetime.now(timezone.utc) - REFRESH_VOLUMES:
+            if (not known or any(isinstance(volume, str) for volume in known[0])
+                    or datetime.fromisoformat(known[1]) < datetime.now(timezone.utc) - REFRESH_VOLUMES):
                 self.store.set_volumes(subject, bangumi_volumes(bangumi_related(self.client, subject)), self.now)
                 asked += 1
-            later = self.store.volumes(subject)[0][1:]
-            if later:
-                covers[qid] = later
-        self.say(f'volumes: {len(qids)} entries, {asked} subjects asked, {len(covers)} with other volumes')
-        return covers
+            volumes = self.store.volumes(subject)[0]
+            if len(volumes) > 1:
+                series[qid] = volumes
+        self.say(f'volumes: {len(qids)} entries, {asked} subjects asked, {len(series)} with other volumes')
+        return series
 
     def narou_finished(self, pool, works):
-        """`{qid: finished}` for the works whose article links their 小説家になろう page, asked
+        """`{qid: finished}` for the works whose article links their 小说家になろう page, asked
         every day (one request for the pool)."""
         codes = narou_codes(self.client, pool.wiki, list(works))
         novels = narou_novels(self.client, sorted({code for linked in codes.values() for code in linked}))
@@ -1064,9 +1077,9 @@ class Job:
         return {title: (self.store.intro(wiki, title, variant) or ('',))[0] for title in titles}
 
     def classics(self, region):
-        """經典名著's candidates: stories written in the region's language, by how many Wikipedias
-        have them. More than a list's worth: a series' volumes are folded afterwards. 華語（繁）
-        and 華語（簡） share one answer: the query is heavy (one 504 in two, measured 2026-10-21)."""
+        """经典名著's candidates: stories written in the region's language, by how many Wikipedias
+        have them. More than a list's worth: a series' volumes are folded afterwards. 华语（繁）
+        and 华语（简） share one answer: the query is heavy (one 504 in two, measured 2026-10-21)."""
         if region.classic_languages in self.asked_classics:
             return self.asked_classics[region.classic_languages]
 
@@ -1087,14 +1100,34 @@ class Job:
 def build_region(job, name, region, pool_works, details, done, totals, groups, series_names, volumes):
     """The region's lists: `{list: [work, …]}`, from each window's `totals`, where a series is
     one entry under its head (`groups`), and `done` the entries finished. A work that is a whole
-    series (`volumes`: `{qid: its other volumes' covers}`) fans them and names no series: its
-    title is the series'."""
+    series (`volumes`: `{qid: its volumes}`, `Job.bangumi_series`) fans them and names no series:
+    its title is the series'. Either kind of series lists its books (`volumes`) for the app's
+    series page: a series of the pool's books each as an entry of its own, which the app can
+    open; a whole series' as Bangumi names them, in the region's language and script."""
     pool = POOLS[region.pool]
     wiki = pool.wiki
     variant_key = region.variant
 
     def title_of(title, work):
         return work['variants'].get(variant_key) or title if variant_key else title
+
+    # A volume's name: Bangumi's Chinese one on a Chinese wiki's pool, where it has one, in the
+    # region's script as the wiki's own converter writes it; else as the volume is named.
+    def named(volume):
+        return volume['name_cn'] or volume['name'] if wiki.startswith('zh.') else volume['name'] or volume['name_cn']
+
+    names = {named(volume) for listed in volumes.values() for volume in listed}
+    shown_as = convert_variant(job.client, wiki, names, region.variant) if region.variant and names else {}
+
+    def book(title, authors, covers):
+        """A book of a series as an entry of its own, without the text the app reads on its page."""
+        work = pool_works[title]
+        listed = {'title': strip_disambiguation(title_of(title, work)),
+                  'author': details.get(work['qid'], {}).get('authors', {}).get(name, [])[:5] or authors,
+                  'url': article_url(wiki, title, region.variant), 'wikidata': work['qid']}
+        if work['qid'] in covers:
+            listed['cover'] = covers[work['qid']]
+        return listed
 
     def entry(title, work, intro, covers):
         detail = details.get(work['qid'], {})
@@ -1106,12 +1139,19 @@ def build_region(job, name, region, pool_works, details, done, totals, groups, s
         series = series_names.get(groups[title][0], {}).get(name) if title in groups else None
         if series:
             listed['series'] = series
-            others = [covers[pool_works[other]['qid']] for other in series_volumes(title, groups, pool_works)
-                      if pool_works[other]['qid'] in covers]
+            books = series_volumes(title, groups, pool_works)
+            others = [covers[pool_works[other]['qid']] for other in books if pool_works[other]['qid'] in covers]
             if others:
                 listed['seriesCovers'] = others[:SERIES_COVERS]
+            if books:
+                listed['volumes'] = [book(other, listed['author'], covers) for other in [title] + books][:SERIES_VOLUMES]
         elif work['qid'] in volumes:
-            listed['seriesCovers'] = volumes[work['qid']][:SERIES_COVERS]
+            fanned = fanned_covers(volumes[work['qid']])
+            if fanned:
+                listed['seriesCovers'] = fanned[:SERIES_COVERS]
+            listed['volumes'] = [{'title': shown_as.get(named(volume), named(volume)), 'author': listed['author'],
+                                  **({'cover': volume['cover']} if volume['cover'] else {})}
+                                 for volume in volumes[work['qid']]][:SERIES_VOLUMES]
         if work['qid'] in covers:
             listed['cover'] = covers[work['qid']]
         return listed
@@ -1144,7 +1184,7 @@ def in_scripts(job, wiki, names, regions):
 
 def author_names(job, found, regions, wiki, articles):
     """`{qid: {'authors': {region: [name, …]}}}`: a work's people from Wikidata (P170, P50).
-    For a work Wikidata names no one for (異世界のんびり農家, 新宋, 2026-10-22), its author
+    For a work Wikidata names no one for (异世界のんびり农家, 新宋, 2026-10-22), its author
     name strings (P2093), else the names its article's book infobox gives (`articles`: `{qid:
     title}` on `wiki`), so the card is not left without one; when Wikidata has the people, these
     are never read."""
@@ -1191,7 +1231,7 @@ def classic_names(article, variants, label):
 
 
 def build_classics(job, name, region):
-    """經典名著's works for a region: the title its Wikipedia gives (in its script), else a label."""
+    """经典名著's works for a region: the title its Wikipedia gives (in its script), else a label."""
     candidates = job.classics(region)
     found = entities(job.client, candidates, keep=('P179', 'P170', 'P50', 'P2093'))
     order = one_per_series(candidates, found)[:LIST_LENGTH]
@@ -1209,7 +1249,7 @@ def build_classics(job, name, region):
         if region.variant and any(labelled.values()) else {}
     if 'bangumi' in POOLS[region.pool].finished_by:
         # Asked of Bangumi too, for their covers: ja.wikipedia keeps none, and Bangumi has 39 of
-        # 日本's 50 classics and 9 more of 華語's (measured on the host, 2026-10-22).
+        # 日本's 50 classics and 9 more of 华语's (measured on the host, 2026-10-22).
         job.refresh_finished({qid: {'qid': qid} for qid in order if qid in found},
                              {qid: {'authors': [a for values in detail['authors'].values() for a in values]}
                               for qid, detail in details.items()},
@@ -1278,8 +1318,8 @@ def run(job, output, regions):
                         articles[key] = article
                 finished = job.infobox_finished(pool, articles)
             asks_bangumi = completes and 'bangumi' in pool.finished_by
-            # Authors of every work where Bangumi needs them to tell works apart (華語 42, 日本 381);
-            # of the listed ones alone for 英語, whose pool is 24 600.
+            # Authors of every work where Bangumi needs them to tell works apart (华语 42, 日本 381);
+            # of the listed ones alone for 英语, whose pool is 24 600.
             named = works if asks_bangumi else \
                 {title: works[title] for title in shown_entries(totals, ended_entries(totals['year'], groups, works,
                                                                                       finished, by_series))}
@@ -1303,8 +1343,8 @@ def run(job, output, regions):
             names_of = series_titles(job, {groups[title][0]: series_items[groups[title][0]]
                                            for title in shown
                                            if title in groups and groups[title][0] in series_items}, pool.wiki, asked)
-            # Where works were matched on Bangumi (華語, 日本), a work is a whole series.
-            volumes = job.volume_covers([works[title]['qid'] for title in shown if title not in groups]) \
+            # Where works were matched on Bangumi (华语, 日本), a work is a whole series.
+            volumes = job.bangumi_series([works[title]['qid'] for title in shown if title not in groups]) \
                 if asks_bangumi else {}
             for name in names:
                 for list_name, entries in build_region(job, name, REGIONS[name], works, details, done, totals,
