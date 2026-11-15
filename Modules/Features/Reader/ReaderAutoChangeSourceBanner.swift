@@ -1,10 +1,18 @@
 import SwiftUI
 
+/// Local counterpart of upstream `ReaderViewModel.AutoChangeSourceNotice`.
+/// The local reader has not wired this banner into its source-change flow yet,
+/// so the type lives here instead of touching `ReaderViewModel`.
+enum ReaderAutoChangeSourceNotice: Equatable {
+    case changing
+    case failed(id: UUID, message: String)
+}
+
 /// 自动换源的提示：搜寻中显示转圈，失败时显示原因一段时间后收起。
 ///
 /// 跟书签提示同一条顶端带状区，不挡手；VoiceOver 在出现时听到公告，不当焦点。
 struct ReaderAutoChangeSourceBanner: View {
-    let notice: ReaderViewModel.AutoChangeSourceNotice
+    let notice: ReaderAutoChangeSourceNotice
     /// The reader theme's scheme, not the system's (see `ReaderBookmarkToastView`).
     let colorScheme: ColorScheme
     let onExpire: () -> Void
