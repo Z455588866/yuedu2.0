@@ -3,23 +3,30 @@ import Foundation
 struct EdgeTTSVoice: Identifiable, Equatable, Sendable {
     let id: String
     let nameKey: String
+    /// What 多角色朗读's automatic casting matches a character against.
+    var gender: TTSVoiceGender = .unknown
+    var age: TTSVoiceAge = .unknown
 
     var displayName: String { localized(nameKey) }
     var sourceIdentifier: String { Self.sourcePrefix + id }
 
+    /// Voices that can read the same text interchangeably. Mandarin voices from
+    /// Taiwan and the mainland can share a cast; Cantonese or English cannot.
+    var languageGroup: String { TTSLanguageGroup.of(locale: id) }
+
     // An internal identifier, never an HTTP template or an imported/deletable source.
     static let sourcePrefix = "yuedu-edge-tts:"
     static let voices: [EdgeTTSVoice] = [
-        .init(id: "zh-TW-HsiaoChenNeural", nameKey: "晓臻・台湾华语・女声"),
-        .init(id: "zh-TW-HsiaoYuNeural", nameKey: "晓雨・台湾华语・女声"),
-        .init(id: "zh-TW-YunJheNeural", nameKey: "云哲・台湾华语・男声"),
-        .init(id: "zh-CN-XiaoxiaoNeural", nameKey: "晓晓・普通话・女声"),
-        .init(id: "zh-CN-YunxiNeural", nameKey: "云希・普通话・男声"),
-        .init(id: "zh-CN-YunjianNeural", nameKey: "云健・普通话・男声"),
-        .init(id: "zh-HK-HiuGaaiNeural", nameKey: "晓佳・粤语・女声"),
-        .init(id: "zh-HK-WanLungNeural", nameKey: "云龙・粤语・男声"),
-        .init(id: "en-US-AriaNeural", nameKey: "Aria・美式英语・女声"),
-        .init(id: "en-US-GuyNeural", nameKey: "Guy・美式英语・男声"),
+        .init(id: "zh-TW-HsiaoChenNeural", nameKey: "晓臻・台湾华语・女声", gender: .female, age: .adult),
+        .init(id: "zh-TW-HsiaoYuNeural", nameKey: "晓雨・台湾华语・女声", gender: .female, age: .young),
+        .init(id: "zh-TW-YunJheNeural", nameKey: "云哲・台湾华语・男声", gender: .male, age: .adult),
+        .init(id: "zh-CN-XiaoxiaoNeural", nameKey: "晓晓・普通话・女声", gender: .female, age: .young),
+        .init(id: "zh-CN-YunxiNeural", nameKey: "云希・普通话・男声", gender: .male, age: .young),
+        .init(id: "zh-CN-YunjianNeural", nameKey: "云健・普通话・男声", gender: .male, age: .adult),
+        .init(id: "zh-HK-HiuGaaiNeural", nameKey: "晓佳・粤语・女声", gender: .female, age: .adult),
+        .init(id: "zh-HK-WanLungNeural", nameKey: "云龙・粤语・男声", gender: .male, age: .adult),
+        .init(id: "en-US-AriaNeural", nameKey: "Aria・美式英语・女声", gender: .female, age: .adult),
+        .init(id: "en-US-GuyNeural", nameKey: "Guy・美式英语・男声", gender: .male, age: .adult),
     ]
     static let defaultVoice = voices[0]
 
@@ -35,5 +42,20 @@ struct EdgeTTSVoice: Identifiable, Equatable, Sendable {
         let identifier = sourceIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isEdgeSource(identifier) else { return nil }
         return voice(id: String(identifier.dropFirst(sourcePrefix.count)))
+    }
+}
+
+/// Which voices can stand in for one another on the same text.
+enum TTSLanguageGroup {
+    /// `cmn` for Mandarin (mainland, Taiwan, Singapore), `yue` for Cantonese, else the base
+    /// language. Accepts a BCP-47 tag or a voice id that starts with one (`zh-TW-HsiaoYuNeural`).
+    static func of(locale: String) -> String {
+        let lower = locale.lowercased()
+        if lower.hasPrefix("zh-hk") || lower.hasPrefix("zh-mo") || lower.hasPrefix("yue") {
+            return "yue"
+        }
+        if lower.hasPrefix("wuu") { return "wuu" }
+        if lower.hasPrefix("zh") || lower.hasPrefix("cmn") { return "cmn" }
+        return String(lower.split(separator: "-").first ?? "")
     }
 }
