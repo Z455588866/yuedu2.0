@@ -28,6 +28,18 @@ protocol BookSourceFetching: Sendable {
         forceRefresh: Bool
     ) async throws -> TOCPackage
 
+    /// Change-source passes the book's detail page when a TOC lives at the book's
+    /// own URL. Implementations without that support fall back through the
+    /// default in the extension below.
+    func fetchTOCPackage(
+        tocUrl: String,
+        source: BookSource,
+        runtimeVariables: [String: String]?,
+        onFirstPageReady: (([OnlineChapterRef]) -> Void)?,
+        forceRefresh: Bool,
+        detailPage: BookDetailPage?
+    ) async throws -> TOCPackage
+
     func cachedTOCPackage(
         tocUrl: String,
         source: BookSource
@@ -69,6 +81,26 @@ protocol BookSourceFetching: Sendable {
 }
 
 extension BookSourceFetching {
+    /// Default for implementations that cannot read a TOC from a detail page:
+    /// the plain TOC fetch. LiveBookSourceFetcher overrides this and forwards
+    /// `detailPage` to BookSourceFetcher.
+    func fetchTOCPackage(
+        tocUrl: String,
+        source: BookSource,
+        runtimeVariables: [String: String]?,
+        onFirstPageReady: (([OnlineChapterRef]) -> Void)?,
+        forceRefresh: Bool,
+        detailPage: BookDetailPage?
+    ) async throws -> TOCPackage {
+        try await fetchTOCPackage(
+            tocUrl: tocUrl,
+            source: source,
+            runtimeVariables: runtimeVariables,
+            onFirstPageReady: onFirstPageReady,
+            forceRefresh: forceRefresh
+        )
+    }
+
     /// Cache lookup is an optional acceleration capability. Test doubles and
     /// alternate implementations without persistent TOC storage skip it and
     /// continue through the normal fetch path.
@@ -240,6 +272,24 @@ struct LiveBookSourceFetcher: BookSourceFetching {
             runtimeVariables: runtimeVariables,
             onFirstPageReady: onFirstPageReady,
             forceRefresh: forceRefresh
+        )
+    }
+
+    func fetchTOCPackage(
+        tocUrl: String,
+        source: BookSource,
+        runtimeVariables: [String: String]?,
+        onFirstPageReady: (([OnlineChapterRef]) -> Void)?,
+        forceRefresh: Bool,
+        detailPage: BookDetailPage?
+    ) async throws -> TOCPackage {
+        try await bookSourceFetcher.fetchTOCPackage(
+            tocUrl: tocUrl,
+            source: source,
+            runtimeVariables: runtimeVariables,
+            onFirstPageReady: onFirstPageReady,
+            forceRefresh: forceRefresh,
+            detailPage: detailPage
         )
     }
 

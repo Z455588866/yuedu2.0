@@ -1923,6 +1923,22 @@ class GlobalSettings {
     var changeSourceLoadToc: Bool {
         didSet { UserDefaults.standard.set(changeSourceLoadToc, forKey: "yd_change_source_load_toc") }
     }
+    /// 換源的分組 (Legado 換源 分組); 空字串代表所有已啟用的來源。
+    var changeSourceGroup: String {
+        didSet { UserDefaults.standard.set(changeSourceGroup, forKey: "yd_change_source_group") }
+    }
+    /// 校驗作者: 換源只保留作者相符的結果。預設關閉，只以書名判斷。
+    var changeSourceCheckAuthor: Bool {
+        didSet { UserDefaults.standard.set(changeSourceCheckAuthor, forKey: "yd_change_source_check_author") }
+    }
+    /// 加載詳情: 沒有目錄地址的結果，讀其詳情頁以顯示最新章節。預設關閉。
+    var changeSourceLoadInfo: Bool {
+        didSet { UserDefaults.standard.set(changeSourceLoadInfo, forKey: "yd_change_source_load_info") }
+    }
+    /// 加載字數: 抓每個結果的目錄與當前章節，顯示字數與響應時間。預設關閉。
+    var changeSourceLoadWordCount: Bool {
+        didSet { UserDefaults.standard.set(changeSourceLoadWordCount, forKey: "yd_change_source_load_word_count") }
+    }
 
     /// Auto iCloud sync: merge with iCloud on launch and when backgrounding.
     var iCloudAutoSync: Bool {
@@ -2597,6 +2613,13 @@ class GlobalSettings {
             (UserDefaults.standard.object(forKey: "yd_auto_fill_book_metadata") as? Bool) ?? true
         changeSourceLoadToc =
             (UserDefaults.standard.object(forKey: "yd_change_source_load_toc") as? Bool) ?? false
+        changeSourceGroup = UserDefaults.standard.string(forKey: "yd_change_source_group") ?? ""
+        changeSourceCheckAuthor =
+            (UserDefaults.standard.object(forKey: "yd_change_source_check_author") as? Bool) ?? false
+        changeSourceLoadInfo =
+            (UserDefaults.standard.object(forKey: "yd_change_source_load_info") as? Bool) ?? false
+        changeSourceLoadWordCount =
+            (UserDefaults.standard.object(forKey: "yd_change_source_load_word_count") as? Bool) ?? false
         iCloudAutoSync =
             (UserDefaults.standard.object(forKey: "yd_icloud_auto_sync") as? Bool) ?? true
         edgeTtsVoiceID = UserDefaults.standard.string(forKey: "yd_edge_tts_voice_id") ?? EdgeTTSVoice.defaultVoice.id
