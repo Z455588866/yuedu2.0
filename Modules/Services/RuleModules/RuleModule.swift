@@ -490,6 +490,13 @@ struct RuleModuleVersion: Comparable, Sendable {
 
     static func == (lhs: Self, rhs: Self) -> Bool { !(lhs < rhs) && !(rhs < lhs) }
 
-    /// The running app's `CFBundleShortVersionString`.
-    static var app: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
+    /// The newest rule-module format this build understands. A module's `requiredVersion` is a
+    /// **format** version (`3.0`, `3.0.1`, `3.0.2`), not the App Store marketing version
+    /// (`CFBundleShortVersionString`, e.g. `1.8`). Comparing the two used to reject every
+    /// format-3 module — the bundled ones included — as "requires a newer app". Validators
+    /// compare against the format version; the marketing version is display-only.
+    static var app: String { RuleModuleFormat.version3_0_2 }
+
+    /// The App Store version shown in the UI (`1.8`); never used to validate modules.
+    static var marketing: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
 }

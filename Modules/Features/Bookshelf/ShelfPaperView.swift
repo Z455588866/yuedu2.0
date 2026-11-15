@@ -29,6 +29,9 @@ struct ShelfPaperView: View {
     /// 长按「搜索网络封面」时要找封面的那本书。用整本书而不只是 id：封面搜索按
     /// 书名 + 作者查，换书的同一帧里 state 还没落盘时也能拿到正确的名字。
     @State private var coverSearchBook: ReadingBook?
+    /// 长按 → 书籍详情：进入作品详情页（读者评论就显示在这一页）。
+    /// 用 item 目的地而不是布尔量，避免 iOS 17 在 push 时把刚赋的 route 清空。
+    @State private var shelfWork: WorkDetailRoute?
     /// 选完封面后正在下载 —— 期间再点一次不应叠第二个下载。
     @State private var isApplyingCover = false
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -111,6 +114,12 @@ struct ShelfPaperView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            // 长按 → 书籍详情（作品详情页）。读者评论、同作者作品、系列都画在这一页；
+            // 书架纸感版原先只有「打开 / 封面 / 养肥 / 删除」，没有进这一页的入口。
+            .navigationDestination(item: $shelfWork) { route in
+                WorkDetailView(route: route, onRemoveFromShelf: { shelfWork = nil })
+                    .environmentObject(store)
+            }
             .background {
                 // 卡片翻开转场必须挂在外层 UINavigationController 上。这个零尺寸探针
                 // 解析出书架自己的 nav controller，交给 coordinator 提供打开动画与
@@ -344,6 +353,11 @@ struct ShelfPaperView: View {
                         }
                     } label: {
                         Label(localized("打开"), systemImage: "book")
+                    }
+                    Button {
+                        showWorkDetail(for: book)
+                    } label: {
+                        Label(localized("书籍详情"), systemImage: "books.vertical")
                     }
                     Button {
                         requestCoverSearch(for: book)
@@ -585,6 +599,11 @@ struct ShelfPaperView: View {
                 Label(localized("打开"), systemImage: "book")
             }
             Button {
+                showWorkDetail(for: book)
+            } label: {
+                Label(localized("书籍详情"), systemImage: "books.vertical")
+            }
+            Button {
                 requestCoverSearch(for: book)
             } label: {
                 Label(localized("搜索网络封面"), systemImage: "photo.on.rectangle.angled")
@@ -657,6 +676,12 @@ struct ShelfPaperView: View {
             .shadow(color: .black.opacity(0.16), radius: 8, x: 3, y: 6)
             .accessibilityHidden(true)
             .reportBookshelfCoverFrame(into: coverBoxes.box(for: book.id), onChange: nil)
+    }
+
+    /// 长按 → 书籍详情：把书架上这本书变成作品详情页的记录（与 HomeView 的
+    /// 「作品详情」用同一条构造路径）。作品详情页才会去问各模块的读者评论。
+    private func showWorkDetail(for book: ReadingBook) {
+        shelfWork = ShelfProvider(store: store).items([book]).first.flatMap(WorkDetailRoute.init)
     }
 
     /// 点开书籍时走项目里已有的卡片翻开转场（ReaderCardTransitionAnimator）：
