@@ -81,14 +81,14 @@ extension RuleModuleClient {
     func allReviews(of item: RuleListItem, by reviews: RuleModule.Reviews,
                     in module: RuleModule) async throws -> (reviews: [WorkReview], rating: WorkRating?) {
         guard reviews.request.url.contains("{{page}}") || (reviews.request.body ?? "").contains("{{page}}") else {
-            return try await reviews(of: item, by: reviews, in: module)
+            return try await self.reviews(of: item, by: reviews, in: module)
         }
         var found: [WorkReview] = []
         var rating: WorkRating?
-        for page in 1...pageLimit {
+        for page in 1...Self.pageLimit {
             let read: (reviews: [WorkReview], rating: WorkRating?)
             do {
-                read = try await reviews(of: item, by: reviews, page: String(page), in: module)
+                read = try await self.reviews(of: item, by: reviews, page: String(page), in: module)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -99,12 +99,12 @@ extension RuleModuleClient {
             if rating == nil { rating = read.rating }
             guard !read.reviews.isEmpty else { break }
             found += read.reviews
-            guard found.count < reviewLimit else { break }
+            guard found.count < Self.reviewLimit else { break }
         }
         // The last page's rows can repeat in an answer that arrived twice: one reader, one review.
         var seen = Set<String>()
         found = found.filter { seen.insert("\($0.author ?? "")\u{1F}\($0.text)").inserted }
-        return (Array(found.prefix(reviewLimit)), rating)
+        return (Array(found.prefix(Self.reviewLimit)), rating)
     }
 
     /// The page's reviews and rating. Off the caller's actor: a page of a hundred reviews is a
