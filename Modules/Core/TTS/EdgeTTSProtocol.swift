@@ -58,9 +58,21 @@ enum EdgeTTSProtocol {
     }
 
     static func rateString(_ rate: Float) -> String {
+        rateString(rate, adjustedBy: 0)
+    }
+
+    /// The UI rate combined with a delivery's own rate change: an angry line at 1.5× is
+    /// 1.5 × 1.08, not 1.5 + 8%.
+    static func rateString(_ rate: Float, adjustedBy deltaPercent: Int) -> String {
         let value = rate.isFinite ? rate : 0.5
-        let percent = Int(((max(0.1, min(value, 2.5)) / 0.5 - 1) * 100).rounded())
+        let base = Double(max(0.1, min(value, 2.5)) / 0.5)
+        let combined = base * (1 + Double(deltaPercent) / 100)
+        let percent = Int(((combined - 1) * 100).rounded())
         return String(format: "%+d%%", percent)
+    }
+
+    static func percentString(_ percent: Int) -> String {
+        String(format: "%+d%%", percent)
     }
 
     /// Bound escaped UTF-8, rather than Character count: XML entities and combining
