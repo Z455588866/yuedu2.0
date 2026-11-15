@@ -13,8 +13,11 @@ extension RuleModuleClient {
     /// The cache name of a work's reviews. `~` is in no entry id (`RuleModuleValidator.isFileSafe`),
     /// so it is never an entry's own page.
     static let reviewsCacheName = "~reviews"
-    /// Reviews kept per record.
-    nonisolated static let reviewLimit = 100
+    /// Reviews kept per record. Two hundred: a paged module (one that names the reserved
+    /// `{{page}}`) reads ten pages of twenty, and the whole recent discussion fits.
+    nonisolated static let reviewLimit = 200
+    /// Pages read per record when the module's reviews request names `{{page}}`.
+    nonisolated static let pageLimit = 10
 
     /// A work's reviews as last read, if this version of the module read them within the
     /// block's `cacheDuration`. `key` names the work as the module was asked about it.
@@ -51,11 +54,14 @@ extension RuleModuleClient {
 
     /// One record's reviews: the block's request with the record's `{{id}}` and `{{url}}`, then
     /// its rules on a bare engine. `{{url}}` is as it is at the start of the address,
-    /// percent-encoded anywhere else, as `detail` has it.
-    func reviews(of item: RuleListItem, by reviews: RuleModule.Reviews,
+    /// percent-encoded anywhere else, as `detail` has it. A `page` is filled for `{{page}}`,
+    /// the reserved placeholder a paged request reads one round at a time (`allReviews`).
+    func reviews(of item: RuleListItem, by reviews: RuleModule.Reviews, page: String? = nil,
                  in module: RuleModule) async throws -> (reviews: [WorkReview], rating: WorkRating?) {
         let request = reviews.request
-        let values = module.withGlobalValues(["id": item.id ?? "", "url": item.bookUrl], language: nil)
+        var keys = ["id": item.id ?? "", "url": item.bookUrl]
+        if let page { keys["page"] = page }
+        let values = module.withGlobalValues(keys, language: nil)
         let leading = request.url.trimmingCharacters(in: .whitespaces).hasPrefix("{{url}}")
         let bodyEncoding: TemplateEncoding = request.bodyEncoding == RuleModule.BodyEncoding.json.rawValue ? .json : .percent
         let started = SourcePerfTrace.now
@@ -66,6 +72,39 @@ extension RuleModuleClient {
         let read = await Self.readReviews(page.text, baseURL: page.baseURL, by: reviews)
         SourcePerfTrace.record("module.reviews", "module=\(module.id) reviews=\(read.reviews.count)", since: started, thresholdMs: 0)
         return read
+    }
+
+    /// A record's reviews, paged through when the module's request names the reserved `{{page}}`:
+    /// one page per round until an empty page or `pageLimit`, so a site that answers twenty
+    /// posts a page gives the whole recent discussion instead of its first page. A request
+    /// without `{{page}}` is asked once, as before.
+    func allReviews(of item: RuleListItem, by reviews: RuleModule.Reviews,
+                    in module: RuleModule) async throws -> (reviews: [WorkReview], rating: WorkRating?) {
+        guard reviews.request.url.contains("{{page}}") || (reviews.request.body ?? "").contains("{{page}}") else {
+            return try await reviews(of: item, by: reviews, in: module)
+        }
+        var found: [WorkReview] = []
+        var rating: WorkRating?
+        for page in 1...pageLimit {
+            let read: (reviews: [WorkReview], rating: WorkRating?)
+            do {
+                read = try await reviews(of: item, by: reviews, page: String(page), in: module)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // A page that fails ends the run, not the whole record: the pages read so far
+                // are still the site's answer (some sites rate-limit after a few rounds).
+                break
+            }
+            if rating == nil { rating = read.rating }
+            guard !read.reviews.isEmpty else { break }
+            found += read.reviews
+            guard found.count < reviewLimit else { break }
+        }
+        // The last page's rows can repeat in an answer that arrived twice: one reader, one review.
+        var seen = Set<String>()
+        found = found.filter { seen.insert("\($0.author ?? "")\u{1F}\($0.text)").inserted }
+        return (Array(found.prefix(reviewLimit)), rating)
     }
 
     /// The page's reviews and rating. Off the caller's actor: a page of a hundred reviews is a

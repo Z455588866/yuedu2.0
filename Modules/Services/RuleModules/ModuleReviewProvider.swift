@@ -56,7 +56,7 @@ struct ModuleReviewProvider {
         var answered = 0
         for record in records.prefix(Self.recordLimit) {
             do {
-                let read = try await LibrarySearch.within(timeout) { try await client.reviews(of: record, by: block, in: module) }
+                let read = try await LibrarySearch.within(timeout) { try await client.allReviews(of: record, by: block, in: module) }
                 answered += 1
                 // One reader's review under two uploads is one review.
                 reviews += read.reviews.filter { seen.insert("\($0.author ?? "")\u{1F}\($0.text)").inserted }

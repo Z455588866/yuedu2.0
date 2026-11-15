@@ -362,7 +362,9 @@ enum RuleModuleValidator {
             throw .unsupportedMethod(field: "\(path).request.method", method: request.method ?? "")
         }
         let keyNames: Set<String> = ["id", "url"]
-        let declared = globals.union(keyNames)
+        // `{{page}}` is the reserved paging placeholder: a reviews request that names it is read
+        // page by page (`RuleModuleClient.allReviews`), so it may name it.
+        let declared = globals.union(keyNames).union(["page"])
         try requireText(request.url, "\(path).request.url")
         try checkRule(request.url, field: "\(path).request.url", declared: declared)
         if let body = request.body { try checkRule(body, field: "\(path).request.body", declared: declared) }
