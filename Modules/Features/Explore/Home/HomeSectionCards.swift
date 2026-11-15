@@ -95,9 +95,11 @@ struct HomeSectionCards: View {
                     }
                     .modifier(HomeBandGround(cover: ownBandCover, isCarousel: false, cutsCovers: !drawsSideways))
                 case .heroGrid: heroGrid
+                case .heroCards: heroCards
                 // A layout of lists draws its cards (`HomeSectionLists`); a section of books drawn
                 // in one here is a stored value this build cannot read, drawn as a row.
-                case .collection, .categoryCards, .collageCards, .bannerCards, .chart: rail(coverWidth: rowCoverWidth)
+                case .collection, .categoryCards, .collageCards, .bannerCards, .chart, .groupedShelves, .genreList:
+                    rail(coverWidth: rowCoverWidth)
                 }
             }
         }
@@ -207,6 +209,25 @@ struct HomeSectionCards: View {
     /// Groups of five, a group a page and the next one peeking (two to a page on a wider
     /// screen): the first cover large, the next four in two rows beside it, all standing on one
     /// line. A last group of fewer leaves its places empty.
+    /// 主打卡片: one book a page, its wide card in the cover's own colour (`HomeHeroCard`).
+    private var heroCards: some View {
+        let perScreen = horizontalSizeClass == .regular ? 2 : 1
+        return ScrollView(.horizontal) {
+            LazyHStack(alignment: .top, spacing: DSSpacing.lg) {
+                ForEach(cards.indices, id: \.self) { index in
+                    button(index, in: cards) { HomeHeroCard(content: cards[index]) }
+                        .homeSidewaysCardWidth { length in
+                            let peek = cards.count > perScreen ? DSSpacing.lg + DSLayout.homePagePeek : 0
+                            let gaps = DSSpacing.lg * CGFloat(perScreen - 1)
+                            return max(0, (length - gaps - peek) / CGFloat(perScreen))
+                        }
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .modifier(HomeSidewaysScroll())
+    }
+
     private var heroGrid: some View {
         let gap = DSSpacing.lg
         let perScreen = horizontalSizeClass == .regular ? 2 : 1
