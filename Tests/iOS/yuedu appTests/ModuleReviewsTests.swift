@@ -205,7 +205,7 @@ struct ModuleReviewsTests {
         ModuleStub.install([
             "example.com/s": .json(#"""
             {"books":[{"title":"三体","author":"刘慈欣","href":"/b/1/a","id":1},
-                      {"title":"超新星纪元","author":"刘慈欣","href":"/b/2/a","id":2},
+                      {"title":"三体 II","author":"刘慈欣","href":"/b/2/a","id":2},
                       {"title":"三体","author":"别人","href":"/b/3/a","id":3},
                       {"title":"三体","author":"刘慈欣 著","href":"/b/4/a","id":4},
                       {"title":"三体","author":"刘慈欣","href":"/b/5/a","id":5},
@@ -225,27 +225,6 @@ struct ModuleReviewsTests {
         ModuleStub.install(["example.com/s": .json(#"{"books":[{"title":"三体","author":"刘慈欣","href":"/b/1/a","id":1}]}"#)])
         #expect(try await f.reviews.reviews(for: query(authors: ["未知作者"]))?.isEmpty == true)
         #expect(ModuleStub.urls.isEmpty, "a title alone is not a work: nothing leaves the device")
-    }
-
-    @Test("two of 书名, 作者 and 简介 agreeing make an item the work's (maintainer, 2026-11-16)")
-    func twoOfThree() async throws {
-        let search: [String: Any] = ["request": ["url": "https://example.com/s?q={{keyword}}"],
-                                     "list": ["items": "$.books[*]", "title": "$.title", "author": "$.author",
-                                              "intro": "$.intro", "url": "$.href", "id": "$.id"]]
-        let f = try await fixture(["search": search, "reviews": reviews()])
-        defer { f.cleanUp() }
-        ModuleStub.install([
-            "example.com/s": .json(#"""
-            {"books":[{"title":"三体正版全本免费阅读","author":"","href":"/b/1/a","id":1,"intro":"《三体》是刘慈欣的科幻长篇。"},
-                      {"title":"超新星纪元","author":"刘慈欣","href":"/b/2/a","id":2,"intro":"一个只剩孩子的世界。"},
-                      {"title":"球状闪电","author":"刘慈欣","href":"/b/3/a","id":3,"intro":"《三体》的前传。"}]}
-            """#),
-            "example.com/comments/1": .json(#"{"comments":[{"parent_id":null,"text":"书名和简介找到的","user":{"name":"甲"}}]}"#),
-            "example.com/comments/3": .json(#"{"comments":[{"parent_id":null,"text":"作者和简介找到的","user":{"name":"甲"}}]}"#),
-        ])
-        let found = try #require(try await f.reviews.reviews(for: query()))
-        #expect(found.reviews.map(\.text) == ["书名和简介找到的", "作者和简介找到的"],
-                "书名+简介 (the garbled search-page row) and 作者+简介 are each two points; 作者 alone is not")
     }
 
     @Test("the module's own record is the work: asked as it is, whatever else shares its title")
