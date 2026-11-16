@@ -2813,7 +2813,13 @@ final class CoreTextPageViewController: UIViewController, ReaderBookmarkRibbonHo
             self?.reviewPanel = nil
         }
         reviewPanel = panel
-        panel.present(in: self)
+        // 挂到**阅读器最外层**，不是这一页：垫在翻页容器子树里时，翻页容器的点击
+        // 分区手势（中央=呼菜单）会连面板上的点按一起收——点一下面板，面板收了、
+        // 底部栏也弹出来；菜单本身又是 SwiftUI 层级，反过来盖在面板上。挂到最外层
+        // 视图上，面板永远盖过菜单，点按也到不了翻页手势；玻璃采样的仍是同一窗口
+        // 下的真实书页。
+        let host = ReviewPanelOverlayController.topPresentedViewController(in: view.window) ?? self
+        panel.present(in: host)
     }
 
     /// 點面板外收起段評面板。
@@ -2977,7 +2983,7 @@ extension CoreTextPageViewController: PageIndexProviding {}
 /// 这里把面板直接挂到**阅读页自己的视图**上：同一个窗口、同一棵渲染树，玻璃
 /// 采样的就是下面那张真实书页。翻页、滚动、换书都实时跟得上，半屏和全屏用的
 /// 是同一块玻璃。
-final class ReviewPanelOverlayController: UIViewController {
+final class ReviewPanelOverlayController: UIViewController, UIGestureRecognizerDelegate {
 
     private let content: UIHostingController<LegadoReviewBrowserView>
     private let onDismiss: () -> Void
@@ -3094,6 +3100,8 @@ final class ReviewPanelOverlayController: UIViewController {
         dragArea.addGestureRecognizer(
             UITapGestureRecognizer(target: self, action: #selector(toggleDetent))
         )
+        // 按住面板向左滑退出：挂在整块 card 上， delegate 里只放行横向占优的手势。
+        card.addGestureRecognizer(swipeOffPan)
     }
 
     /// 挂到阅读页视图上，从底部升到半屏。
@@ -3167,8 +3175,8 @@ final class ReviewPanelOverlayController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         dimming.frame = view.bounds
-        // 动画进行中不要重设 frame，否则会把动画直接掐到终点。
-        guard !isAnimatingLayout, currentHeight > 0 else { return }
+        // 动画进行中不要重设 frame，否则会把动画直接掐到终点；左滑跟手中同理。
+        guard !isAnimatingLayout, !isSwipeTracking, currentHeight > 0 else { return }
         currentHeight = min(currentHeight, largeHeight)
         layoutCard(height: currentHeight)
     }
@@ -3267,22 +3275,98 @@ final class ReviewPanelOverlayController: UIViewController {
         }
     }
 
-    func dismissPanel() {
+    func dismissPanel(swipeOff: Bool = false) {
         guard !isDismissing else { return }
         isDismissing = true
         tintLink?.invalidate()
         tintLink = nil
         isAnimatingLayout = true
         UIView.animate(withDuration: 0.26, delay: 0, options: [.curveEaseIn]) {
-            self.layoutCard(height: 0)
+            if swipeOff {
+                // 左滑退出：面板整体滑出屏幕左缘，而不是向下收。
+                self.card.frame.origin.x = -self.view.bounds.width
+                self.card.alpha = 0
+            } else {
+                self.layoutCard(height: 0)
+            }
             self.dimming.alpha = 0
         } completion: { _ in
+            self.card.alpha = 1
             self.isAnimatingLayout = false
             self.willMove(toParent: nil)
             self.view.removeFromSuperview()
             self.removeFromParent()
             self.onDismiss()
         }
+    }
+
+    // MARK: 按住面板向左滑退出
+
+    /// 按住面板向左滑退出面板。挂在整块 card 上：列表的竖向滚动（UIScrollView 的
+    /// pan）与这里的横向手势互不抢——竖向动先到，横向手势识别失败照常滚动；
+    /// 横向动先到，这里接管并退出。顶部拖拽区的竖向 pan 也一样互斥。
+    private lazy var swipeOffPan: UIPanGestureRecognizer = {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleSwipeOffPan(_:)))
+        pan.delegate = self
+        return pan
+    }()
+
+    private var swipeOffStartX: CGFloat = 0
+    /// 左滑跟手中：布局回调不要重设 card 的 frame，否则横移会被弹回。
+    private var isSwipeTracking = false
+
+    /// 只接「向左、且横向明显占优」的手势；其余（竖向拖高度、列表滚动）一律不接。
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === swipeOffPan, let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+        let translation = pan.translation(in: view)
+        let velocity = pan.velocity(in: view)
+        // 横向位移占优且朝左（也放行快速左甩），竖向的一律让给拖拽与滚动。
+        return translation.x < 0 && (abs(translation.x) > abs(translation.y) * 1.5 || velocity.x < -900)
+    }
+
+    @objc private func handleSwipeOffPan(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            swipeOffStartX = card.frame.origin.x
+            isSwipeTracking = true
+        case .changed:
+            let translation = gesture.translation(in: view).x
+            // 只跟手往左，不往右越过头。
+            let offsetX = min(0, translation)
+            card.frame.origin.x = swipeOffStartX + offsetX
+            dimming.alpha = max(0, 1 + offsetX / max(view.bounds.width, 1))
+        case .ended, .cancelled:
+            isSwipeTracking = false
+            let translation = gesture.translation(in: view).x
+            let velocity = gesture.velocity(in: view).x
+            if translation < -80 || velocity < -600 {
+                dismissPanel(swipeOff: true)
+            } else {
+                // 没到位：弹回原位，面板继续留着。
+                isAnimatingLayout = true
+                UIView.animate(withDuration: 0.28, delay: 0,
+                               usingSpringWithDamping: 0.85, initialSpringVelocity: 0.3) {
+                    self.card.frame.origin.x = 0
+                    self.dimming.alpha = 1
+                } completion: { _ in
+                    self.isAnimatingLayout = false
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    /// 阅读器的最外层控制器：沿 presented 链走到头。段评面板挂在这里——它盖得住
+    /// 阅读器的一切 SwiftUI 层级（底部栏菜单），也不再垫在翻页容器的子树里被
+    /// 翻页点击分区手势连按带收（点面板=收面板+呼菜单的老毛病）。
+    static func topPresentedViewController(in window: UIWindow?) -> UIViewController? {
+        guard let window else { return nil }
+        var top = window.rootViewController
+        while let presented = top?.presentedViewController, !presented.isBeingDismissed {
+            top = presented
+        }
+        return top
     }
 }
 
@@ -3378,13 +3462,10 @@ final class ReviewPanelOverlayAnchor: UIViewController {
     }
 
     /// 沿 presented 链找到真正盖在最上面的控制器——阅读页通常是被 present 出来的，
-    /// 挂在根控制器上会被它整个盖住。
+    /// 挂在根控制器上会被它整个盖住。实现移到了 `ReviewPanelOverlayController.topPresentedViewController`，
+    /// 两条挂载路径（SwiftUI 入口与书源页面的 UIKit 入口）共用同一个挂载点。
     private static func topViewController(in window: UIWindow) -> UIViewController? {
-        var top = window.rootViewController
-        while let presented = top?.presentedViewController, !presented.isBeingDismissed {
-            top = presented
-        }
-        return top
+        ReviewPanelOverlayController.topPresentedViewController(in: window)
     }
 }
 
