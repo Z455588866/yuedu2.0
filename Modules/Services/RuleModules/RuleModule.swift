@@ -611,11 +611,6 @@ struct RuleModule: Codable, Hashable, Sendable {
         /// values; the request sent is the object it returns, else `request` as it left it. For a
         /// site that signs its requests. The address it writes is still held to `hosts`.
         var script: String?
-        /// JavaScript run once the templates are filled, in a module that declares `javascript`
-        /// (format 3.0.2): `request` is `{url, method, body, headers}` and `values` the templates'
-        /// values; the request sent is the object it returns, else `request` as it left it. For a
-        /// site that signs its requests. The address it writes is still held to `hosts`.
-        var script: String?
     }
 
     /// `Request.bodyEncoding`'s values.
