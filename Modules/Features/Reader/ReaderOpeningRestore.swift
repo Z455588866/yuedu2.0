@@ -75,7 +75,6 @@ final class ReaderOpeningRestore {
                   chapterIndex: target.chapterIndex,
                   charOffset: target.charOffset,
                   translationOffset: target.translationOffset,
-                  translationOffset: target.translationOffset,
                   resolver: pageIndex
               ) == page
         else { return false }
@@ -101,7 +100,6 @@ final class ReaderOpeningRestore {
         guard let page = ReaderProgressRestoreResolver.resolvePage(
             chapterIndex: position.spineIndex,
             charOffset: position.charOffset,
-            translationOffset: position.translationOffset,
             translationOffset: position.translationOffset,
             resolver: pageIndex
         ) else { return .unresolved }

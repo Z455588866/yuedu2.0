@@ -37,7 +37,7 @@ workflows:
       #   26.6  -> ReaderViewportFragmentHost.swift:232 sending 'prepare' 数据竞争
       #   26.3  -> 通过
       # 26.2 未跑过并发诊断，若编译报错退回 26.3 并改用规避 #84793 触发模式的方式。
-      xcode: 26.4
+      xcode: 27.1
       vars:
         # 与 Actions 版一致的签名目标 App ID；留空则保持原包名 com.yuedu.reader。
         SIGN_BUNDLE_ID: com.QpPL.pEorsl

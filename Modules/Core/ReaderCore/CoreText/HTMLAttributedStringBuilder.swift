@@ -1472,6 +1472,10 @@ final class HTMLAttributedStringBuilder {
             case .height:
                 style.height = max(0, resolved)
                 style.rawHeightPercent = rawPercent
+            case .listStyleType, .color, .fontSize, .fontFamily, .backgroundColor, .borderColor,
+                 .borderStyle, .borderBottomWidth, .marginLeft, .marginRight:
+                // `hr`'s and `font`'s; the caller passes `img`'s only.
+                break
             }
         }
     }
