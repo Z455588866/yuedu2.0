@@ -197,6 +197,7 @@ struct TXTLazyAttributedStringBuilder: AttributedStringBuilding {
     }
 
     var appliesReplaceRules: Bool { true }
+    var decorationRenderWidth: CGFloat? { renderSize.value.width }
 
     func localChapterText(at index: Int, applyingReplaceRules: Bool) async -> AILocalChapterText {
         // 全书搜寻 reads every chapter. The parse, the conversion and the replace rules used

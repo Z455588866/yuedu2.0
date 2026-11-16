@@ -270,6 +270,7 @@ final class OnlineProviderAttributedStringBuilder: @preconcurrency AttributedStr
     }
 
     var appliesReplaceRules: Bool { true }
+    var decorationRenderWidth: CGFloat? { renderSize.width }
 
     func localChapterText(at index: Int, applyingReplaceRules: Bool) async -> AILocalChapterText {
         do {

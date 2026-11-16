@@ -27,6 +27,14 @@ enum ExploreNavigationRoute: Hashable {
     case moduleList(ModuleListRoute)
     /// 官方模组's AI 推荐 page (AI 推荐 plan 8d).
     case aiRecommendations
+    /// A module list's own store (`RuleModule.Entry.store`): a genre's, from its card.
+    case moduleStore(ModuleStoreRoute)
+    /// 所有类型, from 探索's 分类: every list with a store.
+    case genres
+    /// A module list's own store (`RuleModule.Entry.store`): a genre's, from its card.
+    case moduleStore(ModuleStoreRoute)
+    /// 所有类型, from 探索's 分类: every list with a store.
+    case genres
     /// 模组 (M6), from 设置 → 资源: 官方模组, the repositories and 汇入的模组.
     case moduleManager
     /// 官方模组 or 汇入的模组, from 模组.
@@ -46,8 +54,12 @@ enum ExploreNavigationRoute: Hashable {
             return lhsURL == rhsURL
         case (.sourceManager, .sourceManager), (.aggregationSettings, .aggregationSettings),
              (.subscriptions, .subscriptions), (.aiRecommendations, .aiRecommendations),
-             (.moduleManager, .moduleManager):
+             (.moduleManager, .moduleManager), (.genres, .genres):
             return true
+        case (.moduleStore(let lhsRoute), .moduleStore(let rhsRoute)):
+            return lhsRoute == rhsRoute
+        case (.moduleStore(let lhsRoute), .moduleStore(let rhsRoute)):
+            return lhsRoute == rhsRoute
         case (.moduleGroup(let lhsGroup), .moduleGroup(let rhsGroup)):
             return lhsGroup == rhsGroup
         case (.moduleRepository(let lhsURL), .moduleRepository(let rhsURL)):
@@ -107,6 +119,16 @@ enum ExploreNavigationRoute: Hashable {
         case .moduleRepository(let url):
             hasher.combine(17)
             hasher.combine(url)
+        case .moduleStore(let route):
+            hasher.combine(18)
+            hasher.combine(route)
+        case .genres:
+            hasher.combine(19)
+        case .moduleStore(let route):
+            hasher.combine(18)
+            hasher.combine(route)
+        case .genres:
+            hasher.combine(19)
         }
     }
 }

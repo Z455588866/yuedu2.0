@@ -196,6 +196,12 @@ struct RuleModuleManifestSections: View {
             if let lookup = module.lookup {
                 entryRow(title: localized("以 ISBN 查询"), description: lookup.description)
             }
+            if module.comments != nil {
+                entryRow(title: localized("正文里的评论"), description: localized("段评、热评、本章说、作者说"))
+            }
+            if module.comments != nil {
+                entryRow(title: localized("正文里的评论"), description: localized("段评、热评、本章说、作者说"))
+            }
         } header: {
             Text(localized("清单")).foregroundStyle(DSColor.textSecondary)
         }
@@ -230,6 +236,24 @@ struct RuleModuleManifestSections: View {
                     Text(localized("自动补齐书籍资料开启时，书架上的书名、作者与 ISBN 也会送到这些网站，用来补上空白的封面、简介与分类；可在「资料来源」取消勾选。"))
                 case (false, false):
                     EmptyView()
+                }
+                // Comments in the text (format 3.0.2): asked for each chapter as it is read.
+                if module.comments != nil {
+                    Text(localized("读书时，那本书的书名、作者与 ISBN 也会送到这些网站，用来找这一章的评论；可在「模组」关掉「在正文显示模组的评论」。"))
+                }
+                // Its scripts compute and never connect (`RuleModuleScriptRuntime`).
+                if module.javascript == true {
+                    Text(localized("这个模组会执行 JavaScript，只用来计算签名与解读回应；连线仍然只到这些网站。"))
+                        .accessibilityIdentifier("module.import.javascript")
+                }
+                // Comments in the text (format 3.0.2): asked for each chapter as it is read.
+                if module.comments != nil {
+                    Text(localized("读书时，那本书的书名、作者与 ISBN 也会送到这些网站，用来找这一章的评论；可在「模组」关掉「在正文显示模组的评论」。"))
+                }
+                // Its scripts compute and never connect (`RuleModuleScriptRuntime`).
+                if module.javascript == true {
+                    Text(localized("这个模组会执行 JavaScript，只用来计算签名与解读回应；连线仍然只到这些网站。"))
+                        .accessibilityIdentifier("module.import.javascript")
                 }
             }
             .dsSectionFooter()

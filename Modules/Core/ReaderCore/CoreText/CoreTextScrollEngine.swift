@@ -410,6 +410,8 @@ final class CoreTextScrollEngine: ObservableObject, ScrollReaderEngine {
     func invalidateChapterDocument(at chapterIndex: Int) {
         guard chapterIndex >= 0, chapterIndex < builder.chapterCount else { return }
         chapterDocumentStore.invalidate(spineIndex: chapterIndex)
+        // A chapter the browser engine lays out has no document: its scroll layout is the copy.
+        browserAutoEngine?.discardScrollChapter(at: chapterIndex)
     }
 
     func invalidateChapterDocuments() {
@@ -942,7 +944,7 @@ final class CoreTextScrollEngine: ObservableObject, ScrollReaderEngine {
             )
             let rect = Self.aspectFitRect(for: image.size, in: container)
             let attachment = CoreTextPaginator.RenderedAttachment(rect: rect, image: image, opacity: 1.0)
-            let framesetter = CoreTextFramesetterFactory.make(for: fallbackAttrStr)
+            let framesetter = CoreTextChapterFramesetter(fallbackAttrStr)
             return CoreTextChunk(
                 chapterIndex: chapterIndex,
                 charRange: CFRange(location: 0, length: max(fallbackAttrStr.length, 1)),
@@ -970,7 +972,7 @@ final class CoreTextScrollEngine: ObservableObject, ScrollReaderEngine {
         let x = (contentWidth - drawWidth) / 2
         let rect = CGRect(x: x, y: 0, width: drawWidth, height: height)
         let attachment = CoreTextPaginator.RenderedAttachment(rect: rect, image: image, opacity: 1.0)
-        let framesetter = CoreTextFramesetterFactory.make(for: fallbackAttrStr)
+        let framesetter = CoreTextChapterFramesetter(fallbackAttrStr)
         return CoreTextChunk(
             chapterIndex: chapterIndex,
             charRange: CFRange(location: 0, length: max(fallbackAttrStr.length, 1)),

@@ -369,7 +369,7 @@ struct ReaderView: View {
     @State var isRestoringPosition = true
     /// The saved position the book opened at, while the reader is still owed it.
     @State var openingRestore = ReaderOpeningRestore()
-    var savedCoreTextRestoreTarget: (chapterIndex: Int, charOffset: Int)? {
+    var savedCoreTextRestoreTarget: (chapterIndex: Int, charOffset: Int, translationOffset: Int?)? {
         get { openingRestore.target }
         nonmutating set { openingRestore.target = newValue }
     }
@@ -393,6 +393,8 @@ struct ReaderView: View {
     @State var versionFinder = ReaderVersionFinder()
     /// The source whose 来源配置登入 the book card opened.
     @State var sourceLoginTarget: BookSource?
+    /// A module's comments in the text of this book (`ReaderChapterCommentDecorator`).
+    @State var commentDecorator = ReaderChapterCommentDecorator()
     /// 调试正文's 调试规则, from 更多.
     @State var contentDebugTarget: ReaderContentDebugTarget?
     @State private var replaceRuleDraft: ReplaceRule?
@@ -1205,7 +1207,8 @@ struct ReaderView: View {
         // offset.
         let deliveredRestore = savedCoreTextRestoreTarget.flatMap { target in
             openingRestore.pageSettled(newPage, pageIndex: { engine.pageIndex(for: $0) })
-                ? CoreTextReadingPosition(spineIndex: target.chapterIndex, charOffset: target.charOffset)
+                ? CoreTextReadingPosition(spineIndex: target.chapterIndex, charOffset: target.charOffset,
+                                          translationOffset: target.translationOffset)
                 : nil
         }
         defer {
@@ -1768,6 +1771,14 @@ struct ReaderView: View {
             autoReader.onProgressChanged = nil
             pageBars.releaseContent()
             renderer.pageBarsProvider = nil
+            // The reader is gone for good: stop laying out its chapters. `onDisappear` cannot
+            // (a covered reader comes back), and the engine's deinit never runs while a
+            // preload task holds it. Two closed readers of one 857,793-character chapter kept
+            // laying it out side by side until MetricKit's CPU limit (Crashlytics 7d6c4b95).
+            // Narration held past the reader still pages through this engine, so it keeps it.
+            if tts.playbackState == .stopped {
+                renderer.engine?.cancelPendingWork(cause: .readerTeardown)
+            }
             NowPlayingHub.shared.holdNarrationPastReader(tts)
         }
     }
@@ -3114,6 +3125,8 @@ struct ReaderView: View {
         .sheet(item: $sourceLoginTarget) { source in
             BookSourceLoginSheet(source: source) { sourceLoginTarget = nil }
         }
+        // A chapter's comments arrived from a module: build the chapter again with them.
+        .onReceive(commentDecorator.updates) { spine in applyCommentUpdate(spine: spine) }
         .sheet(item: $contentDebugTarget) { target in
             BookSourceRuleDebugView(source: target.source, initialTab: .content, initialURL: target.chapterURL)
         }
@@ -3381,7 +3394,7 @@ struct ReaderView: View {
         }
 
         let position = restored.coreTextPosition
-        savedCoreTextRestoreTarget = (position.spineIndex, max(0, position.charOffset))
+        savedCoreTextRestoreTarget = (position.spineIndex, max(0, position.charOffset), position.translationOffset)
         setCoreTextExternalTarget(position)
         currentChapterIndex = position.spineIndex
         scrollVisibleChapter = position.spineIndex
@@ -3406,7 +3419,8 @@ struct ReaderView: View {
             if let target = savedCoreTextRestoreTarget {
                 // Positions count spine items; an EPUB's `chapters` are its TOC entries (`spineChapters`).
                 let position = CoreTextReadingPosition(spineIndex: max(0, min(target.chapterIndex, spineChapters.count - 1)),
-                                                       charOffset: max(0, target.charOffset))
+                                                       charOffset: max(0, target.charOffset),
+                                                       translationOffset: target.translationOffset)
                 pendingScrollJumpTarget = position
                 currentChapterIndex = position.spineIndex
                 scrollVisibleChapter = position.spineIndex
@@ -3467,6 +3481,8 @@ struct ReaderView: View {
         )
         ensureChapterReady(chapterIndex: position.spineIndex)
         epubRenderer.updateCurrentPosition(globalPage: page, engine: engine)
+        // A saved place among a module's comment cards has no page until the comments arrive.
+        openingRestore.restoreShown(at: position, shownAs: engine.readingPosition(forPage: page))
         finishCoreTextRestore(restoredSpine: position.spineIndex)
     }
 

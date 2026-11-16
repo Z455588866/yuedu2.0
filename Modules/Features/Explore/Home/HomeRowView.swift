@@ -17,6 +17,7 @@ extension HomeSection {
         case .latest: return localized("最新")
         case .related: return localized("相关")
         case .nextInSeries: return localized("系列下一本")
+        case .readBefore: return localized("之前读过")
         case .subscriptionArticles: return localized("订阅的最新文章")
         case .aiRecommendations: return localized("AI 推荐")
         // In a layout of lists the cards name their categories: the section is its source's.
@@ -41,8 +42,10 @@ extension HomeSection {
         if !subtitle.isEmpty { return subtitle }
         switch binding {
         case .nextInSeries: return localized("你读过的系列，接著读下一本。")
+        case .readBefore: return localized("读过的书，随时再读一次。")
         case .related: return localized("书架上同作者、同系列的书。")
         case .gutenbergLists: return localized("依主题整理的经典名著。")
+        case .lists where binding.showsBundledLists: return localized("依主题整理的经典名著。")
         case .gutenbergShelf(let id) where id == "popular": return localized("最多人下载的经典。")
         default: return nil
         }
@@ -187,7 +190,7 @@ struct HomeRowView: View {
 
     @ViewBuilder
     private var header: some View {
-        let label = HomeRowTitle(title: group.title, subtitle: group.section.displaySubtitle, showsChevron: showAll != nil,
+        let label = HomeRowTitle(title: group.title, subtitle: group.subtitle, showsChevron: showAll != nil,
                                  bandLine: drawsBand ? HomeBandGround.line(for: bandCover).color : nil)
             .padding(.horizontal, DSSpacing.lg)
             // The band's white name on the band's colour when its long press lifts it out.

@@ -19,6 +19,14 @@ enum PremiumFeature: String, CaseIterable, Identifiable, Hashable {
     case readerThemePacks
     case alternateAppIcons
     case launchScreen
+    /// 新增模组: adding a module that is not the app's own — from an address, a file, the
+    /// clipboard, a `yuedu://module` link or a repository (maintainer, 2026-11-15). The official
+    /// modules, the modules already installed and their updates stay free: only the way in is Pro.
+    case moduleImport
+    /// 新增模组: adding a module that is not the app's own — from an address, a file, the
+    /// clipboard, a `yuedu://module` link or a repository (maintainer, 2026-11-15). The official
+    /// modules, the modules already installed and their updates stay free: only the way in is Pro.
+    case moduleImport
 
     var id: String { rawValue }
 
@@ -49,6 +57,8 @@ enum PremiumFeature: String, CaseIterable, Identifiable, Hashable {
         case .readerThemePacks: return "paintpalette"
         case .alternateAppIcons: return "app.badge"
         case .launchScreen: return "app.dashed"
+        case .moduleImport: return "puzzlepiece.extension"
+        case .moduleImport: return "puzzlepiece.extension"
         }
     }
 
@@ -67,6 +77,8 @@ enum PremiumFeature: String, CaseIterable, Identifiable, Hashable {
         case .readerThemePacks: return "外观主题"
         case .alternateAppIcons: return "桌面图标切换"
         case .launchScreen: return "启动图"
+        case .moduleImport: return "新增模组"
+        case .moduleImport: return "新增模组"
         }
     }
 
@@ -84,6 +96,8 @@ enum PremiumFeature: String, CaseIterable, Identifiable, Hashable {
         case .readerThemePacks: return "App 与阅读配色、页面背景，都能自己调"
         case .alternateAppIcons: return "切换预置的桌面图标"
         case .launchScreen: return "换上你自己的开屏画面"
+        case .moduleImport: return "从网址、档案或剪贴簿加入第三方模组"
+        case .moduleImport: return "从网址、档案或剪贴簿加入第三方模组"
         }
     }
 

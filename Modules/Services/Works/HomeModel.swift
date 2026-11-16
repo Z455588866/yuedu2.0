@@ -38,6 +38,8 @@ final class HomeModel: ObservableObject {
         var cardIndex: Int? = nil
         /// The source's own name (`SourceProvider.displayName`): a card's source, over it in 大图卡片.
         var providerName = ""
+        /// What the list holds, in a line (`HomeSectionProviding.rowDescription`).
+        var listDescription: String? = nil
 
         /// What the row loads: its card's list, or its section.
         var loadingSection: HomeSection {
@@ -160,7 +162,8 @@ final class HomeModel: ObservableObject {
                     requested.remove(id)
                     built.append(Row(id: id, section: section, source: provider.instance, sourceName: provider.rowName(for: load),
                                      policy: policy, state: .idle, inputsKey: inputsKey, card: card?.card,
-                                     cardIndex: card?.index, providerName: provider.displayName))
+                                     cardIndex: card?.index, providerName: provider.displayName,
+                                     listDescription: provider.rowDescription(for: load)))
                 }
             }
         }

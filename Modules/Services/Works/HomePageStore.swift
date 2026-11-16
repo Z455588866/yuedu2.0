@@ -102,6 +102,7 @@ final class HomePageStore: ObservableObject {
         // A card's photo goes with its card, its section or its 首页配置, gone since the last
         // launch, or with a 新增栏目 left with 取消; never from a home this build only reads.
         if let home, !isReadOnly {
+            HomeListCardPhotoID.giveListsTheirCardsPhoto(in: home, photos: cardPhotos)
             cardPhotos.removePhotos(keeping: HomeListCardPhotoID.all(in: home))
         }
     }
@@ -120,7 +121,9 @@ final class HomePageStore: ObservableObject {
         if var home {
             // The store's page first: it is made for the language, so there is nothing to follow.
             let restocked = applyStoreDefaultsOnce(to: &home, context: context)
-            if followLanguage(in: &home, context: context) || restocked {
+            // After it: a 预设 it just made is today's page already, which this does not recognise.
+            let genres = applyGenresDefaultsOnce(to: &home, context: context)
+            if followLanguage(in: &home, context: context) || restocked || genres {
                 self.home = home
                 write()
             }
@@ -132,6 +135,7 @@ final class HomePageStore: ObservableObject {
         if appliesDefaultsRhythmOnce, !isReadOnly {
             defaults.set(true, forKey: Self.defaultsRhythmKey)
             defaults.set(true, forKey: Self.defaultsStoreKey)
+            defaults.set(true, forKey: Self.defaultsGenresKey)
         }
         var made = HomeConfigurations(sections: defaultPage.sections)
         made.defaultsLanguages = languages
@@ -388,6 +392,33 @@ final class HomePageStore: ObservableObject {
         home.sections = HomePageDefaults.page(for: context).sections
         home.defaultsLanguages = context.languages
         AppLogger.cache("⟐ 预设 becomes the 2026-11-14 page", context: [
+            "before": "\(before)", "sections": "\(home.sections.count)", "mode": context.mode.rawValue,
+            "language": context.languages.joined(separator: ","),
+        ])
+        return true
+    }
+
+    // MARK: - The 2026-11-15 page
+
+    /// Set once 预设 has been looked at for the 2026-11-15 page with its genres, or made as it.
+    /// Not `defaultsStoreKey`, which installs that ran 2026-11-14's build have already set.
+    static let defaultsGenresKey = "home.defaultsGenres20261115"
+
+    /// An untouched 2026-11-14 page becomes the 2026-11-15 one once (`HomeDefaultsGenresMigration`),
+    /// as `applyStoreDefaultsOnce` does. Returns whether 预设 changed.
+    private func applyGenresDefaultsOnce(to home: inout HomeConfigurations, context: HomePageDefaults.Context) -> Bool {
+        guard appliesDefaultsRhythmOnce, !isReadOnly, !defaults.bool(forKey: Self.defaultsGenresKey) else { return false }
+        defaults.set(true, forKey: Self.defaultsGenresKey)
+        guard !home.defaultsDeleted, HomeDefaultsGenresMigration.recognises(home.sections) else {
+            AppLogger.cache("⟐ 预设 keeps its sections: not the untouched 2026-11-14 page", context: [
+                "sections": "\(home.sections.count)", "defaultsDeleted": "\(home.defaultsDeleted)",
+            ])
+            return false
+        }
+        let before = home.sections.count
+        home.sections = HomePageDefaults.page(for: context).sections
+        home.defaultsLanguages = context.languages
+        AppLogger.cache("⟐ 预设 becomes the 2026-11-15 page", context: [
             "before": "\(before)", "sections": "\(home.sections.count)", "mode": context.mode.rawValue,
             "language": context.languages.joined(separator: ","),
         ])

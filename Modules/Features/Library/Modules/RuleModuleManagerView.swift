@@ -22,6 +22,8 @@ struct RuleModuleManagerView: View {
     @ObservedObject var repositories: RuleModuleRepositoryModel
     @ObservedObject private var availability = PublicLibraryAvailability.shared
     @Environment(\.ruleModuleAddFlow) private var addFlow
+    @AppStorage(ReaderChapterCommentDecorator.enabledKey) private var showsModuleComments = true
+    @ObservedObject private var subscriptions = SubscriptionStore.shared
     /// Once per visit: back from a repository's page, the indexes are not read again.
     @State private var hasLoaded = false
     @State private var pendingUnsubscription: RuleModuleRepositoryModel.Repository?
@@ -67,6 +69,17 @@ struct RuleModuleManagerView: View {
                     .dsSectionFooter()
             }
             .interfaceSectionSurface()
+
+            // Shown once a module has comments to draw: without one the switch does nothing.
+            if library.modules.contains(where: { $0.module.comments != nil }) {
+                Section {
+                    Toggle(localized("在正文显示模组的评论"), isOn: $showsModuleComments)
+                        .accessibilityIdentifier("modules.comments.toggle")
+                } footer: {
+                    Text(localized("读书时把书名与作者送到有评论的模组，把段评、热评和本章说画在正文里。")).dsSectionFooter()
+                }
+                .interfaceSectionSurface()
+            }
         }
         .softScrollEdges()
         .navigationTitle(localized("模组"))
@@ -113,7 +126,18 @@ struct RuleModuleManagerView: View {
     /// (`Technotes/iOS17MenuModalPresentation.md`).
     @ViewBuilder
     private var addControl: some View {
-        if MenuModalPresentationPolicy.requiresDismissalSequencedChooser {
+        if let addFlow, !subscriptions.hasAccess(.moduleImport) {
+            // 阅读Pro's (`PremiumFeature.moduleImport`): the paywall at once, not a menu of
+            // routes that each open it.
+            Button {
+                addFlow.showsPaywall = true
+            } label: {
+                Image(systemName: "lock.doc").accessibilityHidden(true)
+            }
+            .accessibilityLabel(localized("新增模组"))
+            .accessibilityHint(localized("需要 Pro"))
+            .accessibilityIdentifier("modules.add")
+        } else if MenuModalPresentationPolicy.requiresDismissalSequencedChooser {
             Button {
                 addSequence.cancel()
                 showsAddChooser = true

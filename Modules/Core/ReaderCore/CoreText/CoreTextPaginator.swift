@@ -217,8 +217,9 @@ final class CoreTextPaginator: Sendable {
     struct ChapterLayout: Sendable {
         let spineIndex: Int
         @LayoutShared var attributedString: NSAttributedString
-        /// Pre-built CTFramesetter; draw(_ rect:) uses it directly without rebuilding
-        @LayoutShared var framesetter: CTFramesetter
+        /// What laid the chapter out; draw(_ rect:) uses it directly without rebuilding.
+        /// One typesetter for an ordinary chapter, windows for a very long one.
+        let framesetter: CoreTextChapterFramesetter
         /// UTF-16 character range per page (total length == attributedString.length)
         let pageRanges: [CFRange]
         /// Final per-page frames shared by metadata extraction and drawing.
@@ -477,7 +478,7 @@ final class CoreTextPaginator: Sendable {
                 }
             }
 
-            let newFramesetter = CoreTextFramesetterFactory.make(for: updated)
+            let newFramesetter = CoreTextChapterFramesetter(updated)
             // Dark appearance prefers the publication's own dark body fill when it has one;
             // otherwise the light authored fill (or the reader theme) carries over.
             let authoredFillForAppearance: UIColor?
@@ -813,7 +814,10 @@ final class CoreTextPaginator: Sendable {
         }
 
         let sharedAttrStr = LayoutShared(attrStr)
-        let layout = await Task.detached(priority: .userInitiated) {
+        // Detached to leave the caller's actor, so it does not inherit the caller's
+        // cancellation: forward it. A reader closed mid-layout used to keep laying out its
+        // chapter for half a minute (Crashlytics 7d6c4b95).
+        let computation = Task.detached(priority: .userInitiated) {
             Self.computeLayout(spineIndex: spineIndex,
                                attrStr: sharedAttrStr.wrappedValue,
                                imagePage: imagePage,
@@ -826,8 +830,15 @@ final class CoreTextPaginator: Sendable {
                                contentInsets: contentInsets,
                                writingMode: writingMode,
                                bottomJustify: bottomJustify)
-        }.value
-
+        }
+        let layout = await withTaskCancellationHandler {
+            await computation.value
+        } onCancel: {
+            computation.cancel()
+        }
+        // A full pass is partial only when it was cancelled: it stopped at the page it had
+        // reached, and its caller discards it. It must never be served from the cache.
+        guard !layout.isPartial else { return layout }
         storeLayout(layout, for: key)
         return layout
     }
@@ -914,7 +925,7 @@ final class CoreTextPaginator: Sendable {
             return cached
         }
         let sharedAttrStr = LayoutShared(attrStr)
-        return await Task.detached(priority: .userInitiated) {
+        let computation = Task.detached(priority: .userInitiated) {
             Self.computeLayout(spineIndex: spineIndex,
                                attrStr: sharedAttrStr.wrappedValue,
                                imagePage: nil,
@@ -928,7 +939,12 @@ final class CoreTextPaginator: Sendable {
                                writingMode: writingMode,
                                bottomJustify: bottomJustify,
                                maxPages: 1)
-        }.value
+        }
+        return await withTaskCancellationHandler {
+            await computation.value
+        } onCancel: {
+            computation.cancel()
+        }
     }
 
     private func cachedLayout(for key: CacheKey) -> ChapterLayout? {
@@ -955,7 +971,7 @@ final class CoreTextPaginator: Sendable {
 
     // MARK: - Core pagination algorithm (static, runs on any thread)
 
-    private static func computeLayout(
+    static func computeLayout(
         spineIndex: Int,
         attrStr: NSAttributedString,
         imagePage: HTMLAttributedStringBuilder.ImagePage?,
@@ -1030,7 +1046,7 @@ final class CoreTextPaginator: Sendable {
                     executor: Thread.isMainThread ? "main" : "background"
                 )
             ) {
-                CoreTextFramesetterFactory.make(for: attrStr)
+                CoreTextChapterFramesetter(attrStr)
             }
             let pageRect = CGRect(origin: .zero, size: renderSize)
             let imageRect = aspectFitRect(
@@ -1068,7 +1084,7 @@ final class CoreTextPaginator: Sendable {
                 executor: Thread.isMainThread ? "main" : "background"
             )
         ) {
-            CoreTextFramesetterFactory.make(for: attrStr)
+            CoreTextChapterFramesetter(attrStr)
         }
         let pagePath = CGPath(rect: contentPathRect, transform: nil)
 
@@ -1096,8 +1112,15 @@ final class CoreTextPaginator: Sendable {
         var pageFloatAttachments: [Int: [RenderedAttachment]] = [:]
         // 底部對齊 candidates: pages that end only because CoreText ran out of room.
         var columnFilledPages = IndexSet()
+        // Bridged once. `attrStr.string` transcodes the whole chapter into a new Swift String
+        // on every access; reading it once per page made pagination O(characters × pages):
+        // 27.8 s of CPU for one 857,793-character, 984-page chapter (Crashlytics 7d6c4b95).
+        let layoutText = attrStr.string
 
         while currentLocation < attrStr.length {
+            // Cancelled: stop at this page. The result is partial (`currentLocation` is short
+            // of the end), which keeps it out of the cache; the caller discards it.
+            if Task.isCancelled { break }
             if let breakRange = forcedPageBreakRanges.first(where: { $0.location <= currentLocation && currentLocation < $0.location + $0.length }) {
                 currentLocation = breakRange.location + breakRange.length
                 continue
@@ -1167,7 +1190,7 @@ final class CoreTextPaginator: Sendable {
             let proposedEnd = currentLocation + proposedAdvance
             let protectedEnd = CJKTypographyProcessor.protectedLineBreakOffset(
                 proposedEnd,
-                in: attrStr.string,
+                in: layoutText,
                 lowerBound: currentLocation
             )
             var advance = min(remainingLength, max(1, protectedEnd - currentLocation))
@@ -1603,6 +1626,18 @@ final class CoreTextPaginator: Sendable {
     }
 
     static func makeFrame(
+        framesetter: CoreTextChapterFramesetter,
+        range: CFRange,
+        path: CGPath,
+        writingMode: ReaderWritingMode
+    ) -> CTFrame {
+        let attributes = frameAttributes(for: writingMode)
+        let frameAttributes = attributes.isEmpty ? nil : attributes as CFDictionary
+        return framesetter.makeFrame(range: range, path: path, attributes: frameAttributes)
+    }
+
+    /// A frame of text that is not a chapter: a title, a table cell, a preview.
+    static func makeFrame(
         framesetter: CTFramesetter,
         range: CFRange,
         path: CGPath,
@@ -1614,7 +1649,7 @@ final class CoreTextPaginator: Sendable {
     }
 
     static func makePageArtifacts(
-        framesetter: CTFramesetter,
+        framesetter: CoreTextChapterFramesetter,
         pageRanges: [CFRange],
         contentPathRect: CGRect,
         writingMode: ReaderWritingMode,
@@ -2252,7 +2287,7 @@ final class CoreTextPaginator: Sendable {
     /// - Orphan: last line of the previous page is a paragraph's first line → move to next page
     /// - Widow: first line of the next page is a paragraph's last line → also move the previous page's last line to the next page (ensures ≥2 lines)
     private static func applyOrphanControl(
-        framesetter: CTFramesetter,
+        framesetter: CoreTextChapterFramesetter,
         pageRanges: inout [CFRange],
         attrStr: NSAttributedString,
         contentPathRect: CGRect,
@@ -2361,7 +2396,7 @@ final class CoreTextPaginator: Sendable {
         let start = max(0, lineRange.location)
         let end = min(attrStr.length, lineRange.location + lineRange.length)
         guard end > start else { return true }
-        let ns = attrStr.string as NSString
+        let ns = CFAttributedStringGetString(attrStr as CFAttributedString) as NSString
         var idx = start
         while idx < end {
             if idx >= imageRunRange.location, idx < imageRunRange.location + imageRunRange.length {
@@ -3275,7 +3310,8 @@ final class CoreTextPaginator: Sendable {
         let mergedRange = mergeRanges(ranges)
         let mergedText: String
         if let mergedRange, mergedRange.location < attrStr.length {
-            mergedText = (attrStr.string as NSString).substring(with: mergedRange)
+            mergedText = (CFAttributedStringGetString(attrStr as CFAttributedString) as NSString)
+                .substring(with: mergedRange)
         } else {
             mergedText = ""
         }

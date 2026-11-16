@@ -83,8 +83,8 @@ struct WorkReviewsPage: View {
     }
 }
 
-private extension View {
-    /// A row of the page: no separator, no row colour of its own over the page's background.
+extension View {
+    /// A row of 读者评论 and of 本章说: no separator, no row colour of its own over the page's background.
     func reviewRow() -> some View {
         listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
