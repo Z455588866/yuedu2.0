@@ -11,7 +11,7 @@ enum ExploreNavigationRoute: Hashable {
     case searchInSource(sourceURL: String)
     /// 书源管理, pushed on every version.
     case sourceManager
-    /// 聚合设置, from 探索's ••• (中继资料语言偏好推荐, 参与聚合的来源; Phase 5 plan, decision 36).
+    /// 聚合设定, from 探索's ••• (中继资料语言偏好推荐, 参与聚合的来源; Phase 5 plan, decision 36).
     case aggregationSettings
     /// RSS 订阅, pushed: 资源库's row and 订阅的最新文章's 查看全部 (decision 30).
     case subscriptions
@@ -31,11 +31,7 @@ enum ExploreNavigationRoute: Hashable {
     case moduleStore(ModuleStoreRoute)
     /// 所有类型, from 探索's 分类: every list with a store.
     case genres
-    /// A module list's own store (`RuleModule.Entry.store`): a genre's, from its card.
-    case moduleStore(ModuleStoreRoute)
-    /// 所有类型, from 探索's 分类: every list with a store.
-    case genres
-    /// 模组 (M6), from 设置 → 资源: 官方模组, the repositories and 汇入的模组.
+    /// 模组 (M6), from 设定 → 资源: 官方模组, the repositories and 汇入的模组.
     case moduleManager
     /// 官方模组 or 汇入的模组, from 模组.
     case moduleGroup(RuleModuleGroup)
@@ -56,8 +52,6 @@ enum ExploreNavigationRoute: Hashable {
              (.subscriptions, .subscriptions), (.aiRecommendations, .aiRecommendations),
              (.moduleManager, .moduleManager), (.genres, .genres):
             return true
-        case (.moduleStore(let lhsRoute), .moduleStore(let rhsRoute)):
-            return lhsRoute == rhsRoute
         case (.moduleStore(let lhsRoute), .moduleStore(let rhsRoute)):
             return lhsRoute == rhsRoute
         case (.moduleGroup(let lhsGroup), .moduleGroup(let rhsGroup)):
@@ -119,11 +113,6 @@ enum ExploreNavigationRoute: Hashable {
         case .moduleRepository(let url):
             hasher.combine(17)
             hasher.combine(url)
-        case .moduleStore(let route):
-            hasher.combine(18)
-            hasher.combine(route)
-        case .genres:
-            hasher.combine(19)
         case .moduleStore(let route):
             hasher.combine(18)
             hasher.combine(route)

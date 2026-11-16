@@ -6,7 +6,7 @@ enum RuleModuleGroup: Hashable {
 }
 
 extension EnvironmentValues {
-    /// 设置's one 新增模组 flow, so 模组, pushed from it, adds through it: its sheet and file
+    /// 设定's one 新增模组 flow, so 模组, pushed from it, adds through it: its sheet and file
     /// importer are presented from the root, never a second pair from the pushed page (SwiftUI
     /// presents only one of two file importers on a view).
     @Entry var ruleModuleAddFlow: RuleModuleAddFlow?
@@ -56,6 +56,15 @@ struct RuleModuleManagerView: View {
                         Button(localized("取消订阅"), role: .destructive) { pendingUnsubscription = repository }
                     }
                     .accessibilityIdentifier("modules.repository.\(repository.id.absoluteString)")
+                    .confirmationDialog(String(format: localized("取消订阅「%@」？"), repository.subscription.name),
+                                        isPresented: Binding(get: { pendingUnsubscription?.id == repository.id },
+                                                             set: { if !$0 { pendingUnsubscription = nil } }),
+                                        titleVisibility: .visible) {
+                        Button(localized("取消订阅"), role: .destructive) { repositories.unsubscribe(repository.id) }
+                        Button(localized("取消"), role: .cancel) {}
+                    } message: {
+                        Text(localized("已安装的模组会留下。"))
+                    }
                 }
 
                 NavigationLink(value: ExploreNavigationRoute.moduleGroup(.imported)) {
@@ -90,14 +99,6 @@ struct RuleModuleManagerView: View {
             if addFlow != nil {
                 ToolbarItem(placement: .topBarTrailing) { addControl }
             }
-        }
-        .confirmationDialog(pendingUnsubscription.map { String(format: localized("取消订阅「%@」？"), $0.subscription.name) } ?? "",
-                            isPresented: Binding(get: { pendingUnsubscription != nil }, set: { if !$0 { pendingUnsubscription = nil } }),
-                            titleVisibility: .visible, presenting: pendingUnsubscription) { repository in
-            Button(localized("取消订阅"), role: .destructive) { repositories.unsubscribe(repository.id) }
-            Button(localized("取消"), role: .cancel) {}
-        } message: { _ in
-            Text(localized("已安装的模组会留下。"))
         }
         .alert(localized("操作失败"), isPresented: Binding(get: { repositories.message != nil },
                                                           set: { if !$0 { repositories.message = nil } })) {
@@ -135,7 +136,7 @@ struct RuleModuleManagerView: View {
                 Image(systemName: "lock.doc").accessibilityHidden(true)
             }
             .accessibilityLabel(localized("新增模组"))
-            .accessibilityHint(localized("需要 Pro"))
+            .accessibilityHint(localized("需要会员"))
             .accessibilityIdentifier("modules.add")
         } else if MenuModalPresentationPolicy.requiresDismissalSequencedChooser {
             Button {

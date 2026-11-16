@@ -243,28 +243,6 @@ struct RuleModuleClient: Sendable {
                               charset: request.charset, in: module)
     }
 
-    /// A request as the module wrote it, sent: its templates filled with `values`, then its
-    /// `script` (a module that declares `javascript`), then `send`, which holds whatever address
-    /// came of both to the module's hosts. `ofRecord`: `{{url}}` at the start of the address is a
-    /// record's own address and goes in as it is; anywhere else a value is percent-encoded.
-    func perform(_ request: RuleModule.Request, values: [String: String], ofRecord: Bool = false,
-                 in module: RuleModule) async throws -> (text: String, baseURL: String) {
-        let leading = ofRecord && request.url.trimmingCharacters(in: .whitespaces).hasPrefix("{{url}}")
-        let bodyEncoding: TemplateEncoding = request.bodyEncoding == RuleModule.BodyEncoding.json.rawValue ? .json : .percent
-        var filled = RuleModuleScriptRuntime.Request(
-            url: Self.fill(request.url, values, encode: !leading), method: (request.method ?? "GET").uppercased(),
-            body: request.body.map { Self.fill($0, values, encoding: bodyEncoding) },
-            headers: (request.headers ?? [:]).mapValues { Self.fill($0, values, encode: false) })
-        if let script = request.script, let scripts = module.scripts {
-            filled = try scripts.rewrite(filled, by: script, values: values)
-            // The validator checked the method as written; the script's own is held to the same two.
-            guard filled.method == "GET" || filled.method == "POST" else {
-                throw SourceFailure(kind: .parse, underlying: RuleModuleScriptError.requestScriptFailed(module: module.id))
-            }
-        }
-        return try await send(filled.url, method: filled.method, body: filled.body, headers: filled.headers,
-                              charset: request.charset, in: module)
-    }
 
     /// One request of the module's: `safeURL` and its hosts on the address and every redirect,
     /// under its `rateLimit`; the reply decoded as text.

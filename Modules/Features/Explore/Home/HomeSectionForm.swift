@@ -1,10 +1,10 @@
 import SwiftUI
 
-// Unified library 5d-5: one section's form (design §13.3, Rex's 「设置资料来源」; Phase 5 plan,
+// Unified library 5d-5: one section's form (design §13.3, Rex's 「设定资料来源」; Phase 5 plan,
 // decision 23), for 新增栏目 and for a section already on the home, so there is one editor:
 // - 新增栏目 asks for a layout first, then shows this form (Rex's order), in a sheet; 新增
 //   puts the section at the end of the 首页配置 shown, 取消 leaves it as it was.
-// - A section's card in 编辑首页, and 设置 in its name's long press, push the same form.
+// - A section's card in 编辑首页, and 设定 in its name's long press, push the same form.
 // - On top, a preview: one real page of the section in its layout, loaded as the home loads
 //   it. Then 标题 and 副标题 (empty follows what it shows), 呈现方式, 资料来源 (opens 选择内容来源),
 //   and for a section on the home, 在首页显示 and 删除.
@@ -366,7 +366,7 @@ struct HomeSectionForm: View {
             } header: {
                 Text(localized("显示在最新"))
             } footer: {
-                Text(localized("每个首页配置的最新都用这份设置。"))
+                Text(localized("每个首页配置的最新都用这份设定。"))
                     .dsSectionFooter()
             }
             .interfaceSectionSurface()
@@ -601,9 +601,9 @@ struct HomeSectionForm: View {
         .accessibilityIdentifier("homeSection.source")
     }
 
-    /// 「来源 › 子项目」, as Rex's row reads; 未设置 before 选择内容来源.
+    /// 「来源 › 子项目」, as Rex's row reads; 未设定 before 选择内容来源.
     private var sourceDescription: String {
-        guard let binding = draft.binding, let owner = binding.contentOwner else { return localized("未设置") }
+        guard let binding = draft.binding, let owner = binding.contentOwner else { return localized("未设定") }
         // A module's list names itself; an untitled one (the defaults) has no title to fall to.
         let item = HomeSection(layout: draft.layout, binding: binding).displayTitle(sourceName: moduleEntry?.title ?? "")
         return [owner.name(sources: sources, connections: connections, modules: modules), item.isEmpty ? draft.title : item]
@@ -676,7 +676,7 @@ struct HomeSectionForm: View {
 
     private func content(of group: HomeSectionGroup) -> HomeRowContent? {
         guard case .loaded(let entries) = group.state else { return nil }
-        return HomeRowContent(entries: entries, store: store, withLists: group.section.layout.style == .chart)
+        return HomeRowContent(entries: entries, store: store, withLists: group.section.layout.style.drawsListBooks)
     }
 }
 
@@ -859,10 +859,8 @@ extension RuleModuleLibrary {
 
 // MARK: - A module list's parameters
 
-/// A module list's parameters, written by name (Phase 6f), the section's or a card's: a choice
-/// is a `Picker`, a count a `Stepper`, typed text is kept once the reader is done with it. A
-/// choice that follows 中继资料语言偏好推荐 offers that first, and picking it again clears the
-/// reader's own.
+/// A module list's parameters, written by name (Phase 6f), the section's or a card's
+/// (`RuleModuleParameterRows`): only those the values shown make visible (`belongTo`, 3.0.2).
 private struct HomeModuleParameters: View {
     let entry: RuleModule.Entry
     let values: [String: String]
@@ -870,48 +868,14 @@ private struct HomeModuleParameters: View {
     let set: (String, String?) -> Void
     @ObservedObject private var aggregation = AggregationSettingsStore.shared
 
-    /// The picker's tag for following 中继资料语言偏好推荐: no option's value.
-    private static let followsLanguageTag = "\u{1F}followsLanguage"
-
     var body: some View {
         Section {
             RuleModuleParameterRows(params: entry.shownParams(in: values, language: aggregation.readingLanguages.language),
                                     values: values, identifier: "homeSection.parameter", set: set)
-
         } header: {
             Text(localized("筛选"))
         }
         .interfaceSectionSurface()
-    }
-}
-
-/// A module list's `input` parameter. Kept on submit or when the field loses focus, never on
-/// each keystroke: every value written reloads the preview with a real request.
-private struct HomeModuleTextParameter: View {
-    let title: String
-    let committed: String
-    let commit: (String?) -> Void
-    @State private var text = ""
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        LabeledContent(title) {
-            TextField(title, text: $text)
-                .multilineTextAlignment(.trailing)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.done)
-                .focused($focused)
-                .onSubmit(save)
-        }
-        .onAppear { text = committed }
-        .onChange(of: committed) { _, value in if !focused { text = value } }
-        .onChange(of: focused) { _, isFocused in if !isFocused { save() } }
-    }
-
-    private func save() {
-        guard text != committed else { return }
-        commit(text.isEmpty ? nil : text)
     }
 }
 

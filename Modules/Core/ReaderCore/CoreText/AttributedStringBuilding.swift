@@ -23,6 +23,8 @@ struct AttributedChapterBuildResult {
     let darkPageBackgroundColor: UIColor?
     let anchorOffsets: [String: Int]
     let revision: ContentRevision
+    /// The chapter asks to sit in the middle of its page (`PublicationPageAlignment`).
+    let centresSinglePage: Bool
 
     init(
         attributedString: NSAttributedString,
@@ -31,7 +33,8 @@ struct AttributedChapterBuildResult {
         pageBackgroundColor: UIColor? = nil,
         darkPageBackgroundColor: UIColor? = nil,
         anchorOffsets: [String: Int],
-        revision: ContentRevision = ContentRevision()
+        revision: ContentRevision = ContentRevision(),
+        centresSinglePage: Bool = false
     ) {
         self.attributedString = attributedString
         self.imagePage = imagePage
@@ -40,6 +43,7 @@ struct AttributedChapterBuildResult {
         self.darkPageBackgroundColor = darkPageBackgroundColor
         self.anchorOffsets = anchorOffsets
         self.revision = revision
+        self.centresSinglePage = centresSinglePage
     }
 }
 
@@ -83,15 +87,11 @@ protocol AttributedStringBuilding: Sendable {
     /// indexing five chapters of it and finding two speakers. Returning nil means this
     /// chapter's text is not on the device; the caller skips it rather than fetching.
     func chapterPlainText(at index: Int) async -> String?
-    /// `applyingReplaceRules: false` is the text before 替換規則, for 全書搜尋's switch.
+    /// `applyingReplaceRules: false` is the text before 替换规则, for 全书搜寻's switch.
     /// Builders whose text no rule ever touches (EPUB, Node) return the same either way.
     func localChapterText(at index: Int, applyingReplaceRules: Bool) async -> AILocalChapterText
-    /// Whether 替換規則 change this book's text on screen, so a search can offer to skip them.
+    /// Whether 替换规则 change this book's text on screen, so a search can offer to skip them.
     var appliesReplaceRules: Bool { get }
-    /// The width the builder lays its chapters out in, before the reader's content insets: what
-    /// a card added to a chapter is drawn to (`ReaderChapterDecorationSource`). Nil for a builder
-    /// nothing is added to.
-    var decorationRenderWidth: CGFloat? { get }
     /// The width the builder lays its chapters out in, before the reader's content insets: what
     /// a card added to a chapter is drawn to (`ReaderChapterDecorationSource`). Nil for a builder
     /// nothing is added to.
@@ -106,7 +106,6 @@ extension AttributedStringBuilding {
         .init(text: nil, status: .unsupported)
     }
     var appliesReplaceRules: Bool { false }
-    var decorationRenderWidth: CGFloat? { nil }
     var decorationRenderWidth: CGFloat? { nil }
 
     /// The text as the reader shows it, rules applied.

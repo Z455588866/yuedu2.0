@@ -1,5 +1,4 @@
 import Combine
-import Combine
 import SwiftUI
 import UIKit
 
@@ -26,28 +25,12 @@ enum RuleModuleLinkPresenter {
             }
             return
         }
-        // A link can be what launches the app, before the entitlement has been read: a member
-        // would be shown the paywall. The read's own signal is awaited, then the link is taken.
-        let subscriptions = SubscriptionStore.shared
-        guard subscriptions.hasResolvedEntitlements else {
-            Task {
-                for await isResolved in subscriptions.$hasResolvedEntitlements.values where isResolved { break }
-                present(address)
-            }
-            return
-        }
         guard let top = BookSourceFormLoginView.topViewController() else {
             AppLogger.error("Module link: nowhere to present", context: ["address": address.absoluteString], level: .warning)
             return
         }
         guard RuleModuleAddAccess.isGranted() else {
-            top.present(UIHostingController(rootView: PaywallView(highlightedFeature: .moduleImport)
-                .environmentObject(SubscriptionStore.shared)), animated: true)
-            return
-        }
-        guard RuleModuleAddAccess.isGranted() else {
-            top.present(UIHostingController(rootView: PaywallView(highlightedFeature: .moduleImport)
-                .environmentObject(SubscriptionStore.shared)), animated: true)
+            top.present(UIHostingController(rootView: CardKeyUnlockView()), animated: true)
             return
         }
         guard let address = disclaimer.pass(address) else {

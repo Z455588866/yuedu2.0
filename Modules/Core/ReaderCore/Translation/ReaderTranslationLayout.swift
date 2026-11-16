@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import UIKit
 
-/// How the reader shows 整章翻譯. Part of `ReaderRenderSettings`, so switching it re-runs layout.
+/// How the reader shows 整章翻译. Part of `ReaderRenderSettings`, so switching it re-runs layout.
 struct ReaderTranslationPresentation: Equatable, Codable, Sendable {
     enum Mode: String, Codable, CaseIterable, Identifiable, Sendable {
         case off, bilingual, translationOnly
@@ -20,7 +20,7 @@ struct ReaderTranslationPresentation: Equatable, Codable, Sendable {
 ///
 /// The translator and the layout both cut the chapter with this, so a translation is always
 /// found again by the text it was made from — not by an offset that a font change, a
-/// replace rule or 繁簡轉換 would move.
+/// replace rule or 繁简转换 would move.
 enum ReaderTranslationText {
     struct Paragraph: Equatable, Sendable {
         /// The paragraph's text, without its line break.
@@ -90,9 +90,6 @@ struct ReaderTranslationLayout: Equatable, Sendable {
         /// The translation itself, inside `inserted`; empty for a block that adds only
         /// decorations.
         let translation: NSRange
-        /// The translation stands in place of `source` (译文 only); otherwise the block is added
-        /// beside the book's own text, which stays on screen.
-        var replacesSource = false
         /// The translation stands in place of `source` (译文 only); otherwise the block is added
         /// beside the book's own text, which stays on screen.
         var replacesSource = false
@@ -209,8 +206,6 @@ struct ReaderTranslationLayout: Equatable, Sendable {
             case .bilingual:
                 copy(upTo: NSMaxRange(paragraph.range))
                 decorate([decoration?.trailing].compactMap { $0 }, of: paragraph.range, anchor: NSMaxRange(paragraph.range) - 1)
-                copy(upTo: NSMaxRange(paragraph.range))
-                decorate([decoration?.trailing].compactMap { $0 }, of: paragraph.range, anchor: NSMaxRange(paragraph.range) - 1)
                 if let terminator = paragraph.terminator {
                     copy(upTo: NSMaxRange(terminator))
                     let start = display.length
@@ -280,13 +275,13 @@ struct ReaderTranslationLayout: Equatable, Sendable {
 
     private struct Look {
         let attributes: [NSAttributedString.Key: Any]
-        /// The 對話氣泡 the paragraph is drawn in; its translation gets a bubble of its own.
+        /// The 对话气泡 the paragraph is drawn in; its translation gets a bubble of its own.
         let bubble: ReaderDialogueBubbleMark?
     }
 
     /// What a paragraph's translation looks like: the paragraph's main text — the style
     /// covering most of its visible characters, not its first character, which may be a bold
-    /// lead-in (`<b>周明瑞：</b>…`) or a quote mark 對話氣泡 has hidden — as the book set it:
+    /// lead-in (`<b>周明瑞：</b>…`) or a quote mark 对话气泡 has hidden — as the book set it:
     /// a regex highlight is the reader's own decoration, laid over the laid-out text again on
     /// every appearance change.
     ///
@@ -345,7 +340,7 @@ struct ReaderTranslationLayout: Equatable, Sendable {
     }
 
     /// Whether text with these attributes shows on the page as itself. Clear text does not:
-    /// the quote marks 對話氣泡 hides in place, a designed title's placeholder characters —
+    /// the quote marks 对话气泡 hides in place, a designed title's placeholder characters —
     /// unless it is outlined, drawn by its stroke alone.
     private static func isVisible(_ attributes: [NSAttributedString.Key: Any]) -> Bool {
         guard attributes[ChapterTitleAttributedBuilder.designRenderPlanAttribute] == nil else { return false }
@@ -456,8 +451,6 @@ struct ReaderTranslationLayout: Equatable, Sendable {
         }
     }
 
-    /// The block a position with a `translationOffset` is inside: the one standing in place of
-    /// the paragraph the offset is in, else the one added at that anchor.
     /// The block a position with a `translationOffset` is inside: the one standing in place of
     /// the paragraph the offset is in, else the one added at that anchor.
     private func block(anchoredAt offset: Int) -> Block? {

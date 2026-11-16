@@ -17,29 +17,7 @@ extension View {
     /// The paywall a locked 新增模组 opens, on the module group.
     func moduleImportPaywall(isPresented: Binding<Bool>) -> some View {
         sheet(isPresented: isPresented) {
-            PaywallView(highlightedFeature: .moduleImport)
-                .environmentObject(SubscriptionStore.shared)
-        }
-    }
-}
-
-/// Whether the reader may add a module that is not the app's own: 阅读Pro's
-/// (`PremiumFeature.moduleImport`). Every way in asks here — 新增模组's three routes, a
-/// `yuedu://module` link, a repository's row and its 选择 — so none is a way round the others.
-/// An update of an installed module does not ask.
-@MainActor
-enum RuleModuleAddAccess {
-    static func isGranted() -> Bool {
-        SubscriptionStore.shared.hasAccess(.moduleImport)
-    }
-}
-
-extension View {
-    /// The paywall a locked 新增模组 opens, on the module group.
-    func moduleImportPaywall(isPresented: Binding<Bool>) -> some View {
-        sheet(isPresented: isPresented) {
-            PaywallView(highlightedFeature: .moduleImport)
-                .environmentObject(SubscriptionStore.shared)
+            CardKeyUnlockView()
         }
     }
 }
@@ -65,13 +43,10 @@ enum RuleModuleAddRoute: CaseIterable, Hashable {
     }
 }
 
-/// 新增模组, from 设置's 模组 (its toolbar; 资源库's ••• and empty card until 2026-10-27). The
+/// 新增模组, from 设定's 模组 (its toolbar; 资源库's ••• and empty card until 2026-10-27). The
 /// source disclaimer comes first, as for a 来源配置 (`SourceDisclaimerGate`). The file picker is
 /// presented from the page itself, never from a sheet: on iOS 17 a sheet cannot present it
 /// (`BookSourceImportPresentationPolicy`).
-///
-/// 阅读Pro's (`PremiumFeature.moduleImport`): without it every route opens the paywall, before
-/// the disclaimer.
 ///
 /// 阅读Pro's (`PremiumFeature.moduleImport`): without it every route opens the paywall, before
 /// the disclaimer.
@@ -83,17 +58,13 @@ final class RuleModuleAddFlow: ObservableObject {
     @Published private(set) var asksForAddress = false
     /// The reader has no Pro: the paywall, in place of the route.
     @Published var showsPaywall = false
-    /// The reader has no Pro: the paywall, in place of the route.
-    @Published var showsPaywall = false
     @Published private var disclaimer = SourceDisclaimerGate<RuleModuleAddRoute>()
 
     let model: RuleModuleImportModel
     private let mayAdd: @MainActor () -> Bool
-    private let mayAdd: @MainActor () -> Bool
 
     init(model: RuleModuleImportModel? = nil, mayAdd: @escaping @MainActor () -> Bool = RuleModuleAddAccess.isGranted) {
         self.model = model ?? RuleModuleImportModel()
-        self.mayAdd = mayAdd
         self.mayAdd = mayAdd
     }
 
@@ -106,10 +77,6 @@ final class RuleModuleAddFlow: ObservableObject {
 
     /// Opens a route; a menu's choice reaches here only once the menu or its chooser has gone.
     func begin(_ route: RuleModuleAddRoute, clipboard: () -> String? = { UIPasteboard.general.string }) {
-        guard mayAdd() else {
-            showsPaywall = true
-            return
-        }
         guard mayAdd() else {
             showsPaywall = true
             return
@@ -160,10 +127,9 @@ private struct RuleModuleAddFlowModifier: ViewModifier {
             .sheet(isPresented: $flow.showsSheet) {
                 RuleModuleImportSheet(model: flow.model, title: localized("新增模组"), asksForAddress: flow.asksForAddress)
             }
-            .copiedFileImporter(isPresented: $flow.showsFileImporter, allowedContentTypes: RuleModuleAddFlow.contentTypes) {
+            .fileImporter(isPresented: $flow.showsFileImporter, allowedContentTypes: RuleModuleAddFlow.contentTypes) {
                 flow.picked($0)
             }
-            .moduleImportPaywall(isPresented: $flow.showsPaywall)
             .moduleImportPaywall(isPresented: $flow.showsPaywall)
             .fullScreenCover(isPresented: $flow.showsDisclaimer, onDismiss: flow.afterDisclaimerDismissal) {
                 SourceDisclaimerView { flow.acceptDisclaimer() }

@@ -416,9 +416,6 @@ enum HomePageDefaults {
         func lists(_ cards: [HomeListCard], _ layout: HomeSectionLayout) -> HomeSection {
             HomeSection(id: makeID(), layout: layout, binding: .lists(cards))
         }
-        func lists(_ cards: [HomeListCard], _ layout: HomeSectionLayout) -> HomeSection {
-            HomeSection(id: makeID(), layout: layout, binding: .lists(cards))
-        }
         // 精简阅读卡片 since 5d-3c (Phase 5 plan, decision 20); 大型阅读卡片 in 5d-3.
         let continueReading = HomeSection(id: makeID(), layout: .compactReadingCard, binding: .continueReading)
         // Under 继续阅读 (decision 25); empty, it takes no room.

@@ -4,7 +4,7 @@ import SwiftUI
 /// across every source — Emby's model under Apple Books' covers (Phase 5 plan, settled
 /// decision 11). Its one ••• (decision 36, 2026-10-13, which took 范围 away) holds every other
 /// way in but 首页配置's (5d-4, decision 22), a button of its own since 2026-10-22: 编辑首页,
-/// 聚合设置, and the browser (5d-1, settled
+/// 聚合设定, and the browser (5d-1, settled
 /// decision 12, which took 我的书库 off the home). 古腾堡 and 青空文库 have no page of shelves
 /// since 2026-10-22: their lists are rows here, and 资源库 says what they offer. There is no
 /// catalog entry at the top (decision 20's, removed 2026-10-11 by the maintainer): a reader adds the sections
@@ -66,23 +66,10 @@ private struct ExploreHomeRoot: View {
     /// Set as the home is edited or done, until the reader drags the page: the page keeps to
     /// its end, where 编辑首页 and 完成 are, while the other mode lays out.
     @State private var followsEnd = false
-    /// A cold launch restores the scroll offset iOS kept when the app was quit. Every section
-    /// is laid out afresh then, and on iOS 27 the lazy stack can draw no row at that old
-    /// offset — the home stays blank but for 编辑首页 (see the note on the anchor below).
-    /// Anchor once, after the first sync has filled the rows; later scrolls are never undone.
-    @State private var didAnchorOnLaunch = false
     /// The safe area under the page: the tab bar's, or the ＋'s bar while the home is edited.
     @State private var bottomInset: CGFloat = 0
     /// The page's width, which each section keeps in its card while the home is edited.
     @State private var pageWidth: CGFloat = 0
-    /// The 顶部轮播图's height, and whether it is still under the bar: the bar's 探索 and
-    /// buttons are white on its colour (maintainer, 2026-10-27).
-    @State private var carouselHeight: CGFloat = 0
-    @State private var barIsOverCarousel = true
-    /// The 轮播图 draws its band, as its row reports it (`HomeCarouselBandKey`).
-    @State private var carouselDrawsBand = false
-    /// 选择轮播数据, from 编辑首页's header or the 轮播图's long press.
-    @State private var choosesCarousel = false
 
     private struct BrowserPresentation: Identifiable {
         let id = UUID()
@@ -112,7 +99,7 @@ private struct ExploreHomeRoot: View {
                                  languages: aggregation.readingLanguages.languages)
     }
 
-    /// The sections drawn, in the reader's languages' order (聚合设置, 5d-3d). Built again on each
+    /// The sections drawn, in the reader's languages' order (聚合设定, 5d-3d). Built again on each
     /// read, several per body: a span, so a main-thread stall during it is named.
     private var groups: [HomeSectionGroup] {
         SourcePerfTrace.span("home.groups", "rows=\(model.rows.count)", thresholdMs: 16) {
@@ -122,37 +109,15 @@ private struct ExploreHomeRoot: View {
         }
     }
 
-    /// The 顶部轮播图's section: the page's first band (`HomePage.carouselSection`); before the
-    /// page's first read saves it, the first the home draws.
-    private var carouselID: UUID? {
-        pageStore.page.map { $0.carouselSection?.id }
-            ?? groups.lazy.map(\.section).first { $0.layout == .band && $0.isEditable }?.id
-    }
-
-    /// The 顶部轮播图 as the home draws it: nil while it is hidden or has nothing to show.
-    private var carouselGroup: HomeSectionGroup? {
-        guard let carouselID else { return nil }
-        return groups.first { $0.section.id == carouselID && !$0.isSettledEmpty }
-    }
-
-    /// The bar is over the 轮播图's band: its colour, not the page's under a carousel drawn
-    /// without one.
-    private var barIsOverColor: Bool {
-        !isEditing && barIsOverCarousel && carouselGroup != nil && carouselDrawsBand
-    }
-
     /// The home's sections, each one view in and out of 编辑首页 (`HomeSectionSlot`): one list
     /// in both, the sections drawn and every section 编辑首页 lists, so the morph changes no
-    /// section's place in it, and its cards the home's books, so it changes no row either. The
-    /// 顶部轮播图 is none of them: it is drawn above them, and 编辑首页's header sets it.
+    /// section's place in it, and its cards the home's books, so it changes no row either.
     private var sectionEntries: [HomeSectionEntry] {
         let drawn = groups
         let home = Dictionary(drawn.map { ($0.section.id, $0) }, uniquingKeysWith: { first, _ in first })
         let editable = pageStore.page?.editableSections.map(\.id) ?? []
-        let carousel = carouselID
         // The page before its first read saves it: what the home draws.
         return (pageStore.page?.sections ?? drawn.map(\.section)).compactMap { section in
-            guard section.id != carousel else { return nil }
             let editableIndex = editable.firstIndex(of: section.id)
             guard home[section.id] != nil || editableIndex != nil else { return nil }
             return HomeSectionEntry(section: section, homeGroup: home[section.id], editableIndex: editableIndex)
@@ -172,17 +137,8 @@ private struct ExploreHomeRoot: View {
     /// Every section is settled with nothing in it, so the home would be blank: a China
     /// storefront with no source and nothing read yet, a source no section draws from, or a
     /// 首页配置 with no section shown.
-    ///
-    /// `allSatisfy` on an empty array is vacuously true. Before the first sync has built any
-    /// row (or when a cold launch's sync is cancelled and restarted while the source library
-    /// is read), `groups` is empty and that used to put the full-screen "探索还没有内容"
-    /// over the whole page — a cold launch looked blank but for 编辑首页 (reported again
-    /// after build 4, where only the write path had been fixed). Only a ready home that
-    /// genuinely has no section is an empty state; a pending sync must not cover the page.
     private var showsNothing: Bool {
-        let drawn = groups
-        guard !drawn.isEmpty else { return model.isReady && hasNoSections }
-        return drawn.allSatisfy(\.isSettledEmpty)
+        groups.allSatisfy(\.isSettledEmpty)
     }
 
     /// The selected 首页配置 shows no section at all: none left, or every one hidden.
@@ -271,46 +227,6 @@ private struct ExploreHomeRoot: View {
 
     // MARK: 全部
 
-    /// Shown only when the home cannot be written. A read-only file or a failed write used to
-    /// look like a successful edit and silently reverted on the next launch; the reader now
-    /// sees why, and can rebuild (keeping the old file aside) or retry the same save.
-    @ViewBuilder
-    private var saveIssueBanner: some View {
-        if let issue = pageStore.saveIssue {
-            VStack(alignment: .leading, spacing: DSSpacing.sm) {
-                Label {
-                    Text(localized("探索页编辑无法保存"))
-                        .font(DSFont.subheadline)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(DSColor.warning)
-                }
-                Text(localized("探索页设置暂时无法写入，本次编辑不会被保存。原文件会保留备份。"))
-                    .font(DSFont.footnote)
-                    .foregroundStyle(DSColor.textSecondary)
-                Button {
-                    if issue == .writeFailed {
-                        pageStore.retrySave()
-                    } else {
-                        pageStore.recoverFromReadOnly()
-                    }
-                } label: {
-                    Text(localized(issue == .writeFailed ? "重试保存" : "重建首页"))
-                        .font(DSFont.subheadline)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .accessibilityIdentifier(issue == .writeFailed ? "home.saveIssue.retry" : "home.saveIssue.rebuild")
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(DSSpacing.lg)
-            .interfaceCardSurface(in: RoundedRectangle(cornerRadius: DSRadius.lg, style: .continuous))
-            .padding(.horizontal, DSSpacing.lg)
-            .padding(.top, DSSpacing.md)
-            .accessibilityIdentifier("home.saveIssue")
-        }
-    }
-
     private var home: some View {
         ScrollViewReader { proxy in
         ScrollView {
@@ -318,7 +234,6 @@ private struct ExploreHomeRoot: View {
             // home or only the editor gives it room.
             VStack(alignment: .leading, spacing: 0) {
                 Color.clear.frame(height: 0).id(Self.top)
-                saveIssueBanner
                 top
                 VStack(alignment: .leading, spacing: 0) {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -392,18 +307,6 @@ private struct ExploreHomeRoot: View {
                 proxy.scrollTo(Self.top, anchor: .top)
             }
         }
-        // A cold launch restores the scroll offset iOS kept when the app was quit. On iOS 27
-        // the lazy stack then drew no row at that deep offset, every section having been
-        // rebuilt, and the home stayed blank but for 编辑首页 (see the note above). The anchor
-        // above only runs on a change of the selected 首页配置; a relaunch is not a change.
-        // Anchor once, after the first sync has built the rows, so the stack lays out from its
-        // top. A later scroll is never undone.
-        .onChange(of: model.isReady) { _, ready in
-            guard ready, !didAnchorOnLaunch else { return }
-            didAnchorOnLaunch = true
-            followsEnd = false
-            proxy.scrollTo(Self.top, anchor: .top)
-        }
         }
         .overlay {
             if !model.isReady {
@@ -442,53 +345,19 @@ private struct ExploreHomeRoot: View {
         .background(PageBackgroundView(scope: .explore, base: DSColor.background).ignoresSafeArea())
         .pageBackgroundToolbar(for: .explore)
         // While the home is edited the bar stays, for its 完成 (maintainer, 2026-10-17).
-        .rootTabTitle(localized("探索"), onScroll: isEditing ? .fadesTitle : .minimizesBar, overColor: barIsOverColor)
-        .navigationDestination(isPresented: $choosesCarousel) { carouselPicker }
+        .rootTabTitle(localized("探索"), onScroll: isEditing ? .fadesTitle : .minimizesBar)
         .animation(reduceMotion ? nil : DSAnimation.standard, value: groups.map(\.id))
     }
 
-    // MARK: 顶部轮播图
+    // MARK: 编辑首页的顶部
 
-    /// The 顶部轮播图 at the top of the home, from edge to edge, its colour up behind the bars
-    /// (maintainer, 2026-10-27); 编辑首页's header in its place while the home is edited.
+    /// 编辑首页's header, at the top of the home while it is edited.
     @ViewBuilder
     private var top: some View {
         if isEditing {
-            HomeEditorHeader(openConfigurations: { path.append(HomeEditRoute.configurations) },
-                             chooseCarousel: { choosesCarousel = true })
-                .transition(.opacity)
-        } else if let carouselGroup {
-            HomeRowHost(group: carouselGroup, store: store, aozoraIndex: aozora.catalog, model: model, isEditable: true,
-                        push: push, openSettings: { choosesCarousel = true })
-                .environment(\.homeRowIsCarousel, true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { carouselHeight = $0 }
-                .onPreferenceChange(HomeCarouselBandKey.self) { carouselDrawsBand = $0 }
-                // Until it has scrolled out from under the bar.
-                .reportsScrollOffset { offset in
-                    let isUnder = offset < carouselHeight
-                    if isUnder != barIsOverCarousel { barIsOverCarousel = isUnder }
-                }
+            HomeEditorHeader(openConfigurations: { path.append(HomeEditRoute.configurations) })
                 .transition(.opacity)
         }
-    }
-
-    /// 选择内容来源 for the 轮播图: what draws books, its chosen item checked. A choice shows it.
-    private var carouselPicker: some View {
-        let carousel = pageStore.page?.carouselSection
-        return HomeContentSourcePicker(current: carousel?.binding, parameters: carousel?.parameters ?? [:], isPushed: true,
-                                       title: localized("选择轮播数据")) { choice in
-            // Named by its binding, or by the item where the binding cannot name itself, as
-            // 新增栏目 names a section (`HomeSectionEditor.choose`).
-            let ownName = HomeSection(layout: .band, binding: choice.binding).displayTitle(sourceName: "")
-            pageStore.edit {
-                $0.setCarousel(choice.binding, parameters: choice.parameters, title: ownName.isEmpty ? choice.itemTitle : "")
-            }
-            choosesCarousel = false
-        } cancel: {
-            choosesCarousel = false
-        }
-        .environment(\.homePickerOffersBooksOnly, true)
-        .hidesRootTabBar()
     }
 
     private func groupHost(_ group: HomeSectionGroup, model: HomeModel, isEditable: Bool) -> some View {
@@ -566,14 +435,14 @@ private struct ExploreHomeRoot: View {
                 }
                 #endif
             }
-            ToolbarItem(placement: .topBarTrailing) { configurationsButton.rootTabBarButton(overColor: barIsOverColor) }
+            ToolbarItem(placement: .topBarTrailing) { configurationsButton }
             // 首页配置 in its own glass, apart from ••• (maintainer, 2026-10-22).
             #if compiler(>=6.2)
             if #available(iOS 26.0, *) {
                 ToolbarSpacer(.fixed, placement: .topBarTrailing)
             }
             #endif
-            ToolbarItem(placement: .topBarTrailing) { moreControl.rootTabBarButton(overColor: barIsOverColor) }
+            ToolbarItem(placement: .topBarTrailing) { moreControl }
         }
     }
 
@@ -642,7 +511,7 @@ private struct ExploreHomeRoot: View {
         case .editHome:
             setEditing(true)
         case .readingLanguages, .aggregatedSources:
-            // Both are 聚合设置's (decision 36): the languages are its first section.
+            // Both are 聚合设定's (decision 36): the languages are its first section.
             path.append(ExploreNavigationRoute.aggregationSettings)
         case .refresh:
             Task { await refresh() }
@@ -854,7 +723,7 @@ private struct HomeEditButtonTitle: View {
     }
 }
 
-/// 探索's ••• from iOS 18: 编辑首页, the two entries into 聚合设置, 重新整理, and the browser, which
+/// 探索's ••• from iOS 18: 编辑首页, the two entries into 聚合设定, 重新整理, and the browser, which
 /// is presented rather than shown in place (5d-1) and always offered (maintainer, 2026-10-17).
 /// 首页配置 has its own button beside it since 2026-10-22.
 private struct ExploreMoreMenu: View {

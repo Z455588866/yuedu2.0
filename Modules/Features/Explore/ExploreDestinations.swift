@@ -178,11 +178,6 @@ enum ExplorePush: Hashable {
            NowPlayingHub.shared.openIfAudiobook(book, store: store) {
             return
         }
-        // 探索首页「继续阅读 / 书架」的卡片也走统一的封面翻开转场。
-        if case .reader(let route) = self,
-           ReaderOpener.open(bookID: route.bookID, store: store) {
-            return
-        }
         append(to: &path)
     }
 

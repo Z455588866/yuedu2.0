@@ -6,7 +6,7 @@ import SwiftUI
 // dragged to reorder, and a tap pushes the section's form (`HomeSectionForm`, 5d-5). The ＋ in
 // the bottom bar, where the tab bar was, opens 新增栏目 (5d-5); 完成 is the bar's and the home's
 // last button. Nothing follows the cards: the 首页配置 is renamed and deleted from •••, and the
-// browser has no switch (maintainer, 2026-10-17). Which libraries 最新 shows is 聚合设置's
+// browser has no switch (maintainer, 2026-10-17). Which libraries 最新 shows is 聚合设定's
 // 显示在最新 (5d-3f). A section name's long press offers the same edits outside it. Every change
 // goes through `HomePageStore.edit`, so the home builds its rows again from the saved page.
 
@@ -233,7 +233,7 @@ struct HomeSectionSlot<RowContent: View>: View {
         .accessibilityIdentifier("homeEditor.toggle.\(section.id.uuidString)")
     }
 
-    /// The card for VoiceOver while the home is edited, over the row: 设置, 上移 and 下移. Not for
+    /// The card for VoiceOver while the home is edited, over the row: 设定, 上移 and 下移. Not for
     /// the finger, which swipes the row under it, taps the card (`HomeSectionEditGestures`) and
     /// drags it from anything in it (`homeSectionDrag`).
     private func editingSurface(_ title: String) -> some View {
@@ -244,7 +244,7 @@ struct HomeSectionSlot<RowContent: View>: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(title)
             .accessibilityAddTraits(.isButton)
-            .accessibilityHint(localized("设置"))
+            .accessibilityHint(localized("设定"))
             .accessibilityAction { openSettings(section.id) }
             .accessibilityAction(named: localized("上移")) {
                 if index > 0 { pageStore.moveEditableSection(section.id, to: index - 1) }
@@ -399,21 +399,9 @@ private struct HomeSectionFrame: Shape {
     /// The side the system's vertical bar stands on, and how far the cut goes out toward it.
     var barEdge: HorizontalEdge? = nil
     var barReach: CGFloat = 0
-    /// The side the system's vertical bar stands on, and how far the cut goes out toward it.
-    var barEdge: HorizontalEdge? = nil
-    var barReach: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
         var frame = rect.insetBy(dx: -outset, dy: -outset)
-        switch barEdge {
-        case .leading:
-            frame.origin.x -= barReach
-            frame.size.width += barReach
-        case .trailing:
-            frame.size.width += barReach
-        case nil:
-            break
-        }
         switch barEdge {
         case .leading:
             frame.origin.x -= barReach
@@ -458,35 +446,6 @@ private struct HomeSectionBarCut: ViewModifier {
     }
 }
 
-/// Where a section's sideways row is cut: at the card in 编辑首页 (`home` 0), past the screen's
-/// edge on the home (`home` 1). A margin past the row is past the screen everywhere but beside
-/// a folded iPhone Duo's status bar, where the screen's edge is some 84pt out and the cut showed
-/// down the middle of that strip (FB-202): toward that bar the cut is a row's width out.
-private struct HomeSectionCut: ViewModifier {
-    let home: CGFloat
-    let rowWidth: CGFloat
-
-    func body(content: Content) -> some View {
-        if #available(iOS 27.1, *) {
-            content.modifier(HomeSectionBarCut(home: home, rowWidth: rowWidth))
-        } else {
-            content.clipShape(HomeSectionFrame(outset: DSSpacing.xxl * home))
-        }
-    }
-}
-
-@available(iOS 27.1, *)
-private struct HomeSectionBarCut: ViewModifier {
-    let home: CGFloat
-    let rowWidth: CGFloat
-    @Environment(\.toolbarVerticalEdge) private var barEdge
-
-    func body(content: Content) -> some View {
-        content.clipShape(HomeSectionFrame(outset: DSSpacing.xxl * home, barEdge: barEdge,
-                                           barReach: rowWidth * home))
-    }
-}
-
 /// A section's ground on the home (maintainer, 2026-11-14, after Apple Books' store, whose
 /// sections run from white at the head to #EEEEEE at the foot): nothing at its head, deepening to
 /// `DSColor.homeSectionShade` at its foot, so the next section, clear again, stands apart from it.
@@ -496,8 +455,6 @@ private struct HomeSectionShade: View {
     var body: some View {
         LinearGradient(colors: [DSColor.homeSectionShade.opacity(0), DSColor.homeSectionShade],
                        startPoint: .top, endPoint: .bottom)
-            // Across a folded iPhone Duo's status bar side too, as the page is (FB-202).
-            .groundUnderVerticalBar()
             // Across a folded iPhone Duo's status bar side too, as the page is (FB-202).
             .groundUnderVerticalBar()
             .allowsHitTesting(false)

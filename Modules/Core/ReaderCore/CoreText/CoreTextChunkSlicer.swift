@@ -102,11 +102,6 @@ enum CoreTextChunkSlicer {
         // characters × chunks: 8.2 s of a 12.7 s slice of 857,762 characters (643 chunks,
         // iOS 27.2 simulator).
         let floatMarkers = CoreTextPaginator.floatMarkers(in: attrStr)
-        // Once for the chapter. Finding the floats walks every attribute run of the chapter;
-        // done for each chunk's height and each of its frames it made slicing grow with
-        // characters × chunks: 8.2 s of a 12.7 s slice of 857,762 characters (643 chunks,
-        // iOS 27.2 simulator).
-        let floatMarkers = CoreTextPaginator.floatMarkers(in: attrStr)
         var chunks: [CoreTextChunk] = []
         var offset: CFIndex = 0
 
@@ -278,7 +273,6 @@ enum CoreTextChunkSlicer {
             framesetter: framesetter,
             attrStr: attrStr,
             floatMarkers: floatMarkers,
-            floatMarkers: floatMarkers,
             chapterIndex: chapterIndex,
             writingMode: writingMode,
             pageBackgroundColor: pageBackgroundColor,
@@ -311,7 +305,6 @@ enum CoreTextChunkSlicer {
         contentWidth: CGFloat,
         framesetter: CoreTextChapterFramesetter,
         attrStr: NSAttributedString,
-        floatMarkers: [CoreTextPaginator.FloatMarker],
         floatMarkers: [CoreTextPaginator.FloatMarker],
         chapterIndex: Int,
         writingMode: ReaderWritingMode,

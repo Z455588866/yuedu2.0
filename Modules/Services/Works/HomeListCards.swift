@@ -82,10 +82,6 @@ struct HomeListCard: Codable, Hashable, Sendable {
         return PublicLibraryCollection.all.map { HomeListCard(binding: .gutenbergCollection(id: $0.id)) }
     }
 
-    /// The same list under the same values, whatever either card is named.
-    func showsSameList(as other: HomeListCard) -> Bool {
-        binding == other.binding && parameters == other.parameters
-    }
 
     /// Whether this build can load it: a list it knows, not a section of lists inside another.
     var isDrawable: Bool {

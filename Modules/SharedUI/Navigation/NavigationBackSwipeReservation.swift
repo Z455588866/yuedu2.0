@@ -219,26 +219,7 @@ final class NavigationBackSwipeReservationController: NSObject, UIGestureRecogni
         navigationController.popViewController(animated: true)
     }
 
-    /// The system's recognizer is left as UIKit set it for this page; the edge is reserved by a
-    /// pan of the reservation's own, under the same gates.
-    private func attachOwnedPan(to navigationController: UINavigationController, destination: UIViewController) {
-        if let ownedPan, ownedPan.view === navigationController.view, self.destination === destination { return }
-        detach()
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(popWithoutInteractiveTransition(_:)))
-        pan.maximumNumberOfTouches = 1
-        pan.delegate = self
-        navigationController.view.addGestureRecognizer(pan)
-        self.navigationController = navigationController
-        self.destination = destination
-        ownedPan = pan
-    }
 
-    @objc private func popWithoutInteractiveTransition(_ pan: UIPanGestureRecognizer) {
-        guard pan.state == .began, let navigationController,
-              navigationController.topViewController === destination,
-              navigationController.transitionCoordinator == nil else { return }
-        navigationController.popViewController(animated: true)
-    }
 
     func detach() {
         if let ownedPan {

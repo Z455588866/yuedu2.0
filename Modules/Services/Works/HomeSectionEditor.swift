@@ -207,19 +207,6 @@ final class HomeSectionEditor: ObservableObject {
         setCards(cards)
     }
 
-    /// A card's own name (maintainer, 2026-11-15: 「大图卡片的分类也要可以更改名字」), in place of
-    /// its list's; empty goes back to the list's. A list with no name of its own (a feed) keeps
-    /// the one it has rather than none. The photo is the list's, so it stays.
-    func setCardTitle(at index: Int, to title: String) {
-        var cards = listCards
-        guard cards.indices.contains(index) else { return }
-        // As it is typed: trimmed at every key, the field lost the space between two words. Only
-        // a name of nothing but spaces is none.
-        let isBlank = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        guard !isBlank || cards[index].binding.namesItsList else { return }
-        cards[index].title = isBlank ? "" : title
-        setCards(cards)
-    }
 
     /// A card's list picked again: a category under other filters.
     func replaceCard(at index: Int, with card: HomeListCard) {

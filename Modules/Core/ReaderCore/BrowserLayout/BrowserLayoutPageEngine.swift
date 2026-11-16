@@ -14,7 +14,7 @@ enum BrowserFallbackReason: Equatable {
     case resourceFailure(String)
     case layoutFailure(String)
     case timeout
-    /// 整章翻譯 is on: translations are spliced into the chapter document, which only the
+    /// 整章翻译 is on: translations are spliced into the chapter document, which only the
     /// CoreText path lays out.
     case readerTranslation
 
@@ -117,10 +117,7 @@ enum ChapterEngineChoice {
 struct BrowserChapterLayout {
     let spineIndex: Int
     var pages: [PageFragments] {
-        didSet {
-            pageSourceRanges = Self.buildPageRanges(pages, sourceText: sourceText)
-            pageAddedStarts = Self.buildPageAddedStarts(pages, sourceText: sourceText)
-        }
+        didSet { pageSourceRanges = Self.buildPageRanges(pages, sourceText: sourceText) }
     }
     let sourceText: String
     let anchorOffsets: [String: Int]
@@ -141,10 +138,6 @@ struct BrowserChapterLayout {
     /// chapter cost ~7 full rebuilds (tens of thousands of fragment visits), on
     /// every page turn and every progress update.
     private(set) var pageSourceRanges: [NSRange]
-    /// For a page of nothing but pictures added to the chapter (a module's comment cards), the
-    /// picture it starts with; nil for every other page. Such a page shows no character of the
-    /// source, so this is what its reading position is found by (`BrowserAddedContent`).
-    private(set) var pageAddedStarts: [Int?] = []
     let fontSize: CGFloat
     let themeTextColor: UIColor
     let themeBackgroundColor: UIColor
@@ -176,7 +169,6 @@ struct BrowserChapterLayout {
         self.paragraphRanges = paragraphRanges
         // `didSet` does not run during init.
         self.pageSourceRanges = Self.buildPageRanges(pages, sourceText: sourceText)
-        self.pageAddedStarts = Self.buildPageAddedStarts(pages, sourceText: sourceText)
         self.fontSize = fontSize
         self.themeTextColor = themeTextColor
         self.themeBackgroundColor = themeBackgroundColor
@@ -186,19 +178,12 @@ struct BrowserChapterLayout {
         BrowserPageGeometry.buildPageRanges(pages, sourceText: sourceText)
     }
 
-    /// For each page, the added picture it starts with when it shows nothing of the book's
-    /// (`BrowserChapterAdditions`): a page of cards alone is found by it.
-    static func buildPageAddedStarts(_ pages: [PageFragments], sourceText: String) -> [Int?] {
-        BrowserPageGeometry.buildPageAddedStarts(pages, sourceText: sourceText)
-    }
 
     /// Page index containing `charOffset` (binary search, clamped to the page
     /// whose range is nearest — offsets from another engine's collapse space
-    /// are approximate; the spec restores to *nearby* content). With `addedIndex`, the page
-    /// of added pictures that holds that picture, when there is one.
-    func pageIndex(forCharOffset charOffset: Int, addedIndex: Int? = nil) -> Int {
-        BrowserPageGeometry.pageIndex(forCharOffset: charOffset, addedIndex: addedIndex, ranges: pageSourceRanges,
-                                      addedStarts: pageAddedStarts, sourceText: sourceText)
+    /// are approximate; the spec restores to *nearby* content).
+    func pageIndex(forCharOffset charOffset: Int) -> Int {
+        BrowserPageGeometry.pageIndex(forCharOffset: charOffset, ranges: pageSourceRanges, sourceText: sourceText)
     }
 
     func displayList(forPage localPage: Int, themeTextColor: UIColor, oldThemeColor: UIColor) -> DisplayList {
@@ -301,6 +286,8 @@ struct BrowserLayoutConfigInputs: Sendable {
     var contentInsets: UIEdgeInsets
     var cjkTypographyStyle: CJKTypographyStyle?
     var publicationFontResolver: BrowserFontResolver?
+    /// The chapter asks to sit in the middle of its page (`PublicationPageAlignment`). Paged only.
+    var centresSinglePage = false
 
     func makeConfiguration() -> BrowserLayoutConfig {
         // Use the same reader-font policy as the EPUB builder before shaping.
@@ -330,7 +317,8 @@ struct BrowserLayoutConfigInputs: Sendable {
             writingMode: writingMode,
             cjkTypographyStyle: cjkTypographyStyle,
             // Scroll settings always carry false: a scroll column has no page bottom.
-            bottomJustify: settings.bottomJustify
+            bottomJustify: settings.bottomJustify,
+            centersSinglePage: centresSinglePage
         )
     }
 }
@@ -448,10 +436,15 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
     var testChapterLayoutStates: [Int: ChapterLayoutState] { chapterLayoutStates }
     /// Test seam: sessionEnsure attempt counts per "\(generation):\(spine)".
     var testSessionEnsureCounts: [String: Int] { sessionEnsureCounts }
+    /// Test seam: sessions created per spine over the engine's whole life. Unlike
+    /// `testSessionEnsureCounts` it survives generation bumps, which is where a
+    /// cross-generation re-layout loop hides.
+    private(set) var testSessionEnsureTotals: [Int: Int] = [:]
     /// Test seam: chapters whose admission evaluation their layout could not reuse, in order. A
     /// configuration whose cascade inputs differ from admission's (a writing mode, say) parses again.
     private(set) var testStaleAdmissionSpines: [Int] = []
-    private var browserSessions: [Int: BrowserLayoutSession] = [:]
+    /// Chapters with pages left to lay out, each on its own layout owner.
+    private var browserSessions: [Int: BrowserPageLayoutOwner] = [:]
     private var backgroundFinishTasks: [Int: Task<Void, Never>] = [:]
     private var spinePageOffsets: [Int] = []
     private var chapterPageCounts: [Int: Int] = [:]
@@ -493,7 +486,8 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
 
     private var layoutGeneration = 0
     private var preloadTasks: [Int: Task<Void, Never>] = [:]
-    private var chapterTimeoutNanos: UInt64 = 5_000_000_000
+    /// Internal for tests, which force the timeout path with a 1 ns limit.
+    var chapterTimeoutNanos: UInt64 = 5_000_000_000
     /// Stored for future annotation/selection integration (data structures must
     /// not block later work).
     private var textAnnotations: [CoreTextTextAnnotation] = []
@@ -757,8 +751,7 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
             }
         }
         let config = browserConfigInputs(
-            html: html, fontScalePolicy: PublicationFontScalePolicy.resolve(bodyInlineStyle: document.bodyInlineStyle),
-            writingMode: writingMode
+            html: html, bodyInlineStyle: document.bodyInlineStyle, writingMode: writingMode
         ).makeConfiguration()
         let evaluation = await BrowserChapterDocument.evaluate(document, configuration: config, writingMode: writingMode)
         SourcePerfTrace.record("browser.admission", "spine=\(spineIndex)", since: parseStart, thresholdMs: 0)
@@ -831,8 +824,8 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
             let writingMode = await chapterWritingMode(spineIndex)
             guard isCurrentWork(generation) else { return }
             let evaluation = try await chapterEvaluation(for: spineIndex, input: input, writingMode: writingMode,
-                                                         admitted: admitted) { policy in
-                browserConfigInputs(html: html, fontScalePolicy: policy, writingMode: writingMode)
+                                                         admitted: admitted) { bodyInlineStyle in
+                browserConfigInputs(html: html, bodyInlineStyle: bodyInlineStyle, writingMode: writingMode)
             }
             guard isCurrentWork(generation) else { return }
             if settings.regexHighlightConfiguration.isEnabled {
@@ -846,22 +839,24 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
             // A chapter ensures at most once normally; more than twice on a
             // NON-terminal chapter is the livelock — fault loudly in debug.
             noteSessionEnsure(spineIndex: spineIndex, generation: generation)
-            let session = try BrowserLayoutSession(
-                evaluation: evaluation,
-                imageLoader: { [store] in store.image(for: $0) }, generation: generation
-            )
-            session.diagnosticSpine = spineIndex
+            // Every layout step below runs on the chapter's owner, never on the main
+            // thread: building the box tree of a 2.5 MB chapter took 3–5 s, and while it
+            // ran here the reader froze (Crashlytics db641b67).
+            let owner = try Self.makePageLayoutOwner(evaluation, store: store, generation: generation,
+                                                     spine: spineIndex)
 
             // Build the style/box tree first, then fetch the root
             // background-image the COMPUTED tree actually resolved. Paint-only,
             // so it is not needed to lay anything out — and taking the source
             // from the style tree (instead of re-scanning the stylesheets) is
             // what makes the fetched key and the painted key the same string.
-            let backgroundSource = try await withTimeout(nanos: chapterTimeoutNanos) {
-                try session.prepare()
+            let prepareStart = SourcePerfTrace.now
+            let facts = try await withTimeout(nanos: chapterTimeoutNanos) {
+                try await owner.prepare()
             }
+            SourcePerfTrace.record("browser.prepare", "spine=\(spineIndex)", since: prepareStart, thresholdMs: 0)
             guard isCurrentWork(generation) else { return }
-            if let backgroundSource, store.image(for: backgroundSource) == nil {
+            if let backgroundSource = facts.backgroundImageSource, store.image(for: backgroundSource) == nil {
                 store.set(
                     await resource.loadImage(
                         forChapter: spineIndex, source: backgroundSource, renderWidth: contentWidth
@@ -873,13 +868,15 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
             // 多看 popup footnotes: publish to the SAME store the legacy engine
             // uses, so a tap on a 注 marker opens the note in place instead of
             // paging to the chapter tail.
-            FootnoteStore.index(notes: session.pipelineFootnotes, spineIndex: spineIndex)
+            FootnoteStore.index(notes: facts.footnotes, spineIndex: spineIndex)
 
             // FIRST PAGE: publish immediately — the rest of the chapter is NOT
             // laid out yet.
+            let firstPageStart = SourcePerfTrace.now
             let firstPage = try await withTimeout(nanos: chapterTimeoutNanos) {
-                try await session.layoutNextPage()
+                try await owner.layoutNextPage()
             }
+            SourcePerfTrace.record("browser.firstPage", "spine=\(spineIndex)", since: firstPageStart, thresholdMs: 0)
             guard isCurrentWork(generation) else { return }
             guard let firstPage else {
                 // A chapter that produced zero pages: distinguish an image-only
@@ -892,25 +889,25 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
                 )
                 return
             }
-            browserSessions[spineIndex] = session
+            browserSessions[spineIndex] = owner
             var layout = BrowserChapterLayout(
                 spineIndex: spineIndex,
                 pages: [firstPage],
-                sourceText: session.sourceText,
-                anchorOffsets: session.anchorOffsets,
-                linkAnchors: session.pipelineLinkAnchors,
-                mediaAttachments: session.pipelineMediaAttachments.mapValues {
+                sourceText: facts.sourceText,
+                anchorOffsets: facts.anchorOffsets,
+                linkAnchors: facts.linkAnchors,
+                mediaAttachments: facts.mediaAttachments.mapValues {
                     resource.resolveMediaAttachment(forChapter: spineIndex, media: $0)
                 },
-                pronunciationHints: session.pipelinePronunciationHints,
-                paragraphRanges: session.pipelineParagraphRanges,
-                pictureOffsets: session.pictureOffsets,
+                pronunciationHints: facts.pronunciationHints,
+                paragraphRanges: facts.paragraphRanges,
+                pictureOffsets: facts.pictureOffsets,
                 fontSize: settings.fontSize,
                 themeTextColor: self.themeTextColor,
                 themeBackgroundColor: themeBackgroundColor
             )
             layout.diagnosticGeneration = generation
-            layout.recordLifecycleBytes(nodeCount: session.pipelineNodeCount, boxCount: session.pipelineBoxCount)
+            layout.recordLifecycleBytes(nodeCount: facts.nodeCount, boxCount: facts.boxCount)
             browserChapters[spineIndex] = layout
             chapterLayoutStates[spineIndex] = .ready
             engineStatus[spineIndex] = "browser"
@@ -939,9 +936,12 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
     /// Background completion of a chapter's remaining pages. On failure the
     /// WHOLE chapter falls back to the legacy delegate (no mixed chapter).
     private func finishBrowserChapter(_ spineIndex: Int, generation: Int) async {
-        guard let session = browserSessions[spineIndex] else { return }
+        guard let owner = browserSessions[spineIndex] else { return }
+        let finishStart = SourcePerfTrace.now
+        let pages: [PageFragments]
         do {
-            try await session.finish()
+            pages = try await owner.finish()
+            SourcePerfTrace.record("browser.finish", "spine=\(spineIndex)", since: finishStart, thresholdMs: 0)
         } catch is CancellationError {
             return
         } catch HTMLLayoutError.cancelled {
@@ -956,7 +956,7 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
             return
         }
         guard isCurrentWork(generation), var layout = browserChapters[spineIndex] else { return }
-        layout.pages = session.completedPages
+        layout.pages = pages
         layout.refreshFragmentBytes()
         browserChapters[spineIndex] = layout
         browserSessions.removeValue(forKey: spineIndex)
@@ -967,10 +967,20 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
     /// Extends a browser chapter's layout to cover `sourceOffset` on demand
     /// (the caller may then resolve the offset to an exact page).
     func extendLayout(spineIndex: Int, toSourceOffset offset: Int) async {
-        guard let session = browserSessions[spineIndex], !session.isFinished else { return }
-        try? await session.layout(untilSourceOffset: offset)
-        guard layoutGeneration == session.generation, var layout = browserChapters[spineIndex] else { return }
-        layout.pages = session.completedPages
+        // A chapter whose owner is gone has every page laid out already.
+        guard let owner = browserSessions[spineIndex] else { return }
+        let pages: [PageFragments]
+        do {
+            pages = try await owner.layout(untilSourceOffset: offset)
+        } catch HTMLLayoutError.cancelled {
+            return
+        } catch {
+            // The chapter's own finish reports the same failure and falls back.
+            AppLogger.render("[BrowserLayout] extendLayout failed spine=\(spineIndex): \(error)")
+            return
+        }
+        guard layoutGeneration == owner.generation, var layout = browserChapters[spineIndex] else { return }
+        layout.pages = pages
         layout.refreshFragmentBytes()
         browserChapters[spineIndex] = layout
         rebuildOffsets()
@@ -978,12 +988,15 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
 
     /// What the chapter's layout configuration is made of, read here on the main actor.
     /// `makeConfiguration()` builds the configuration from it off this class's isolation.
-    private func browserConfigInputs(html: String, fontScalePolicy: PublicationFontScalePolicy = .readerAdjustable,
+    /// `bodyInlineStyle` is the chapter's `<body style>`, where it asks for what CSS cannot say:
+    /// a fixed font scale (`PublicationFontScalePolicy`) and, on a page, to sit in its middle
+    /// (`PublicationPageAlignment`).
+    private func browserConfigInputs(html: String, bodyInlineStyle: String,
         writingMode: ReaderWritingMode,
         scrollSettings: ReaderRenderSettings? = nil, scrollSize: CGSize? = nil) -> BrowserLayoutConfigInputs {
         let settings = scrollSettings ?? self.settings
         // The same decision the legacy builders reach from their rendered text: what the
-        // reader will show, after 繁簡轉換.
+        // reader will show, after 繁简转换.
         let cjkTypographyStyle = CJKTypographyStyleResolver.shared.style(
             for: CJKTypographyStyleResolver.textSample(fromHTML: html).converted(to: settings.textConversion),
             book: settings.bookID, conversion: settings.textConversion,
@@ -991,14 +1004,17 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
         return BrowserLayoutConfigInputs(
             settings: settings,
             writingMode: writingMode,
-            fontScalePolicy: fontScalePolicy,
+            fontScalePolicy: PublicationFontScalePolicy.resolve(bodyInlineStyle: bodyInlineStyle),
             contentWidth: scrollSize?.width ?? self.contentWidth,
             contentHeight: scrollSize?.height ?? self.contentHeight,
             textColor: scrollSettings?.textColor ?? self.themeTextColor,
             backgroundColor: scrollSettings?.backgroundColor ?? self.themeBackgroundColor,
             contentInsets: settings.contentInsets,
             cjkTypographyStyle: cjkTypographyStyle,
-            publicationFontResolver: resource.fontResolver()
+            publicationFontResolver: resource.fontResolver(),
+            // A scroll column has no page to sit in the middle of.
+            centresSinglePage: scrollSettings == nil
+                && PublicationPageAlignment.centresSinglePage(bodyInlineStyle: bodyInlineStyle)
         )
     }
 
@@ -1022,13 +1038,11 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
             since: start, thresholdMs: 0)
     }
 
-    /// Chapter font-scale policy from the body inline style
-    /// (`zy-fontsize-adjust: fixed` → fixed; otherwise reader-adjustable).
     /// The chapter's evaluation for the layout about to run: the one admission
     /// built (`admitted`), when its cascade inputs are still the layout's; otherwise
     /// a fresh one (a cached choice, or a layout after a font-size change, say).
     /// `configurationInputs` reads the layout configuration's inputs for the
-    /// chapter's font-scale policy — call it after the fonts are prepared, so the
+    /// chapter's `<body style>` — call it after the fonts are prepared, so the
     /// resolver it snapshots sees them. Either way the chapter is parsed once here,
     /// never again for this layout.
     ///
@@ -1040,12 +1054,10 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
         input: CSSFrontendInput,
         writingMode: ReaderWritingMode,
         admitted: sending BrowserChapterEvaluation?,
-        configurationInputs: (PublicationFontScalePolicy) -> BrowserLayoutConfigInputs
+        configurationInputs: (_ bodyInlineStyle: String) -> BrowserLayoutConfigInputs
     ) async throws -> sending BrowserChapterEvaluation {
         if let admitted {
-            let configuration = configurationInputs(
-                PublicationFontScalePolicy.resolve(bodyInlineStyle: admitted.document.bodyInlineStyle)
-            ).makeConfiguration()
+            let configuration = configurationInputs(admitted.document.bodyInlineStyle).makeConfiguration()
             if let rebound = admitted.rebound(to: configuration) {
                 return rebound
             }
@@ -1054,9 +1066,7 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
         }
         let start = SourcePerfTrace.now
         let document = try await BrowserChapterDocument.parse(input: input)
-        let configuration = configurationInputs(
-            PublicationFontScalePolicy.resolve(bodyInlineStyle: document.bodyInlineStyle)
-        ).makeConfiguration()
+        let configuration = configurationInputs(document.bodyInlineStyle).makeConfiguration()
         let evaluation = await BrowserChapterDocument.evaluate(document, configuration: configuration,
                                                                writingMode: writingMode)
         SourcePerfTrace.record("browser.evaluation", "spine=\(spineIndex)", since: start, thresholdMs: 0)
@@ -1075,6 +1085,9 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
             return
         }
         choices[spineIndex] = .legacyEngineFailure(reason)
+        // The browser engine no longer owns this chapter; its `.loading` must not outlive
+        // the attempt.
+        chapterLayoutStates.removeValue(forKey: spineIndex)
         engineStatus[spineIndex] = "legacy: engineFailure \(reason.description)"
         BrowserLayoutDeviceDiagnostic.summary("\(BrowserLayoutDeviceDiagnostic.prefix) fallbackToLegacy spine=\(spineIndex) reason=\(reason.description)")
         await delegate.preloadChapter(at: spineIndex)
@@ -1117,6 +1130,7 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
     /// the reader is hammering ensure/layout — the livelock. Fault loudly in
     /// debug instead of spinning forever.
     private func noteSessionEnsure(spineIndex: Int, generation: Int) {
+        testSessionEnsureTotals[spineIndex, default: 0] += 1
         let key = "\(generation):\(spineIndex)"
         let count = (sessionEnsureCounts[key] ?? 0) + 1
         sessionEnsureCounts[key] = count
@@ -1136,6 +1150,9 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
 
     func invalidateLayout(newSize: CGSize, ensuringSpine: Int?) async {
         guard !Task.isCancelled else { return }
+        // Every caller relays the whole book out, and some reach here without a refresh
+        // transaction (setFontSize, setPageMargins): name each in the Crashlytics log.
+        CrashContext.breadcrumb("browser invalidateLayout size=\(newSize) ensuring=\(ensuringSpine.map(String.init) ?? "nil")")
         regexHighlightNeedsRelayout = false
         let restore = readingPosition(forPage: currentPage)
         layoutGeneration += 1
@@ -1199,6 +1216,9 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
         // failure choices or clear the replacement generation's task/session.
         layoutGeneration += 1
         discardScrollPreparation()
+        // A chapter still holding a session had pages left to lay out; cancelling ends that,
+        // so it must be laid out again.
+        let unfinishedSpines = Set(browserSessions.keys)
         for session in browserSessions.values { session.cancel() }
         browserSessions.removeAll()
         delegate.cancelPendingWork(cause: cause)
@@ -1206,11 +1226,19 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
         preloadTasks.removeAll()
         for task in backgroundFinishTasks.values { task.cancel() }
         backgroundFinishTasks.removeAll()
-        chapterLayoutStates.removeAll()
+        // A finished chapter has nothing pending, so it keeps its terminal state. Dropping
+        // it made the next preload lay the whole chapter out again — and every refresh
+        // transaction cancels and then preloads the visible spine, so a large chapter was
+        // re-laid out once per refresh (Crashlytics db641b67: 3–5 s of main thread every
+        // ~4 s for two minutes).
+        chapterLayoutStates = chapterLayoutStates.filter { spine, state in
+            state.isTerminal && !unfinishedSpines.contains(spine)
+        }
         sessionEnsureCounts.removeAll()
     }
 
     func notifyChapterDataChanged(at spineIndex: Int) async {
+        CrashContext.breadcrumb("browser notifyChapterDataChanged spine=\(spineIndex)")
         // A preload still in flight was started from the chapter as it was, and `preloadChapter`
         // below joins a preload in flight: the old content's pages came back as the answer to
         // the new content, or nothing did (seen 2026-11-15: a chapter whose comments arrived
@@ -1872,10 +1900,10 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
             return browserChapters[spine]?.pictureOffsets ?? scrollChapters[spine]?.pictureOffsets
         }
         do {
-            let session = try BrowserLayoutSession(evaluation: evaluation, imageLoader: { _ in nil },
-                                                   generation: generation)
-            _ = try session.prepare()
-            return session.pictureOffsets
+            // The same box tree as a layout, so it is built on a layout owner too.
+            let owner = try Self.makePageLayoutOwner(evaluation, store: BrowserLayoutImageStore(),
+                                                     generation: generation, spine: spine)
+            return try await owner.prepare().pictureOffsets
         } catch {
             AppLogger.render("[PictureOffsets] box tree failed spine=\(spine): \(error)")
             return nil
@@ -1998,29 +2026,30 @@ final class BrowserLayoutPageEngine: PageRenderingProvider, LinkNavigationProvid
         displayListCacheBytes.removeAll()
     }
 
-    /// Fails a session step that took longer than `nanos`.
+    /// Fails a layout step that takes longer than `nanos`, and stops it.
     ///
-    /// `BrowserLayoutSession` is main-actor confined and its steps run to completion
-    /// without suspending, so nothing can stop one part-way; what a timeout decides is
-    /// whether the step's result is still used. The step runs here, in this task, and
-    /// only the timer is a child task: its verdict is a Bool, so the step's result (a
-    /// `PageFragments`, which is not Sendable) never crosses a task boundary.
-    private func withTimeout<T>(nanos: UInt64, _ body: () async throws -> T) async throws -> T {
-        try await withThrowingTaskGroup(of: Bool.self) { group in
+    /// The step and a timer are sibling child tasks; the first to finish decides and
+    /// the other is cancelled. A step on a `BrowserPageLayoutOwner` stops at its next
+    /// block or page once cancelled, so a chapter past its time goes to the legacy
+    /// engine without being laid out to the end first.
+    private func withTimeout<T: Sendable>(nanos: UInt64,
+                                          _ step: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: TimedStep<T>.self) { group in
+            group.addTask { .finished(try await step()) }
             group.addTask {
-                do {
-                    try await Task.sleep(nanoseconds: nanos)
-                    return true
-                } catch {
-                    return false  // Cancelled: the step finished first.
-                }
+                try await Task.sleep(nanoseconds: nanos)
+                return .timedOut
             }
-            let result = try await body()
-            group.cancelAll()
-            if try await group.next() == true { throw EngineTimeoutError() }
-            return result
+            defer { group.cancelAll() }
+            guard case .finished(let value)? = try await group.next() else { throw EngineTimeoutError() }
+            return value
         }
     }
+}
+
+private enum TimedStep<T: Sendable>: Sendable {
+    case finished(T)
+    case timedOut
 }
 
 private struct EngineTimeoutError: Error {}
@@ -2174,8 +2203,9 @@ extension BrowserLayoutPageEngine {
         let store = BrowserLayoutImageStore(await resource.prefetchImages(
             forChapter: spine, html: html, renderWidth: contentSize.width))
         let evaluation = try await chapterEvaluation(for: spine, input: input, writingMode: settings.writingMode,
-                                                     admitted: admitted) { policy in
-            var inputs = browserConfigInputs(html: html, fontScalePolicy: policy, writingMode: settings.writingMode,
+                                                     admitted: admitted) { bodyInlineStyle in
+            var inputs = browserConfigInputs(html: html, bodyInlineStyle: bodyInlineStyle,
+                                             writingMode: settings.writingMode,
                                              scrollSettings: settings, scrollSize: contentSize)
             // The scroll host owns the reader's outer margins and fixed bars.
             inputs.contentInsets = .zero
@@ -2239,6 +2269,15 @@ extension BrowserLayoutPageEngine {
             usesReaderBackground: settings.readerBackgroundImageURL != nil,
             paragraphRanges: paragraphRanges,
             mediaAttachments: mediaAttachments, pictureOffsets: pictureOffsets)
+    }
+
+    /// Creates a paged chapter's layout owner. Its image loader is formed here, off the
+    /// main actor, for the reason given below.
+    private nonisolated static func makePageLayoutOwner(
+        _ evaluation: sending BrowserChapterEvaluation, store: BrowserLayoutImageStore, generation: Int, spine: Int
+    ) throws -> BrowserPageLayoutOwner {
+        try BrowserPageLayoutOwner(evaluation: evaluation, imageLoader: { store.image(for: $0) },
+                                   generation: generation, diagnosticSpine: spine)
     }
 
     // The package's layout results are not Sendable. Each stage below runs on the global

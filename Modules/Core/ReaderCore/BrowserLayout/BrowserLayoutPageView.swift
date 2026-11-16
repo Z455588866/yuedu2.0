@@ -1,7 +1,6 @@
 import YueduCoreText
 import Accessibility
 import SwiftUI
-import SwiftUI
 import UIKit
 
 /// Draws one page's DisplayList directly with CoreGraphics — no intermediate
@@ -312,25 +311,6 @@ final class BrowserLayoutPageView: UIView, UIGestureRecognizerDelegate, @preconc
         }
     }
 
-    /// One `ReviewCardGlassView` per card with glass in the display list. Whatever paints the
-    /// list under this view — `draw`, or the viewport's fragment bitmaps — leaves those cards
-    /// out (`ReviewCardGlassDrawing.liveViews`), as `CoreTextPageView` does.
-    private func syncReviewCardGlass() {
-        let cards = displayList.items.compactMap(\.reviewCardGlass)
-        while reviewCardGlassViews.count > cards.count {
-            reviewCardGlassViews.removeLast().removeFromSuperview()
-        }
-        while reviewCardGlassViews.count < cards.count {
-            let view = ReviewCardGlassView(frame: .zero)
-            insertSubview(view, at: 0)
-            reviewCardGlassViews.append(view)
-        }
-        for (view, card) in zip(reviewCardGlassViews, cards) {
-            view.configure(image: card.image, opacity: 1)
-            view.frame = card.rect
-        }
-    }
-
     override func draw(_ rect: CGRect) {
         guard let context = UIGraphicsGetCurrentContext() else { return }
         // Measures tile command generation only; Core Animation can rasterize
@@ -345,7 +325,7 @@ final class BrowserLayoutPageView: UIView, UIGestureRecognizerDelegate, @preconc
             context.fill(bounds)
             if let readerBackgroundImage {
                 // Aspect-fill and centred through the SAME helper the legacy page
-                // and the 載入中 placeholder use, so the artwork does not shift when
+                // and the 载入中 placeholder use, so the artwork does not shift when
                 // a page turn crosses between the two engines.
                 CoreTextPageView.drawPageBackground(readerBackgroundImage, in: bounds)
             }
@@ -464,11 +444,12 @@ final class BrowserLayoutPageView: UIView, UIGestureRecognizerDelegate, @preconc
 
     /// Maps displayed text geometry back into the chapter source coordinate
     /// space. Ruby annotations carry their base range, so hit-testing never
-    /// invents a second offset space for `<rt>`.
+    /// invents a second offset space for `<rt>`. A list counter or a `q`'s
+    /// quotation mark owns no source characters and is passed by.
     func sourceRange(at point: CGPoint) -> NSRange? {
         if let textInteraction { return textInteraction.sourceRange(at: point) }
         for item in displayList.items.reversed() {
-            guard case .text(let text) = item, text.rect.contains(point) else { continue }
+            guard case .text(let text) = item, text.sourceRange.length > 0, text.rect.contains(point) else { continue }
             return text.sourceRange
         }
         return nil
@@ -532,10 +513,13 @@ final class BrowserLayoutPageView: UIView, UIGestureRecognizerDelegate, @preconc
         }
     }
 
-    /// Plain text of the page currently drawn. A picture's U+FFFC in the source text has
-    /// nothing to say.
+    /// What VoiceOver reads for the page currently drawn (`DisplayList.spokenText`): its
+    /// source text with a line for each paragraph that starts on it and an ordered list's
+    /// counter where its item starts. A picture's U+FFFC has nothing to say. Listening and
+    /// offsets keep reading the source text.
     var accessibilityPageText: String {
-        pageSourceText.replacingOccurrences(of: "\u{FFFC}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        displayList.spokenText(pageText: pageSourceText, pageRange: pageSourceRange,
+                               paragraphRanges: textInteraction?.paragraphRanges ?? [])
     }
 
     func refreshAccessibility() {
@@ -559,8 +543,10 @@ final class BrowserLayoutPageView: UIView, UIGestureRecognizerDelegate, @preconc
         ]
         if textInteraction != nil {
             accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: localized("选取文字")) { [weak self] _ in
+                // The first text with source characters: a page that starts a
+                // list draws its counter first, which selection passes by.
                 guard let self, let first = displayList.items.compactMap({ item -> CGRect? in
-                    if case .text(let text) = item { return text.rect.rawValue }; return nil
+                    if case .text(let text) = item, text.sourceRange.length > 0 { return text.rect.rawValue }; return nil
                 }).first else { return false }
                 textInteraction?.begin(at: CGPoint(x: first.midX, y: first.midY))
                 textInteraction?.finish()
@@ -926,21 +912,6 @@ final class BrowserLayoutPageViewController: UIViewController,
             sourceView: pageView,
             sourceRect: anchor
         )
-    }
-
-    /// The comments a tapped bubble or card stands for, in the sheet a CoreText page shows them in
-    /// (`CoreTextPageViewController.presentReviewSheet`).
-    func presentReview(_ target: ReaderHTMLUtilities.ReviewTarget) {
-        weak var weakHost: UIViewController?
-        let host = UIHostingController(rootView: ReaderReviewSheetContent(target: target) { _ in
-            weakHost?.dismiss(animated: true)
-        })
-        weakHost = host
-        if let sheet = host.sheetPresentationController {
-            sheet.detents = [.medium(), .large()]
-            sheet.prefersGrabberVisible = true
-        }
-        present(host, animated: true)
     }
 
     /// The comments a tapped bubble or card stands for, in the sheet a CoreText page shows them in

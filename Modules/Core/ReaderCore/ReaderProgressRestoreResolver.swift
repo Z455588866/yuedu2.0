@@ -5,7 +5,6 @@ enum ReaderProgressRestoreResolver {
         chapterIndex: Int,
         charOffset: Int,
         translationOffset: Int? = nil,
-        translationOffset: Int? = nil,
         resolver: (CoreTextReadingPosition) -> Int?
     ) -> Int? {
         resolver(

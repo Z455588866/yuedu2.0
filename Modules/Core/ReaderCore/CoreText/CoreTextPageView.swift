@@ -18,7 +18,7 @@ typealias PrerenderedPageSource = @MainActor () -> UIImage?
 final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UIEditMenuInteractionDelegate,
     @MainActor AXCustomContentProvider {
 
-    /// `AXCustomContentProvider` storage. Carries 頁眉／頁腳 — see
+    /// `AXCustomContentProvider` storage. Carries 页眉／页脚 — see
     /// `refreshBarAccessibilityContent`.
     var accessibilityCustomContent: [AXCustomContent]! = []
 
@@ -62,7 +62,7 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
     nonisolated static func makePageFrame(
         layout: CoreTextPaginator.ChapterLayout,
         pageIndex: Int,
-        framesetter: CTFramesetter
+        framesetter: CoreTextChapterFramesetter
     ) -> CTFrame {
         let contentPathRect = CoreTextPaginator.coreTextContentPathRect(
             renderSize: layout.renderSize,
@@ -114,14 +114,14 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
     private let interactionOverlay = InteractionOverlayView()
     private var playbackHighlight: ReaderPlaybackHighlight?
     /// Annotations in the layout's laid-out text, which is what drawing and hit-testing use.
-    /// The same as `sourceAnnotations` unless 整章翻譯 spliced translations into the chapter.
+    /// The same as `sourceAnnotations` unless 整章翻译 spliced translations into the chapter.
     private var textAnnotations: [CoreTextTextAnnotation] = []
     /// The annotations as the reader stores them, by id: what a request about an existing
     /// annotation must name, whatever pieces a translation split it into on screen.
     private var sourceAnnotations: [UUID: CoreTextTextAnnotation] = [:]
     private var annotationOverlays: [LayerKey: InteractionOverlayView] = [:]
     private let noteMarkerOverlay = NoteMarkerOverlayView()
-    /// 已縮放到 view 座標的筆記圓圈，供 `handleTap` 命中判定用。
+    /// 已缩放到 view 座标的笔记圆圈，供 `handleTap` 命中判定用。
     private var noteMarkerHitTargets: [(annotationID: UUID, rect: CGRect)] = []
     private var lastOverlayBounds: CGRect = .zero
     private var latestEditMenuSourcePoint: CGPoint?
@@ -159,7 +159,7 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
 
     var onInternalLinkTap: ((String) -> Void)?
     var onImageAttachmentTap: ((CoreTextPaginator.RenderedAttachment) -> Void)?
-    /// Tapped text whose link is a 段評 / 本章說 `ydreview://` href. The host presents the same
+    /// Tapped text whose link is a 段评 / 本章说 `ydreview://` href. The host presents the same
     /// review sheet an image badge opens; page navigation cannot resolve these hrefs.
     var onReviewTap: ((ReaderHTMLUtilities.ReviewTarget) -> Void)?
     /// Tapped a duokan footnote marker: `(note text, marker rect in this view's coords)`. The host
@@ -187,7 +187,7 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
         noteMarkerOverlay.frame = bounds
         noteMarkerOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         addSubview(playbackOverlay)
-        // 圓圈必須疊在所有標註層之上，否則會被同一段的螢光筆填色蓋掉。
+        // 圆圈必须叠在所有标注层之上，否则会被同一段的萤光笔填色盖掉。
         addSubview(noteMarkerOverlay)
         addSubview(interactionOverlay)
         addSubview(bookmarkRibbonView)
@@ -329,7 +329,7 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// 頁眉／頁腳 as rotor-reachable custom content rather than extra stops.
+    /// 页眉／页脚 as rotor-reachable custom content rather than extra stops.
     ///
     /// The bars are drawn into the page now, so there is no view for VoiceOver to
     /// land on — and the page is a single element whose label is the page text.
@@ -501,8 +501,8 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
                 self?.presentEmphasisEditMenu()
             }
         ))
-        // 沒訂閱時項目照樣留著，只換成鎖頭：點下去 ReaderView 會開付費牆。
-        // 「這一點該開編輯頁還是付費牆」的判斷只有 ReaderView 那一處，這裡純顯示。
+        // 没订阅时项目照样留著，只换成锁头：点下去 ReaderView 会开付费墙。
+        // 「这一点该开编辑页还是付费墙」的判断只有 ReaderView 那一处，这里纯显示。
         let canEditNote = premium.allowsParagraphNoteEditing
         actions.append(UIAction(
             title: localized(noteMenuTitleIsEdit ? "编辑笔记" : "笔记"),
@@ -535,7 +535,7 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
     }
 
     private var pendingAISelection: CoreTextAISelectionRequest?
-    /// Where 重點's colour menu opens once the selection menu it replaces has gone.
+    /// Where 重点's colour menu opens once the selection menu it replaces has gone.
     private var pendingEmphasisSourcePoint: CGPoint?
     private var isEditMenuVisible = false
 
@@ -616,9 +616,9 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
         configureTapPriority()
     }
 
-    /// 標註/播放/選取 overlay 的 rects 是依 bounds 計算的。正文會在 bounds 變動時
-    /// 自動 draw(rect:) 重畫，但 overlay 不會，所以這裡在 bounds 改變時重算它們，
-    /// 避免旋轉進橫屏雙頁跨頁後高亮/標註用舊 bounds 的位置而錯位。
+    /// 标注/播放/选取 overlay 的 rects 是依 bounds 计算的。正文会在 bounds 变动时
+    /// 自动 draw(rect:) 重画，但 overlay 不会，所以这里在 bounds 改变时重算它们，
+    /// 避免旋转进横屏双页跨页后高亮/标注用旧 bounds 的位置而错位。
     override func layoutSubviews() {
         super.layoutSubviews()
         bookmarkRibbonView.frame = ReaderBookmarkRibbon.frame(in: bounds)
@@ -632,7 +632,7 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
         }
     }
 
-    /// 頁眉／頁腳 for *this* page.
+    /// 页眉／页脚 for *this* page.
     ///
     /// Held on the view rather than folded into `ChapterLayout` because it changes
     /// on a different clock: the clock field ticks every minute and the battery
@@ -734,7 +734,7 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
         )
     }
 
-    /// - Parameter bars: 頁眉／頁腳 drawn as part of the page.
+    /// - Parameter bars: 页眉／页脚 drawn as part of the page.
     ///   Everything that shows a page goes through here — the live view, curl
     ///   back-pages, cover-transition snapshots, the auto-read reveal image — so
     ///   drawing the bars here is what makes them turn with the page in every
@@ -847,7 +847,7 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
             drawHorizontalFrame(
                 frame,
                 contentPathRect: contentPathRect,
-                // The artifact's origins carry 底部對齊; hand-built test layouts have none.
+                // The artifact's origins carry 底部对齐; hand-built test layouts have none.
                 lineOrigins: layout.pageArtifacts.indices.contains(pageIndex)
                     ? layout.pageArtifacts[pageIndex].lineOrigins
                     : nil,
@@ -1447,8 +1447,8 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
               localPageIndex < layout.pageRanges.count
         else { return }
 
-        // 筆記圓圈排在最前面：它畫在正文之上，落在它上面的點擊就是要開筆記，
-        // 不該再往下走連結／圖片／選字那幾條路。
+        // 笔记圆圈排在最前面：它画在正文之上，落在它上面的点击就是要开笔记，
+        // 不该再往下走连结／图片／选字那几条路。
         if !interactor.selectionManager.hasSelection, requestNoteEditFromMarker(at: point) {
             return
         }
@@ -1488,7 +1488,7 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
                     onFootnoteTap?(note, viewRect(forRenderRect: target.rect))
                     return
                 }
-                // 段評 comment badge → the attachment handler (which opens the review sheet).
+                // 段评 comment badge → the attachment handler (which opens the review sheet).
                 // Internal-link navigation must not swallow it: the online paged reader's link
                 // handler doesn't understand review hrefs, so the tap would die there.
                 if ReaderHTMLUtilities.reviewTarget(fromHref: href) != nil {
@@ -1751,8 +1751,8 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
             return decide(true, "hasSelection")
         }
 
-        // 這是 linkTapGesture 收不收這個觸控的閘門，回 false 就整個落到閱讀器的
-        // 點擊區（翻頁／選單）。筆記圓圈既不是連結也不是圖片，不在這裡宣告就永遠點不到。
+        // 这是 linkTapGesture 收不收这个触控的闸门，回 false 就整个落到阅读器的
+        // 点击区（翻页／选单）。笔记圆圈既不是连结也不是图片，不在这里宣告就永远点不到。
         if noteMarkerHitTargets.contains(where: { $0.rect.contains(point) }) {
             return decide(true, "noteMarker")
         }
@@ -1920,7 +1920,7 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
     ///   nearest line even from a paragraph gap or the blank under the last line, so a handle
     ///   dragged past the text keeps following it. A tap passes `false`: it counts only on a line
     ///   it landed on, give or take the same tolerance as the x axis. Snapped, a page holding
-    ///   nothing but a 本章說 card claimed every tap on its blank space as the card's link, and
+    ///   nothing but a 本章说 card claimed every tap on its blank space as the card's link, and
     ///   the page never turned (feedback #86). Vertical text already applies the tolerance to
     ///   every gesture.
     private func stringIndex(
@@ -2192,16 +2192,16 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
 
         noteMarkerOverlay.frame = bounds
         noteMarkerOverlay.markers = scaled
-        // 標註 overlay 是後來才 addSubview 的，會蓋在圓圈上面；每次更新後把圓圈拉回最上層。
+        // 标注 overlay 是后来才 addSubview 的，会盖在圆圈上面；每次更新后把圆圈拉回最上层。
         bringSubviewToFront(noteMarkerOverlay)
         noteMarkerHitTargets = scaled.map {
             ($0.annotationID, NoteMarkerGeometry.tapRect(for: $0.badgeRect))
         }
     }
 
-    // MARK: - 筆記
+    // MARK: - 笔记
 
-    /// 點在筆記圓圈上 → 開該標註的筆記編輯頁。回傳是否吃掉了這次點擊。
+    /// 点在笔记圆圈上 → 开该标注的笔记编辑页。回传是否吃掉了这次点击。
     private func requestNoteEditFromMarker(at point: CGPoint) -> Bool {
         guard !noteMarkerHitTargets.isEmpty else { return false }
         guard let hit = noteMarkerHitTargets.first(where: { $0.rect.contains(point) }),
@@ -2211,8 +2211,8 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
         return true
     }
 
-    /// 選字選單的「筆記」。已有標註就編輯它的筆記；純選取則把選取範圍送出去，
-    /// 由閱讀器補上預設標註後再開編輯頁。
+    /// 选字选单的「笔记」。已有标注就编辑它的笔记；纯选取则把选取范围送出去，
+    /// 由阅读器补上预设标注后再开编辑页。
     private func requestNoteEdit() {
         if let annotation = interactor.tappedAnnotation
             ?? annotationCoveringSelection() {
@@ -2309,8 +2309,8 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
         guard let annotation = interactor.tappedAnnotation,
               let stored = bookRange(annotation.range, annotationID: annotation.id) else { return }
 
-        // 這段寫過筆記：刪掉標註等於一併丟掉筆記，必須先讓使用者選。引擎層沒有 alert，
-        // 所以只送請求，實際刪除由閱讀器在使用者回答後執行。
+        // 这段写过笔记：删掉标注等于一并丢掉笔记，必须先让使用者选。引擎层没有 alert，
+        // 所以只送请求，实际删除由阅读器在使用者回答后执行。
         if let note = annotation.note,
            !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             NotificationCenter.default.post(
@@ -2451,8 +2451,8 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
         playbackOverlay.endHandlePoint = nil
     }
 
-    /// A search hit in its fixed wash, shown whatever 朗讀高亮 is set to; narration in the
-    /// style 朗讀高亮 sets (`applyTTSPlaybackStyle`).
+    /// A search hit in its fixed wash, shown whatever 朗读高亮 is set to; narration in the
+    /// style 朗读高亮 sets (`applyTTSPlaybackStyle`).
     static func applyPlaybackStyle(for highlight: ReaderPlaybackHighlight, to overlay: InteractionOverlayView) {
         guard highlight.isSearchHit else {
             applyTTSPlaybackStyle(to: overlay)
@@ -2524,11 +2524,11 @@ final class CoreTextPageView: UIView, UIGestureRecognizerDelegate, @MainActor UI
 /// Single-page ViewController wrapping CoreTextPageView, for use with UIPageViewController.
 final class CoreTextPageViewController: UIViewController, ReaderBookmarkRibbonHosting,
     UISheetPresentationControllerDelegate {
-    /// 段評面板外那層透明的點擊區（`installOutsideTapDismiss`）。
+    /// 段评面板外那层透明的点击区（`installOutsideTapDismiss`）。
     private weak var reviewOutsideTapView: UIView?
-    /// 當前這段評面板。關它時只認這一個對象：這頁自己 `dismiss(_:)` 在它沒呈現任何東西時會
-    /// 沿呈現鏈上溯，而閱讀頁本身正是「被呈現的那一層」（首頁與書架都用 fullScreenCover 開
-    /// 閱讀頁），於是點一下面板外就把整本書退掉了。
+    /// 当前这段评面板。关它时只认这一个对象：这页自己 `dismiss(_:)` 在它没呈现任何东西时会
+    /// 沿呈现链上溯，而阅读页本身正是「被呈现的那一层」（首页与书架都用 fullScreenCover 开
+    /// 阅读页），于是点一下面板外就把整本书退掉了。
     private weak var reviewSheetHost: UIViewController?
     /// 当前的段评面板（自定义覆盖层，不是系统 sheet）。
     private var reviewPanel: ReviewPanelOverlayController?
@@ -2565,7 +2565,7 @@ final class CoreTextPageViewController: UIViewController, ReaderBookmarkRibbonHo
         }
     }
 
-    /// 頁眉／頁腳 for the page this controller shows. Settable after `configure`
+    /// 页眉／页脚 for the page this controller shows. Settable after `configure`
     /// so a clock tick or a battery change can refresh the bars without touching
     /// the layout.
     var pageBars: ReaderPageBars? {
@@ -2773,7 +2773,7 @@ final class CoreTextPageViewController: UIViewController, ReaderBookmarkRibbonHo
         )
     }
 
-    /// Presents the book source's paragraph-review (段評) web page in a bottom sheet.
+    /// Presents the book source's paragraph-review (段评) web page in a bottom sheet.
     ///
     /// Some sources don't publish a review URL — they publish a jsLib call that builds one at tap
     /// time (同人小说网 signs it with the user's shared token). Those resolve through the source's
@@ -2818,19 +2818,19 @@ final class CoreTextPageViewController: UIViewController, ReaderBookmarkRibbonHo
         // 底部栏也弹出来；菜单本身又是 SwiftUI 层级，反过来盖在面板上。挂到最外层
         // 视图上，面板永远盖过菜单，点按也到不了翻页手势；玻璃采样的仍是同一窗口
         // 下的真实书页。
-        let host = ReviewPanelOverlayController.topPresentedViewController(in: view.window) ?? self
+        let host = ReviewPanelOverlayController.topPresentedViewController(in: self.view.window) ?? self
         panel.present(in: host)
     }
 
-    /// 點面板外收起段評面板。
+    /// 点面板外收起段评面板。
     ///
-    /// `largestUndimmedDetentIdentifier = .large` 把系統那層遮罩（連同它自帶的「點擊
-    /// 關閉」）在半屏與全屏都去掉了，透明就靠這個換來；全屏也不再補白底。這裡補一層透明視圖墊在面板下面：它蓋住整屏，
-    /// 面板自己的區域仍由面板接收，落在面板外的點按才到它，於是 dismiss。比往 window 上
-    /// 掛手勢可靠：閱讀頁的翻頁手勢掛得更深，UIKit 會把識別機會讓給它。
+    /// `largestUndimmedDetentIdentifier = .large` 把系统那层遮罩（连同它自带的「点击
+    /// 关闭」）在半屏与全屏都去掉了，透明就靠这个换来；全屏也不再补白底。这里补一层透明视图垫在面板下面：它盖住整屏，
+    /// 面板自己的区域仍由面板接收，落在面板外的点按才到它，于是 dismiss。比往 window 上
+    /// 挂手势可靠：阅读页的翻页手势挂得更深，UIKit 会把识别机会让给它。
     private func installOutsideTapDismiss(for controller: UIViewController, isEnabled: Bool) {
-        // 上一張面板留下的點擊區可能還在（面板被下拉關掉時它隨容器一起走，但換頁、換源
-        // 重新打開時不一定），先掃乾淨再舖新的，免得一個殘留的全屏透明視圖吃掉下一次點按。
+        // 上一张面板留下的点击区可能还在（面板被下拉关掉时它随容器一起走，但换页、换源
+        // 重新打开时不一定），先扫干净再舖新的，免得一个残留的全屏透明视图吃掉下一次点按。
         reviewOutsideTapView?.removeFromSuperview()
         reviewOutsideTapView = nil
         guard isEnabled,
@@ -2854,13 +2854,13 @@ final class CoreTextPageViewController: UIViewController, ReaderBookmarkRibbonHo
         dismissReviewSheet()
     }
 
-    /// 關掉當前段評面板，且只關它。
+    /// 关掉当前段评面板，且只关它。
     ///
-    /// 這裡不能用 `dismiss(animated:)`：這頁只是閱讀頁裡的一頁正文，段評面板的呈現是 UIKit
-    /// 從上層發起的，這頁自己的 `presentedViewController` 通常是 nil；`dismiss(_:)` 於是沿
-    /// 呈現鏈往上走，找到的「有 presented」的祖先正是開閱讀頁的那個 fullScreenCover / push，
-    /// 面板連同整本書一起被關掉。改成在**面板自己**身上調 dismiss —— UIKit 的規矩是「在
-    /// presented 控制器上調，等於請它的 presenter 關掉它」，關掉的只有這一層。
+    /// 这里不能用 `dismiss(animated:)`：这页只是阅读页里的一页正文，段评面板的呈现是 UIKit
+    /// 从上层发起的，这页自己的 `presentedViewController` 通常是 nil；`dismiss(_:)` 于是沿
+    /// 呈现链往上走，找到的「有 presented」的祖先正是开阅读页的那个 fullScreenCover / push，
+    /// 面板连同整本书一起被关掉。改成在**面板自己**身上调 dismiss —— UIKit 的规矩是「在
+    /// presented 控制器上调，等于请它的 presenter 关掉它」，关掉的只有这一层。
     private func dismissReviewSheet() {
         reviewOutsideTapView?.removeFromSuperview()
         reviewOutsideTapView = nil
@@ -2876,8 +2876,8 @@ final class CoreTextPageViewController: UIViewController, ReaderBookmarkRibbonHo
         reviewSheetHost = nil
     }
 
-    /// 半屏/全屏切換時 UIKit 會重建系統材質視圖（`UIVisualEffectView`），
-    /// 只在彈出時清一次不夠；這裡在每次檔位變化後再清一遍，並補一幀後清算動畫。
+    /// 半屏/全屏切换时 UIKit 会重建系统材质视图（`UIVisualEffectView`），
+    /// 只在弹出时清一次不够；这里在每次档位变化后再清一遍，并补一帧后清算动画。
     func sheetPresentationControllerDidChangeSelectedDetentIdentifier(
         _ sheetPresentationController: UISheetPresentationController
     ) {
@@ -2922,12 +2922,12 @@ final class CoreTextPageViewController: UIViewController, ReaderBookmarkRibbonHo
         AppLogger.info("⟐ review sheet chrome dump:\n" + lines.joined(separator: "\n"))
     }
 
-    /// 把 sheet 容器上的系統材質與底色清成透明，只留內容本身。
+    /// 把 sheet 容器上的系统材质与底色清成透明，只留内容本身。
     ///
-    /// `protected` 是被呈現的面板視圖（連同它自己的玻璃層）：整棵跳過。
-    /// 半屏/全屏切換時 UIKit 會重建容器上的材質視圖，需要再清一次；但面板
-    /// 自己那層玻璃也在容器鏈上，舊實作遞迴把它 `effect = nil`，拉到 large
-    /// 就變成全透明、背後正文直接透上來。現在只清系統裝飾層。
+    /// `protected` 是被呈现的面板视图（连同它自己的玻璃层）：整棵跳过。
+    /// 半屏/全屏切换时 UIKit 会重建容器上的材质视图，需要再清一次；但面板
+    /// 自己那层玻璃也在容器链上，旧实作递回把它 `effect = nil`，拉到 large
+    /// 就变成全透明、背后正文直接透上来。现在只清系统装饰层。
     private static func clearSheetChrome(_ view: UIView?, keepingContentOf protected: UIView?) {
         guard let view else { return }
         if let protected, view === protected || view.isDescendant(of: protected) { return }
@@ -3022,12 +3022,12 @@ final class ReviewPanelOverlayController: UIViewController, UIGestureRecognizerD
         return UIBlurEffect(style: .systemUltraThinMaterial)
     }
 
-    /// 「不透明度 / 玻璃濃淡」的唯一換算：0 = 最透、1 = 最實。
+    /// 「不透明度 / 玻璃浓淡」的唯一换算：0 = 最透、1 = 最实。
     ///
-    /// 以前是 `0.7 * 滑桿 + 0.3 * 全局透明度`，全局那項默認值就把結果壓在 0.3 上下，
-    /// 拉滑桿只在自己那 0.7 裡動，加上 tint 又封在 0.22 以內，白紙書頁上白疊白，
-    /// 視覺上幾乎沒有差別 —— 這就是「這個不透明度調節根本看不出來」。
-    /// 現在滑桿佔 0.85、全局只做微調，下游 tint 用滿量程 0~1。
+    /// 以前是 `0.7 * 滑杆 + 0.3 * 全局透明度`，全局那项默认值就把结果压在 0.3 上下，
+    /// 拉滑杆只在自己那 0.7 里动，加上 tint 又封在 0.22 以内，白纸书页上白叠白，
+    /// 视觉上几乎没有差别 —— 这就是「这个不透明度调节根本看不出来」。
+    /// 现在滑杆占 0.85、全局只做微调，下游 tint 用满量程 0~1。
     static func glassLevel(sheet: Double, globalTransparency: Double) -> Double {
         let s = min(max(sheet, 0), 1)
         let g = 1 - min(max(globalTransparency, 0), 1)
@@ -3660,7 +3660,7 @@ final class PlaceholderPageViewController: UIViewController {
     private let themeBackgroundColor: UIColor
     private let themeTextColor: UIColor
     /// The reader background artwork, when one is set. A laid-out page draws it
-    /// itself (`CoreTextPageView.draw`), so without it here the 載入中 page was the
+    /// itself (`CoreTextPageView.draw`), so without it here the 载入中 page was the
     /// one surface in the book still painted a flat colour.
     private let readerBackgroundImage: UIImage?
 

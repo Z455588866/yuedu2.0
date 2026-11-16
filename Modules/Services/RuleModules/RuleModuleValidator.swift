@@ -54,22 +54,7 @@ enum RuleModuleValidator {
     /// Whether the module being checked declares `javascript`: what `checkRule` lets a JS step by.
     @TaskLocal private static var allowsJavaScript = false
 
-    /// Whether the module being checked declares `javascript`: what `checkRule` lets a JS step by.
-    @TaskLocal private static var allowsJavaScript = false
-
     static func validate(_ module: RuleModule, appVersion: String) throws(RuleModuleRejection) {
-        let outcome: Result<Void, RuleModuleRejection> = $allowsJavaScript.withValue(module.javascript == true) {
-            do throws(RuleModuleRejection) {
-                try validateFields(module, appVersion: appVersion)
-                return .success(())
-            } catch {
-                return .failure(error)
-            }
-        }
-        try outcome.get()
-    }
-
-    private static func validateFields(_ module: RuleModule, appVersion: String) throws(RuleModuleRejection) {
         let outcome: Result<Void, RuleModuleRejection> = $allowsJavaScript.withValue(module.javascript == true) {
             do throws(RuleModuleRejection) {
                 try validateFields(module, appVersion: appVersion)
@@ -85,12 +70,6 @@ enum RuleModuleValidator {
         guard isFileSafe(module.id) else { throw .invalidID(module.id) }
         try requireText(module.title, "title")
         guard RuleModuleVersion(module.version) != nil else { throw .invalidVersion(field: "version", value: module.version) }
-        if let required = module.requiredVersion {
-            guard let needed = RuleModuleVersion(required) else { throw .invalidVersion(field: "requiredVersion", value: required) }
-            if let running = RuleModuleVersion(appVersion), running < needed {
-                throw .requiresNewerApp(required: required, running: appVersion)
-            }
-        }
         guard !module.modules.isEmpty || module.search != nil || module.lookup != nil else { throw .noEntries }
         guard module.modules.count <= maxEntries else { throw .tooManyEntries(module.modules.count) }
 
@@ -214,182 +193,10 @@ enum RuleModuleValidator {
             guard module.javascript == true else { throw .javaScript(field: "\(path).request.script") }
             try requireText(script, "\(path).request.script")
         }
-        if module.javascript != nil { uses302("javascript") }
-        if let comments = module.comments {
-            uses302("comments")
-            try validate(comments, records: records, hosts: hosts, globals: globalNames)
-        }
-        // A request's `script` is JavaScript: the module's to declare, and never blank.
-        for (path, request) in requests(of: module) {
-            guard let script = request.script else { continue }
-            uses302("\(path).request.script")
-            guard module.javascript == true else { throw .javaScript(field: "\(path).request.script") }
-            try requireText(script, "\(path).request.script")
-        }
-        // The newest format it uses is the one it must ask for.
-        if let field = format302 {
-            let declared = module.requiredVersion.flatMap(RuleModuleVersion.init)
-            guard let declared, let minimum = RuleModuleVersion(RuleModuleFormat.version3_0_2), declared >= minimum else {
-                throw .needsRequiredVersion(field: field, minimum: RuleModuleFormat.version3_0_2)
-            }
-        }
-        if let field = format301 {
-            let declared = module.requiredVersion.flatMap(RuleModuleVersion.init)
-            guard let declared, let minimum = RuleModuleVersion(RuleModuleFormat.version3_0_1), declared >= minimum else {
-                throw .needsRequiredVersion(field: field, minimum: RuleModuleFormat.version3_0_1)
-            }
-        }
-        if let field = format3 {
-            let declared = module.requiredVersion.flatMap(RuleModuleVersion.init)
-            guard let declared, let minimum = RuleModuleVersion(RuleModuleFormat.version3), declared >= minimum else {
-                throw .needsRequiredVersion(field: field, minimum: RuleModuleFormat.version3)
-            }
-        }
+        // 版本限制已去除：不再要求模组声明 requiredVersion。
     }
 
     // MARK: - Entries
-    /// Every request the module has, by the path of what holds it.
-    private static func requests(of module: RuleModule) -> [(String, RuleModule.Request)] {
-        var found: [(String, RuleModule.Request)] = []
-        func add(_ entry: RuleModule.Entry?, _ path: String) {
-            guard let entry else { return }
-            found.append((path, entry.request))
-            if let detail = entry.detail { found.append(("\(path).detail", detail.request)) }
-        }
-        for (index, entry) in module.modules.enumerated() { add(entry, "modules[\(index)]") }
-        add(module.search, "search")
-        add(module.lookup, "lookup")
-        add(module.genre, "genre")
-        if let detail = module.detail { found.append(("detail", detail.request)) }
-        if let related = module.related { found.append(("related", related.request)) }
-        if let reviews = module.reviews { found.append(("reviews", reviews.request)) }
-        if let comments = module.comments {
-            found.append(("comments.chapters", comments.chapters.request))
-            found.append(("comments.chapter", comments.chapter.request))
-            if let paragraph = comments.paragraph { found.append(("comments.paragraph", paragraph.request)) }
-            if let counts = comments.counts { found.append(("comments.counts", counts.request)) }
-            if let hot = comments.hot { found.append(("comments.hot", hot.request)) }
-            if let say = comments.authorSay { found.append(("comments.authorSay", say.request)) }
-        }
-        return found
-    }
-
-    /// 本章说: the site's chapters of a record `search` or `lookup` found, then one chapter's
-    /// comments by the id the chapter list gave it.
-    private static func validate(_ comments: RuleModule.Comments, records: [RuleModule.Entry],
-                                 hosts: RuleModuleHosts, globals: Set<String>) throws(RuleModuleRejection) {
-        try validate(comments.chapters.request, path: "comments.chapters", keyNames: ["id", "url"], records: records,
-                     hosts: hosts, globals: globals)
-        let chapters = comments.chapters.list
-        try requireText(chapters.items, "comments.chapters.list.items")
-        try requireText(chapters.id, "comments.chapters.list.id")
-        try requireText(chapters.title, "comments.chapters.list.title")
-        for (name, rule) in [("items", chapters.items), ("id", chapters.id), ("title", chapters.title)] {
-            try checkRule(rule, field: "comments.chapters.list.\(name)", declared: [], innerRules: true)
-        }
-
-        try validate(comments.chapter, path: "comments.chapter", hosts: hosts, globals: globals)
-        if let paragraph = comments.paragraph {
-            try validate(paragraph, path: "comments.paragraph", hosts: hosts, globals: globals, ofParagraph: true)
-        }
-        if let counts = comments.counts {
-            // A bubble opens its paragraph's comments.
-            guard comments.paragraph != nil else { throw .missingField("comments.paragraph") }
-            try validateChapterRequest(counts.request, path: "comments.counts", hosts: hosts, globals: globals)
-            try requireText(counts.list.items, "comments.counts.list.items")
-            try requireText(counts.list.count, "comments.counts.list.count")
-            try validate(counts.list.paragraph, count: counts.paragraphCount, path: "comments.counts")
-            for case let (name, rule?) in [("list.items", counts.list.items), ("list.count", counts.list.count),
-                                           ("paragraphCount", counts.paragraphCount)] as [(String, String?)] {
-                try checkRule(rule, field: "comments.counts.\(name)", declared: [], innerRules: true)
-            }
-        }
-        if let hot = comments.hot {
-            try validateChapterRequest(hot.request, path: "comments.hot", hosts: hosts, globals: globals)
-            try requireText(hot.list.items, "comments.hot.list.items")
-            try requireText(hot.list.text, "comments.hot.list.text")
-            try validate(hot.list.paragraph, count: hot.paragraphCount, path: "comments.hot")
-            for case let (name, rule?) in [("list.items", hot.list.items), ("list.text", hot.list.text), ("list.author", hot.list.author),
-                                           ("list.likes", hot.list.likes), ("paragraphCount", hot.paragraphCount)] as [(String, String?)] {
-                try checkRule(rule, field: "comments.hot.\(name)", declared: [], innerRules: true)
-            }
-        }
-        if let say = comments.authorSay {
-            try validateChapterRequest(say.request, path: "comments.authorSay", hosts: hosts, globals: globals)
-            guard !say.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw .emptyRule(field: "comments.authorSay.text")
-            }
-            for case let (name, rule?) in [("text", say.text), ("author", say.author)] as [(String, String?)] {
-                try checkRule(rule, field: "comments.authorSay.\(name)", declared: [], innerRules: true)
-            }
-        }
-    }
-
-    /// How an item names its paragraph: by its text, or by its number with the site's count of
-    /// the chapter's paragraphs beside it. A number alone is refused: nothing would tell that
-    /// the reader's chapter is cut as the site's is.
-    private static func validate(_ rules: RuleModule.ParagraphRules, count: String?, path: String) throws(RuleModuleRejection) {
-        func has(_ rule: String?) -> Bool { !(rule ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        guard has(rules.quote) || has(rules.index) else { throw .missingField("\(path).list.quote") }
-        if !has(rules.quote), !has(count) { throw .missingField("\(path).paragraphCount") }
-        for case let (name, rule?) in [("quote", rules.quote), ("index", rules.index), ("id", rules.id)] as [(String, String?)] {
-            try checkRule(rule, field: "\(path).list.\(name)", declared: [], innerRules: true)
-        }
-    }
-
-    /// A request about one chapter: `{{chapterId}}` it must name, the record's keys, and with
-    /// `extra` whatever else its block fills. On the module's hosts.
-    private static func validateChapterRequest(_ request: RuleModule.Request, path: String, hosts: RuleModuleHosts,
-                                               globals: Set<String>, extra: Set<String> = []) throws(RuleModuleRejection) {
-        let method = (request.method ?? "GET").uppercased()
-        guard method == "GET" || method == "POST" else {
-            throw .unsupportedMethod(field: "\(path).request.method", method: request.method ?? "")
-        }
-        let declared = globals.union(["id", "url", "chapterId"]).union(extra)
-        try requireText(request.url, "\(path).request.url")
-        try checkRule(request.url, field: "\(path).request.url", declared: declared)
-        if let body = request.body { try checkRule(body, field: "\(path).request.body", declared: declared) }
-        if let encoding = request.bodyEncoding, RuleModule.BodyEncoding(rawValue: encoding) == nil {
-            throw .unknownValue(field: "\(path).request.bodyEncoding", value: encoding)
-        }
-        for (name, value) in (request.headers ?? [:]).sorted(by: { $0.key < $1.key }) {
-            try checkRule(value, field: "\(path).request.headers.\(name)", declared: declared)
-        }
-        if hasOptionTail(request.url) { throw .urlOptions(field: "\(path).request.url") }
-        // Which chapter: without it the page would be the same for every chapter.
-        guard templates(of: request).contains("chapterId") else { throw .missingField("\(path).request.url {{chapterId}}") }
-        try checkHost(request.url, field: "\(path).request.url", hosts: hosts)
-    }
-
-    private static func templates(of request: RuleModule.Request) -> Set<String> {
-        Set(templateNames(in: request.url + (request.body ?? "") + (request.headers ?? [:]).values.joined()))
-    }
-
-    /// A list of comments: a chapter's, or with `ofParagraph` one paragraph's (`{{paragraphId}}`).
-    private static func validate(_ block: RuleModule.ChapterComments, path: String, hosts: RuleModuleHosts,
-                                 globals: Set<String>, ofParagraph: Bool = false) throws(RuleModuleRejection) {
-        try validateChapterRequest(block.request, path: path, hosts: hosts, globals: globals,
-                                   extra: ofParagraph ? ["page", "sort", "paragraphId"] : ["page", "sort"])
-        let templates = templates(of: block.request)
-        if ofParagraph, !templates.contains("paragraphId") { throw .missingField("\(path).request.url {{paragraphId}}") }
-        if let sorts = block.sorts {
-            guard !sorts.isEmpty, templates.contains("sort") else { throw .missingField("\(path).request.url {{sort}}") }
-            for (index, sort) in sorts.enumerated() { try requireText(sort.title, "\(path).sorts[\(index)].title") }
-        } else if templates.contains("sort") {
-            throw .missingField("\(path).sorts")
-        }
-        let list = block.list
-        try requireText(list.items, "\(path).list.items")
-        try requireText(list.text, "\(path).list.text")
-        let rules: [(String, String?)] = [
-            ("list.items", list.items), ("list.text", list.text), ("list.title", list.title), ("list.author", list.author),
-            ("list.date", list.date), ("list.likes", list.likes), ("total", block.total),
-        ]
-        for case let (name, rule?) in rules {
-            try checkRule(rule, field: "\(path).\(name)", declared: [], innerRules: true)
-        }
-    }
-
     /// Every request the module has, by the path of what holds it.
     private static func requests(of module: RuleModule) -> [(String, RuleModule.Request)] {
         var found: [(String, RuleModule.Request)] = []
@@ -572,10 +379,6 @@ enum RuleModuleValidator {
             if format302 == nil { format302 = "\(path).store" }
             try validateStore(store, of: entry, path: path)
         }
-        if let store = entry.store {
-            if format302 == nil { format302 = "\(path).store" }
-            try validateStore(store, of: entry, path: path)
-        }
 
         var declared = pagingNames.union(globals)
         if isSearch { declared.insert("keyword") }
@@ -686,33 +489,6 @@ enum RuleModuleValidator {
     /// The most sections a list's store has.
     static let maxStoreSections = 12
 
-    /// A list's store (`Entry.store`): only a home list has one, each section a layout of books
-    /// with values its own parameters take.
-    private static func validateStore(_ store: [RuleModule.StoreSection], of entry: RuleModule.Entry,
-                                      path: String) throws(RuleModuleRejection) {
-        let field = "\(path).store"
-        guard path.hasPrefix("modules["), !store.isEmpty, store.count <= maxStoreSections else {
-            throw .unknownValue(field: field, value: String(store.count))
-        }
-        for (index, section) in store.enumerated() {
-            let layout = HomeSectionLayout(rawValue: section.layout)
-            guard layout.isKnown, !layout.style.drawsLists, ![.tiles, .readingCard, .compactReadingCard].contains(layout) else {
-                throw .unknownValue(field: "\(field)[\(index)].layout", value: section.layout)
-            }
-            for (name, value) in (section.params ?? [:]).sorted(by: { $0.key < $1.key }) {
-                guard let param = entry.params.first(where: { $0.name == name }) else {
-                    throw .unknownValue(field: "\(field)[\(index)].params", value: name)
-                }
-                if param.kind == .enumeration, !(param.enumOptions ?? []).contains(where: { $0.value == value }) {
-                    throw .unknownValue(field: "\(field)[\(index)].params.\(name)", value: value)
-                }
-            }
-        }
-    }
-
-    /// The most sections a list's store has.
-    static let maxStoreSections = 12
-
     /// A record's own page: only a search's or a lookup's records are asked for one (a home
     /// list's rows never are), and it gives a description or tags.
     private static func validate(_ detail: RuleModule.Detail, of entryPath: String, hosts: RuleModuleHosts,
@@ -763,9 +539,7 @@ enum RuleModuleValidator {
             throw .unsupportedMethod(field: "\(path).request.method", method: request.method ?? "")
         }
         let keyNames: Set<String> = ["id", "url"]
-        // `{{page}}` is the reserved paging placeholder: a reviews request that names it is read
-        // page by page (`RuleModuleClient.allReviews`), so it may name it.
-        let declared = globals.union(keyNames).union(["page"])
+        let declared = globals.union(keyNames)
         try requireText(request.url, "\(path).request.url")
         try checkRule(request.url, field: "\(path).request.url", declared: declared)
         if let body = request.body { try checkRule(body, field: "\(path).request.body", declared: declared) }

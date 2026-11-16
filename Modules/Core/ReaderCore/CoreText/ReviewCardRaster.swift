@@ -3,11 +3,11 @@ import os
 import UIKit
 import WebKit
 
-/// The one way a source review card (本章說 / 作者說 / 神評論) becomes an image, whichever
+/// The one way a source review card (本章说 / 作者说 / 神评论) becomes an image, whichever
 /// route it took into the reader — `<img src="data:…svg">` through `OnlineImageLoader`, or an
 /// inline `<svg>` through `NodeAttributedStringRenderer`.
 ///
-/// When the reader wears a template for the card's kind (氣泡設定), the card is redrawn from
+/// When the reader wears a template for the card's kind (气泡设定), the card is redrawn from
 /// it, in the reading font, size and colour. Otherwise the source's card is drawn as authored,
 /// its canvas widened so its text matches the prose (`ReviewCardSVGMetrics`).
 enum ReviewCardRaster {
@@ -61,7 +61,7 @@ enum ReviewCardRaster {
         return await SVGWebViewRasterizer.shared.render(svgString: drawn, size: size, baseURL: baseURL)
     }
 
-    /// A template drawn over sample content, for 氣泡設定's previews, on `theme` — the
+    /// A template drawn over sample content, for 气泡设定's previews, on `theme` — the
     /// preview's own, which is 黑色 in the night preview whatever the reader is on.
     @MainActor
     static func preview(
@@ -111,37 +111,13 @@ enum ReviewCardRaster {
         }
     }
 
-    /// A card drawn from its content alone: a module's 热评, 本章说 or 作者说, which has no card of
-    /// a source's to redraw. In the template its kind wears, else the built-in one.
-    @MainActor
-    static func image(card: ReviewCardContent, columnWidth: CGFloat, reader: Reader) async -> UIImage? {
-        let isNight = CommentBubbleSVGRecognizer.isNightTheme(themeTextColor: reader.textColor)
-        var source = ReviewCardTemplate.builtinSource(for: card.kind)
-        var customColor: String?
-        if case .custom(let style)? = GlobalSettings.snapshot.wornCommentCardTemplate(for: card.kind) {
-            source = style.svg
-            customColor = style.colorHex(isNight: isNight)
-        }
-        do {
-            let appearance = appearance(for: reader, theme: ReaderConfig.shared.theme)
-            let filled = try ReviewCardTemplate(source: source).filled(
-                with: card, appearance: appearance, width: columnWidth, colorHex: customColor ?? appearance.textColorHex)
-            return await SVGWebViewRasterizer.shared.renderCard(svgString: filled, width: columnWidth, isNight: isNight)
-        } catch {
-            AppLogger.error("comment card template unreadable; the card is not drawn", error: error, context: [
-                "kind": card.kind.rawValue, "path": "module",
-            ])
-            return nil
-        }
-    }
-
     /// The card redrawn from the template its kind wears, or nil when the source's card is
     /// drawn instead.
     ///
     /// Fallback, by design: a card this build cannot read (`ReviewCardContent.extract` finds
     /// no heading or hint naming its kind, or nothing a comment is made of) is drawn as the
     /// source authored it. That is the real case of a source shipping a card layout nobody
-    /// has seen, as 含遇見's 作家說 was until its heading was read. Remove a case once its
+    /// has seen, as 含遇见's 作家说 was until its heading was read. Remove a case once its
     /// layout is read.
     @MainActor
     static func templatedSVG(

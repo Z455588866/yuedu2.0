@@ -219,25 +219,6 @@ private extension PaywallShowcase {
         .clipShape(RoundedRectangle(cornerRadius: DSRadius.lg, style: .continuous))
     }
 
-    func moduleRow(_ symbol: String, widthRatio: CGFloat, isAdded: Bool) -> some View {
-        HStack(spacing: DSSpacing.md) {
-            Image(systemName: symbol)
-                .font(DSFont.subheadline)
-                .foregroundStyle(DSColor.accent)
-                .frame(width: DSSpacing.xl, height: DSSpacing.xl)
-                .background(DSColor.accentLight, in: RoundedRectangle(cornerRadius: DSRadius.sm, style: .continuous))
-            GeometryReader { proxy in
-                Capsule()
-                    .fill(DSColor.textSecondary.opacity(0.28))
-                    .frame(width: proxy.size.width * widthRatio, height: DSSpacing.sm)
-                    .frame(maxHeight: .infinity)
-            }
-            .frame(height: DSSpacing.xl)
-            Image(systemName: isAdded ? "checkmark.circle.fill" : "plus.circle.fill")
-                .font(DSFont.headline)
-                .foregroundStyle(isAdded ? DSColor.textSecondary : DSColor.accent)
-        }
-    }
 }
 
 #Preview("Paywall showcases") {
