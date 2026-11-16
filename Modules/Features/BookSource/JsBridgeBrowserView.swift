@@ -537,6 +537,11 @@ struct LegadoReviewBrowserView: View {
     @State private var hasTimedOut = false
     /// 重试计数：变化即重启 4 秒超时计时（.task(id:) 随之重跑）。
     @State private var retryToken = 0
+    /// 模块评论（角标带模块 token 时）：不走书源网页抓取，直接读规则模块的
+    /// 数据，映射成同一批原生玻璃卡片——面板的脸不变，只是换一条数据路线。
+    @State private var modulePage: GrabbedCommentPage?
+    /// 模块路线的失败文案（找不到线程、请求失败）；nil = 未失败。
+    @State private var moduleFailed: String?
     /// 面板底色的浓淡由外观 › 界面效果 的滑杆决定，拖动即时生效。
     private var settings: GlobalSettings { .shared }
     /// 设置页的「显示模式」决定默认显示原生卡片还是书源原网页。
@@ -604,10 +609,11 @@ struct LegadoReviewBrowserView: View {
                     .transition(.opacity)
             }
 
-            // ③ 抓到评论：原生玻璃卡片盖在最上层。
-            if displayMode == .native, let grabbed {
+            // ③ 抓到评论：原生玻璃卡片盖在最上层。模块路线（modulePage）与
+            //    书源抓取路线（grabbed）共用同一套卡片，面板外观完全一致。
+            if displayMode == .native, let panel = modulePage ?? grabbed {
                 NativeReviewPanelView(
-                    title: grabbed.panelTitle(
+                    title: panel.panelTitle(
                         fallback: target.title.isEmpty ? localized("段评") : target.title
                     ),
                     paragraphLabel: nil,
@@ -621,8 +627,51 @@ struct LegadoReviewBrowserView: View {
         .task(id: retryToken) {
             // 超时兜底：抓不到就停在玻璃提示态（脸不变），WebView 继续在
             // 玻璃底下抓——一旦抓到，grabbed 非空自动跳成原生卡片。
+            // 模块路线不走网页抓取，没有这个超时（失败由模块 task 自己报告）。
+            guard target.moduleToken.isEmpty else { return }
             try? await Task.sleep(for: .seconds(4))
             if grabbed == nil { hasTimedOut = true }
+        }
+        .task(id: "module-\(target.moduleToken)-\(retryToken)") {
+            // 模块评论路线：角标的 token 指向装饰器注册的模块目标（章节或某段）。
+            // 复用 ChapterCommentsModel 的读法（排序、去重、分页），把结果映射成
+            // 面板的卡片模型——玻璃面板由此也能显示模块的书与章节。
+            guard !target.moduleToken.isEmpty, modulePage == nil else { return }
+            guard let comments = ModuleCommentTargets.target(target.moduleToken) else {
+                moduleFailed = localized("找不到这一章的评论")
+                return
+            }
+            let model = ChapterCommentsModel(target: comments)
+            await model.load()
+            // 一页 20 条：多数段落一页就够；本章说再多读几页，读到没有新的为止。
+            for _ in 0..<4 where model.hasMore { await model.loadMore() }
+            switch model.phase {
+            case .unavailable:
+                moduleFailed = localized("找不到这一章的评论")
+            case .failed(let message):
+                moduleFailed = message
+            default:
+                let heading = model.heading
+                let isParagraph = model.paragraphID != nil
+                modulePage = GrabbedCommentPage(
+                    adapter: "module",
+                    title: nil,
+                    subtitle: nil,
+                    segments: nil,
+                    context: isParagraph ? heading : nil,
+                    count: model.comments.count,
+                    total: nil,
+                    items: model.comments.enumerated().map { index, review in
+                        ReviewComment(
+                            id: "\(index)",
+                            user: review.author ?? "",
+                            content: review.text,
+                            likes: review.likes,
+                            time: review.date.map { $0.timeIntervalSince1970 }
+                        )
+                    }
+                )
+            }
         }
         .overlay(alignment: .topTrailing) {
             if grabbed != nil || hasTimedOut {
@@ -669,6 +718,12 @@ struct LegadoReviewBrowserView: View {
     }
 
     private var displayMode: DisplayMode {
+        // 模块路线：角标带模块 token 时只有这一条数据线，网页抓取整体让位。
+        if !target.moduleToken.isEmpty {
+            if modulePage != nil { return .native }
+            if moduleFailed != nil { return .timedOut }
+            return .loading
+        }
         if effectiveShowsSourcePage { return .web }
         if grabbed != nil { return .native }
         if hasTimedOut { return .timedOut }
@@ -676,9 +731,12 @@ struct LegadoReviewBrowserView: View {
     }
 
     /// 书源段评网页。抽成计算属性是为了让它在 ZStack 里只存在一份、常驻。
+    /// 模块路线没有书源网页可开（角标只带模块 token），不挂任何 WebView。
     @ViewBuilder
     private var sourceWebView: some View {
-        if let page = target.sourceBrowserPage {
+        if !target.moduleToken.isEmpty {
+            Color.clear
+        } else if let page = target.sourceBrowserPage {
             JsBridgeBrowserView(
                 urlString: page.baseURL,
                 title: target.title,
@@ -734,12 +792,15 @@ struct LegadoReviewBrowserView: View {
             Image(systemName: "hourglass")
                 .font(.system(size: 20, weight: .light))
                 .foregroundStyle(DSColor.textSecondary)
-            Text(localized("评论还在路上，稍等片刻"))
+            // 模块路线失败时说失败的原因；抓取超时说超时的话。
+            Text(moduleFailed ?? localized("评论还在路上，稍等片刻"))
                 .font(.system(size: 12))
                 .foregroundStyle(DSColor.textSecondary)
             Button {
                 withAnimation(.easeInOut(duration: 0.22)) {
                     hasTimedOut = false
+                    moduleFailed = nil
+                    modulePage = nil
                     retryToken += 1
                 }
             } label: {
