@@ -18,7 +18,7 @@ struct RuleModuleGroupView: View {
     @ViewBuilder private var officialRows: some View {
         ForEach(appModules) { module in
             NavigationLink(value: module.route) {
-                RuleModuleRow(title: module.title, version: RuleModuleVersion.marketing, description: module.summary,
+                RuleModuleRow(title: module.title, version: RuleModuleVersion.app, description: module.summary,
                               author: localized("阅读"), isOfficial: true)
             }
             .accessibilityIdentifier("modules.module.\(module.id)")
