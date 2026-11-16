@@ -15,6 +15,43 @@ struct RuleModuleGroupView: View {
         self.library = library ?? .shared
     }
 
+    @ViewBuilder private var officialRows: some View {
+        ForEach(appModules) { module in
+            NavigationLink(value: module.route) {
+                RuleModuleRow(title: module.title, version: RuleModuleVersion.marketing, description: module.summary,
+                              author: localized("阅读"), isOfficial: true)
+            }
+            .accessibilityIdentifier("modules.module.\(module.id)")
+        }
+    }
+
+    @ViewBuilder private var importedRows: some View {
+        ForEach(modules, id: \.module.id) { installed in
+            NavigationLink(value: ExploreNavigationRoute.module(id: installed.module.id)) {
+                RuleModuleRow(module: installed.module, isEnabled: library.isEnabled(installed.module.id))
+            }
+            .accessibilityIdentifier("modules.module.\(installed.module.id)")
+        }
+    }
+
+    @ViewBuilder private var failureRows: some View {
+        ForEach(failures, id: \.folder) { failure in
+            Button {
+                pendingRemoval = failure
+            } label: {
+                VStack(alignment: .leading, spacing: DSSpacing.xxs) {
+                    Text(failure.folder).foregroundStyle(DSColor.textPrimary)
+                    Text(localized("档案损毁，或需要较新版本的阅读。"))
+                        .font(DSFont.footnote)
+                        .foregroundStyle(DSColor.textSecondary)
+                }
+            }
+            .accessibilityLabel(failure.folder)
+            .accessibilityValue(localized("无法读取的模组"))
+            .accessibilityHint(localized("移除模组"))
+        }
+    }
+
     private var modules: [InstalledRuleModule] {
         group == .official ? library.official : library.imported
     }
@@ -27,6 +64,16 @@ struct RuleModuleGroupView: View {
         group == .official ? AppOfficialModule.available(librariesAvailable: availability.isAvailable) : []
     }
 
+    /// 官方模组、汇入的模组与读不出的档案（编译器拆解：整段一个表达式推不动）。
+    @ViewBuilder private var moduleSections: some View {
+        Section {
+            officialRows
+            importedRows
+            failureRows
+        }
+        .interfaceSectionSurface()
+    }
+
     var body: some View {
         Group {
             if !library.isLoaded {
@@ -35,37 +82,7 @@ struct RuleModuleGroupView: View {
                 ContentUnavailableView { UnavailableLabel(localized("还没有模组"), systemImage: "puzzlepiece.extension") }
             } else {
                 Form {
-                    Section {
-                        ForEach(appModules) { module in
-                            NavigationLink(value: module.route) {
-                                RuleModuleRow(title: module.title, version: RuleModuleVersion.marketing, description: module.summary,
-                                              author: localized("阅读"), isOfficial: true)
-                            }
-                            .accessibilityIdentifier("modules.module.\(module.id)")
-                        }
-                        ForEach(modules, id: \.module.id) { installed in
-                            NavigationLink(value: ExploreNavigationRoute.module(id: installed.module.id)) {
-                                RuleModuleRow(module: installed.module, isEnabled: library.isEnabled(installed.module.id))
-                            }
-                            .accessibilityIdentifier("modules.module.\(installed.module.id)")
-                        }
-                        ForEach(failures, id: \.folder) { failure in
-                            Button {
-                                pendingRemoval = failure
-                            } label: {
-                                VStack(alignment: .leading, spacing: DSSpacing.xxs) {
-                                    Text(failure.folder).foregroundStyle(DSColor.textPrimary)
-                                    Text(localized("档案损毁，或需要较新版本的阅读。"))
-                                        .font(DSFont.footnote)
-                                        .foregroundStyle(DSColor.textSecondary)
-                                }
-                            }
-                            .accessibilityLabel(failure.folder)
-                            .accessibilityValue(localized("无法读取的模组"))
-                            .accessibilityHint(localized("移除模组"))
-                        }
-                    }
-                    .interfaceSectionSurface()
+                    moduleSections
                 }
                 .softScrollEdges()
             }
