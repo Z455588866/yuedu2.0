@@ -29,6 +29,10 @@ struct ShelfPaperView: View {
     /// 长按「搜索网络封面」时要找封面的那本书。用整本书而不只是 id：封面搜索按
     /// 书名 + 作者查，换书的同一帧里 state 还没落盘时也能拿到正确的名字。
     @State private var coverSearchBook: ReadingBook?
+    /// 长按 → 编辑书籍信息（书名 / 作者 / 分组 / 简介 / 封面）。复用详情页那张
+    /// EditBookSheet；iOS 17 上它里面的一级封面选择器只能从 push 弹出，所以走和
+    /// 旧书架同一套 presentation policy（`pushedEditingBookId` / `sheetEditingBook`）。
+    @State private var editingBook: ReadingBook?
     /// 长按 → 书籍详情：进入作品详情页（读者评论就显示在这一页）。
     /// 用 item 目的地而不是布尔量，避免 iOS 17 在 push 时把刚赋的 route 清空。
     @State private var shelfWork: WorkDetailRoute?
@@ -43,6 +47,46 @@ struct ShelfPaperView: View {
     /// 每本书封各自的窗口坐标 frame / 绘制内容。引用类型，写入内部字典不会触发
     /// SwiftUI 重绘，也不会在 body 求值时改动 @State 本身。
     @State private var coverBoxes = ShelfPaperCoverBoxes()
+
+    // MARK: 编辑书籍信息的呈现（与旧书架同一套 policy）
+
+    /// 书籍资讯 as a pushed destination (iOS 17) — nil on iOS 18+. Carries the id because
+    /// `navigationDestination(item:)` needs a Hashable; the editor reads the live record.
+    private var pushedEditingBookId: Binding<UUID?> {
+        Binding(
+            get: {
+                BookInfoEditPresentationPolicy.prefersNavigationDestination
+                    ? editingBook?.id
+                    : nil
+            },
+            set: { if $0 == nil { editingBook = nil } }
+        )
+    }
+
+    /// 书籍资讯 as a sheet (iOS 18+) — nil on iOS 17.
+    private var sheetEditingBook: Binding<ReadingBook?> {
+        Binding(
+            get: {
+                BookInfoEditPresentationPolicy.prefersNavigationDestination
+                    ? nil
+                    : editingBook
+            },
+            set: { if $0 == nil { editingBook = nil } }
+        )
+    }
+
+    /// 保存书名 / 作者 / 分组 / 简介。封面由 EditBookSheet 内 own pickers 直接写 store。
+    private func saveBookInfo(
+        _ book: ReadingBook,
+        title: String,
+        author: String,
+        group: String,
+        intro: String
+    ) {
+        store.updateBook(bookId: book.id, title: title, author: author)
+        store.setGroup(group, for: book.id)
+        store.setCustomIntro(intro, for: book.id)
+    }
 
     // MARK: Data
 
@@ -120,6 +164,16 @@ struct ShelfPaperView: View {
                 WorkDetailView(route: route, onRemoveFromShelf: { shelfWork = nil })
                     .environmentObject(store)
             }
+            // 长按 → 编辑书籍信息（iOS 17：push）。EditBookSheet 里的封面选择器是
+            // 一级弹层，iOS 17 上不能从 sheet 里再弹，所以这条路走 push。
+            .navigationDestination(item: pushedEditingBookId) { bookId in
+                if let book = store.books.first(where: { $0.id == bookId }) {
+                    EditBookSheet(book: book, presentation: .push) { title, author, group, intro in
+                        saveBookInfo(book, title: title, author: author, group: group, intro: intro)
+                    }
+                    .environmentObject(store)
+                }
+            }
             .background {
                 // 卡片翻开转场必须挂在外层 UINavigationController 上。这个零尺寸探针
                 // 解析出书架自己的 nav controller，交给 coordinator 提供打开动画与
@@ -169,6 +223,15 @@ struct ShelfPaperView: View {
             // 封面格子自己带 surface，不会糊成一片。统一走「全局玻璃」总闸，
             // 关掉时退成不透明纯色，供 iOS 17 一键兜底（第 13 条）。
             .presentationBackground { GlobalGlassBackdrop() }
+        }
+        // 长按 → 编辑书籍信息（iOS 18+：sheet）。iOS 17 上走 NavigationStack 内的 push。
+        .sheet(item: sheetEditingBook, onDismiss: { editingBook = nil }) { book in
+            AdaptiveSheetContainer(maxWidth: DSLayout.readableCompactWidth) {
+                EditBookSheet(book: book) { title, author, group, intro in
+                    saveBookInfo(book, title: title, author: author, group: group, intro: intro)
+                }
+                .environmentObject(store)
+            }
         }
         .confirmationDialog(
             localized("删除所选书籍"),
@@ -358,6 +421,11 @@ struct ShelfPaperView: View {
                         showWorkDetail(for: book)
                     } label: {
                         Label(localized("书籍详情"), systemImage: "books.vertical")
+                    }
+                    Button {
+                        editingBook = book
+                    } label: {
+                        Label(localized("编辑书籍资讯"), systemImage: "square.and.pencil")
                     }
                     Button {
                         requestCoverSearch(for: book)
@@ -604,6 +672,11 @@ struct ShelfPaperView: View {
                 Label(localized("书籍详情"), systemImage: "books.vertical")
             }
             Button {
+                editingBook = book
+            } label: {
+                Label(localized("编辑书籍资讯"), systemImage: "square.and.pencil")
+            }
+            Button {
                 requestCoverSearch(for: book)
             } label: {
                 Label(localized("搜索网络封面"), systemImage: "photo.on.rectangle.angled")
@@ -659,7 +732,18 @@ struct ShelfPaperView: View {
     /// A cover on the page: no tilt here, the shelf is a shelf — the spine's shade and a soft
     /// shadow are enough to keep it from reading as a flat rectangle.
     private func shelfCover(_ book: ReadingBook, width: CGFloat?, height: CGFloat) -> some View {
-        BookCoverImage(readingBook: book)
+        // 换封面后这里必须跟着刷新。旧的 BookCoverImage(readingBook:) 只读 coverUrl
+        // 且按 URL 做缓存 key —— 换封面改的是 coverImagePath，coverUrl 不变，task id
+        // 也不变，于是书架沿用旧缓存图（详情页却会更新，因为它用的是下面这套）。
+        // BookshelfCoverArtwork 读 coverImagePath，并监听 pipeline.invalidations：
+        // 写封面时 BookCoverLoader.write 会 invalidate，这一格随即重载新图。
+        // 走 BookshelfCoverStyle 与详情页、旧书架同一条解析链路，转场上报的
+        // bookshelfDrawnCoverObserver 也由外层的 reportBookshelfCoverFrame 提供。
+        BookshelfCoverStyle.artwork(
+            for: book,
+            colorScheme: scheme,
+            displaySize: CGSize(width: width ?? 100, height: height)
+        )
             .frame(width: width, height: height)
             .frame(maxWidth: width == nil ? .infinity : nil)
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
