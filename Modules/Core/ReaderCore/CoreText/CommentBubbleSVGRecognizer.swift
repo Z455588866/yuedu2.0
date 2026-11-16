@@ -473,7 +473,8 @@ struct CommentBubbleSVGRecognizer {
             recognizedBubble: template.replacingDisplayText(with: count),
             // The app's own template, not a source's SVG: its count reads in the reading
             // font, as a bubble package's does.
-            sourceTextFace: .reader
+            sourceTextFace: .reader,
+            isReaderOwnedBadge: true
         )
     }
 
@@ -522,12 +523,16 @@ struct CommentBubbleSVGRecognizer {
         pointSize: CGFloat,
         themeTextColor: UIColor,
         sourceBubble: CommentBubbleSVG? = nil,
-        sourceTextFace: BubbleTextFace
+        sourceTextFace: BubbleTextFace,
+        /// True for a badge that has no source SVG of its own (the module's 段评气泡, a
+        /// source's `<comment>` marker): 「跟随来源」 has nothing to follow, so the reader's
+        /// own selection applies whatever the switch says.
+        isReaderOwnedBadge: Bool = false
     ) -> UIImage? {
         guard let sourceBubble = sourceBubble ?? recognize(src: src, svgContent: svgContent) else {
             return nil
         }
-        if settings.commentBubbleFollowsSourceSVG {
+        if settings.commentBubbleFollowsSourceSVG && !isReaderOwnedBadge {
             return draw(svg: sourceBubble, pointSize: pointSize, themeTextColor: themeTextColor, textFace: sourceTextFace)
         }
 
