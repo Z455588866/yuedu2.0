@@ -617,7 +617,7 @@ struct LegadoReviewBrowserView: View {
                         fallback: target.title.isEmpty ? localized("段评") : target.title
                     ),
                     paragraphLabel: nil,
-                    comments: grabbed.items
+                    comments: panel.items
                 )
                 .padding(.top, 6)
                 .transition(.opacity)

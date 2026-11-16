@@ -155,7 +155,7 @@ private func extractChapterOrder(from title: String) -> Int? {
 private func parseChineseChapterNumber(_ raw: String) -> Int? {
     let digits: [Character: Int] = [
         "零": 0, "〇": 0, "○": 0,
-        "一": 1, "二": 2, "两": 2, "两": 2, "三": 3, "四": 4,
+        "一": 1, "二": 2, "两": 2, "兩": 2, "三": 3, "四": 4,
         "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
     ]
     let units: [Character: Int] = ["十": 10, "百": 100, "千": 1000, "万": 10000]

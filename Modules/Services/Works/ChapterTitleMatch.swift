@@ -35,14 +35,14 @@ enum ChapterTitleMatch {
         #"^([0-9]+)(?=[\s.、:：\-—]|$)"#,
     ].map { try! NSRegularExpression(pattern: $0, options: .caseInsensitive) }
 
-    /// Arabic digits, or a Han numeral up to the 万s (一千二百三十四, 十二, 二〇三).
+    /// Arabic digits, or a Han numeral up to the 萬s (一千二百三十四, 十二, 二〇三).
     static func number(_ text: String) -> Int? {
         if let value = Int(text) { return value }
-        let digits: [Character: Int] = ["零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+        let digits: [Character: Int] = ["零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "兩": 2, "三": 3, "四": 4, "五": 5,
                                         "六": 6, "七": 7, "八": 8, "九": 9]
         let units: [Character: Int] = ["十": 10, "百": 100, "千": 1_000]
         // Positional (二〇三): no unit in it.
-        if !text.contains(where: { units[$0] != nil || $0 == "万" || $0 == "万" }) {
+        if !text.contains(where: { units[$0] != nil || $0 == "万" || $0 == "萬" }) {
             var value = 0
             for character in text {
                 guard let digit = digits[character] else { return nil }
@@ -58,7 +58,7 @@ enum ChapterTitleMatch {
                 // 十二 is 一十二.
                 section += (digit ?? 1) * unit
                 digit = nil
-            } else if character == "万" || character == "万" {
+            } else if character == "万" || character == "萬" {
                 total += (section + (digit ?? 0)) * 10_000
                 section = 0
                 digit = nil

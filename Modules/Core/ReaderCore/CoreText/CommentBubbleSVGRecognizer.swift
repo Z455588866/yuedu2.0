@@ -419,7 +419,8 @@ struct CommentBubbleSVGRecognizer {
         pointSize: CGFloat,
         themeTextColor: UIColor,
         recognizedBubble: CommentBubbleSVG? = nil,
-        sourceTextFace: BubbleTextFace = .declared
+        sourceTextFace: BubbleTextFace = .declared,
+        isReaderOwnedBadge: Bool = false
     ) -> UIImage? {
         // One read for the key and the image, so a settings change between them cannot file
         // an image drawn with the new settings under the old key.
@@ -432,7 +433,8 @@ struct CommentBubbleSVGRecognizer {
                 pointSize: pointSize,
                 themeTextColor: themeTextColor,
                 displayText: recognizedBubble?.displayText,
-                sourceTextFace: sourceTextFace
+                sourceTextFace: sourceTextFace,
+                isReaderOwnedBadge: isReaderOwnedBadge
             )
         }
         if let cached = bubbleImageCache.object(forKey: cacheKey) {
@@ -446,7 +448,8 @@ struct CommentBubbleSVGRecognizer {
             pointSize: pointSize,
             themeTextColor: themeTextColor,
             sourceBubble: recognizedBubble,
-            sourceTextFace: sourceTextFace
+            sourceTextFace: sourceTextFace,
+            isReaderOwnedBadge: isReaderOwnedBadge
         ) else { return nil }
         bubbleImageCache.setObject(image, forKey: cacheKey)
         noteBubbleCache(hit: false)
@@ -489,7 +492,8 @@ struct CommentBubbleSVGRecognizer {
         pointSize: CGFloat,
         themeTextColor: UIColor,
         displayText: String?,
-        sourceTextFace: BubbleTextFace
+        sourceTextFace: BubbleTextFace,
+        isReaderOwnedBadge: Bool = false
     ) -> String {
         let identity = (svgContent?.isEmpty == false) ? svgContent! : src
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
@@ -510,7 +514,8 @@ struct CommentBubbleSVGRecognizer {
             } ?? "-",
             String(format: "%.2f", s.commentBubbleScale),
             sourceTextFace.rawValue,
-            s.selectedReaderFontPostScript ?? "sys"
+            s.selectedReaderFontPostScript ?? "sys",
+            isReaderOwnedBadge ? "R1" : "R0"
         ].joined(separator: "|")
         let textIdentity = displayText.map { "|T\($0)" } ?? ""
         return "\(identity.utf8.count)#\(identity.hashValue)\(textIdentity)|\(Int(pointSize.rounded()))|\(rgba)|\(sig)"
