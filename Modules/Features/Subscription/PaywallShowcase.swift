@@ -16,7 +16,6 @@ struct PaywallShowcase: View {
             case .comfort: comfort
             case .habits: habits
             case .modules: modules
-            case .modules: modules
             }
         }
         .frame(maxWidth: .infinity)
@@ -201,24 +200,6 @@ private extension PaywallShowcase {
                 .foregroundStyle(isAdded ? DSColor.textSecondary : DSColor.accent)
         }
     }
-}
-
-// MARK: - 接上更多内容
-
-private extension PaywallShowcase {
-    /// Three modules in a list: two already in, one about to be added.
-    var modules: some View {
-        VStack(spacing: DSSpacing.sm) {
-            moduleRow("books.vertical", widthRatio: 0.7, isAdded: true)
-            moduleRow("magnifyingglass", widthRatio: 0.55, isAdded: true)
-            moduleRow("text.bubble", widthRatio: 0.62, isAdded: false)
-        }
-        .padding(DSSpacing.lg)
-        .frame(maxHeight: .infinity)
-        .interfaceCardSurface()
-        .clipShape(RoundedRectangle(cornerRadius: DSRadius.lg, style: .continuous))
-    }
-
 }
 
 #Preview("Paywall showcases") {

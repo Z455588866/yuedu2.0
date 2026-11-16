@@ -23,10 +23,6 @@ enum PremiumFeature: String, CaseIterable, Identifiable, Hashable {
     /// clipboard, a `yuedu://module` link or a repository (maintainer, 2026-11-15). The official
     /// modules, the modules already installed and their updates stay free: only the way in is Pro.
     case moduleImport
-    /// 新增模组: adding a module that is not the app's own — from an address, a file, the
-    /// clipboard, a `yuedu://module` link or a repository (maintainer, 2026-11-15). The official
-    /// modules, the modules already installed and their updates stay free: only the way in is Pro.
-    case moduleImport
 
     var id: String { rawValue }
 
@@ -58,7 +54,6 @@ enum PremiumFeature: String, CaseIterable, Identifiable, Hashable {
         case .alternateAppIcons: return "app.badge"
         case .launchScreen: return "app.dashed"
         case .moduleImport: return "puzzlepiece.extension"
-        case .moduleImport: return "puzzlepiece.extension"
         }
     }
 
@@ -78,7 +73,6 @@ enum PremiumFeature: String, CaseIterable, Identifiable, Hashable {
         case .alternateAppIcons: return "桌面图标切换"
         case .launchScreen: return "启动图"
         case .moduleImport: return "新增模组"
-        case .moduleImport: return "新增模组"
         }
     }
 
@@ -90,13 +84,12 @@ enum PremiumFeature: String, CaseIterable, Identifiable, Hashable {
         case .customFonts: return "汇入喜欢的字体，阅读和介面都能用"
         case .touchZoneEditor: return "画面分成 3×3，每一格点了做什么由你决定"
         case .dialogueHighlight: return "对白排成聊天气泡，重点按规则自动上色"
-        case .layoutPresetImport: return "整套排版汇出汇入，也能读 Legado 的配置文件"
+        case .layoutPresetImport: return "整套排版汇出汇入，也能读 Legado 的设定档"
         case .readerBackgroundImport: return "用自己的图片当书页背景"
         case .bottomBarCustomization: return "自订底部 Tab 的页面、大小与图示"
         case .readerThemePacks: return "App 与阅读配色、页面背景，都能自己调"
         case .alternateAppIcons: return "切换预置的桌面图标"
         case .launchScreen: return "换上你自己的开屏画面"
-        case .moduleImport: return "从网址、档案或剪贴簿加入第三方模组"
         case .moduleImport: return "从网址、档案或剪贴簿加入第三方模组"
         }
     }

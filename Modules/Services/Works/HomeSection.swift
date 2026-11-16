@@ -44,9 +44,9 @@ struct HomeSectionLayout: RawRepresentable, Codable, Hashable, Sendable {
     /// `Technotes/AppleBooksHomeLayouts-2026-10-25.md`). A build before them draws a row, or
     /// 专题集合 for a section of lists, and keeps the value.
     /// 色带书架: large covers under the header, all on the first cover's colour, as Apple Books
-    /// Japan's manga band. Since 2026-10-27 the home's 顶部轮播图 (`HomePage.carouselSection`),
-    /// no longer a layout 呈现方式 offers: the page's first band is drawn at the top, from edge
-    /// to edge under the bars, and any other is drawn as 大型封面书架.
+    /// Japan's manga band. From 2026-10-27 the home's 顶部轮播图, which a build until 2026-11-12
+    /// draws at the top of the page; no longer a layout 呈现方式 offers, and drawn as 大型封面书架.
+    /// The defaults still write it, so every page's first list of covers is drawn alike.
     static let band = Self(rawValue: "band")
     /// 大型封面书架: about two large covers to a phone, as Apple Books' 新刊&话题作.
     static let largeRow = Self(rawValue: "largeRow")
@@ -58,7 +58,7 @@ struct HomeSectionLayout: RawRepresentable, Codable, Hashable, Sendable {
     static let rankedRow = Self(rawValue: "rankedRow")
     /// 色带书架 (maintainer, 2026-10-27, after Apple Books' Audiobooks We Love): the section on its
     /// first cover's colour from edge to edge, its first covers stacked and cut by the band's
-    /// foot. Not `band`, which the page's first is its 顶部轮播图. A build before it draws a row.
+    /// foot. Not `band`, the 顶部轮播图 that was. A build before it draws a row.
     static let colorBand = Self(rawValue: "colorBand")
     /// 分类卡片: a wide card per list, its name beside its covers, as Apple Books' More to Explore.
     static let categoryCards = Self(rawValue: "categoryCards")
@@ -103,7 +103,7 @@ enum HomeSectionBinding: Hashable, Sendable {
     /// each opening its reader as the tab's cards do. Not 我的书库, which drew the places. A
     /// build before it reads it as `.unknown` and writes it back as it came.
     case bookshelf
-    /// 最新: one row per source that has a 最新 (plan decision 10), except those 聚合设置's
+    /// 最新: one row per source that has a 最新 (plan decision 10), except those 聚合设定's
     /// 显示在最新 turns off (5d-3f, decision 21). Until 5d-3f the section kept its own
     /// `excluded` list; `HomePageStore.legacyLatestExcluded` reads it for the move.
     case latest
@@ -127,10 +127,6 @@ enum HomeSectionBinding: Hashable, Sendable {
     /// 系列下一本 (5d-6b, decisions 24 and 25): the next numbered book of each series being
     /// read or read to the end, from the shelf and the WebDAV index (`NextInSeries`).
     case nextInSeries
-    /// 之前读过 (maintainer, 2026-11-15, after Apple Books' store): the shelf's books opened before
-    /// and no longer in 继续阅读 — read to the end, or taken off it — the last opened first. A
-    /// build before it reads it as `.unknown` and writes it back as it came.
-    case readBefore
     /// 之前读过 (maintainer, 2026-11-15, after Apple Books' store): the shelf's books opened before
     /// and no longer in 继续阅读 — read to the end, or taken off it — the last opened first. A
     /// build before it reads it as `.unknown` and writes it back as it came.
@@ -206,7 +202,6 @@ extension HomeSectionBinding: Codable {
         case .related: self = .related
         case .nextInSeries: self = .nextInSeries
         case .readBefore: self = .readBefore
-        case .readBefore: self = .readBefore
         case .subscriptionArticles: self = .subscriptionArticles
         case .aiRecommendations: self = .aiRecommendations
         case .module:
@@ -258,8 +253,6 @@ extension HomeSectionBinding: Codable {
             try container.encode(Kind.related.rawValue, forKey: .type)
         case .nextInSeries:
             try container.encode(Kind.nextInSeries.rawValue, forKey: .type)
-        case .readBefore:
-            try container.encode(Kind.readBefore.rawValue, forKey: .type)
         case .readBefore:
             try container.encode(Kind.readBefore.rawValue, forKey: .type)
         case .subscriptionArticles:
@@ -362,8 +355,6 @@ struct HomePage: Codable, Hashable, Sendable {
 ///   it becomes that page (`HomeDefaultsStoreMigration`);
 /// - once, for the 2026-11-15 page with its genres: a 预设 still as the 2026-11-14 page made it
 ///   becomes this one (`HomeDefaultsGenresMigration`);
-/// - once, for the 2026-11-15 page with its genres: a 预设 still as the 2026-11-14 page made it
-///   becomes this one (`HomeDefaultsGenresMigration`);
 /// - the languages' rankings, which follow the language (`HomeDefaultsLanguageSwap`).
 enum HomePageDefaults {
     /// Whom the defaults are made for, as the home knows it: `page`'s inputs. 预设配置 makes a
@@ -430,7 +421,6 @@ enum HomePageDefaults {
         let charts = rankingCards.isEmpty ? [] : [lists(rankingCards, .rankedRow)]
         let moreToExplore = lists(genreCards, .bannerCards)
         let completed = trends("completed", .largeRow)
-        let byGenre = lists(Array(genreCards.prefix(4)), .groupedShelves)
         let byGenre = lists(Array(genreCards.prefix(4)), .groupedShelves)
         let year = trends("year", .heroGrid)
         let classics = trends("classics", .colorBand)
@@ -513,7 +503,7 @@ enum HomePageDefaults {
     ///
     /// The maintainer, 2026-10-25, after Apple Books' home (`Technotes/AppleBooksHomeLayouts-2026-10-25.md`):
     /// each list in a rhythm of its own, and one band on the page. The first list with real
-    /// covers takes the band, since 2026-10-27 the home's 顶部轮播图 (`HomePage.carouselSection`);
+    /// covers takes the band, drawn as 大型封面书架 since the 顶部轮播图 went (2026-11-12);
     /// a ranking with covers is a ranked row, AniList's trending manga 一大四小
     /// and its trending novels, not a ranking, a row. なろう's ranking has no covers, so it stays
     /// 图文资讯清单 with its ranks, and never takes the band.

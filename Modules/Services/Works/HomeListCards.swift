@@ -73,16 +73,6 @@ struct HomeListCard: Codable, Hashable, Sendable {
         binding == other.binding && parameters == other.parameters
     }
 
-    /// The cards it stands for: 精选书单 is every bundled list, a card each (maintainer, 2026-11-15:
-    /// 「如果我全都是一个清单的分组，但各个分组要自己的照片呢」). Until then 精选书单 was one card whose
-    /// row gave the lists, so the form showed one tile for them all, with one photo and no name
-    /// of their own. Every card the home draws is now a card the form shows.
-    var expanded: [HomeListCard] {
-        guard binding == .gutenbergLists else { return [self] }
-        return PublicLibraryCollection.all.map { HomeListCard(binding: .gutenbergCollection(id: $0.id)) }
-    }
-
-
     /// Whether this build can load it: a list it knows, not a section of lists inside another.
     var isDrawable: Bool {
         switch binding {
@@ -99,19 +89,6 @@ extension HomeSectionBinding {
         switch self {
         case .opdsFeed, .gutenbergFeed, .lists, .myLibrary, .unknown: false
         default: true
-        }
-    }
-
-    /// 精选书单, or a section of nothing but its lists: what 精选书单 is written as once one of
-    /// its cards is named, moved or taken off, so its header stays what it was.
-    var showsBundledLists: Bool {
-        switch self {
-        case .gutenbergLists: return true
-        case .lists(let cards):
-            return !cards.isEmpty && cards.allSatisfy {
-                if case .gutenbergCollection = $0.binding { true } else { false }
-            }
-        default: return false
         }
     }
 
@@ -280,15 +257,6 @@ extension CollectionSummary {
             if let name = row.card?.title, !name.isEmpty { list.title = name }
             return [list]
         }
-        // One of 精选书单's lists as a card of its own is the list 精选书单's one card gave: the
-        // same id, covers and page, under the card's photo and the reader's name for it.
-        if !entries.isEmpty, case .gutenbergCollection(let id) = row.loadingSection.binding,
-           let collection = PublicLibraryCollection.all.first(where: { $0.id == id }) {
-            var list = CollectionSummary.bundledGutenberg(collection)
-            list.photoID = photo
-            if let name = row.card?.title, !name.isEmpty { list.title = name }
-            return [list]
-        }
         var books: [WorkSummary] = []
         var bookLanguages: [String] = []
         var hasPlaces = false
@@ -316,7 +284,6 @@ extension CollectionSummary {
         var card = CollectionSummary(id: row.id, title: title, books: books, languages: bookLanguages, opening: .list(opening),
                                      sourceName: row.providerName)
         card.photoID = photo
-        card.blurb = row.listDescription
         card.blurb = row.listDescription
         return [card]
     }

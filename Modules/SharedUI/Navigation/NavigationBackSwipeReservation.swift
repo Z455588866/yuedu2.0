@@ -74,8 +74,6 @@ final class NavigationBackSwipeProbeController: UIViewController {
 /// UIKit's recognizer and targets still own native progress and cancellation.
 /// On iOS 17.0 it reserves the edge with a pan of its own that pops the page instead
 /// (`popsWithoutInteractiveTransition`).
-/// On iOS 17.0 it reserves the edge with a pan of its own that pops the page instead
-/// (`popsWithoutInteractiveTransition`).
 @MainActor
 final class NavigationBackSwipeReservationController: NSObject, UIGestureRecognizerDelegate {
     private weak var navigationController: UINavigationController?
@@ -86,38 +84,6 @@ final class NavigationBackSwipeReservationController: NSObject, UIGestureRecogni
     private weak var alternatePopGesture: UIGestureRecognizer?
     private var originalAlternatePopEnabled = false
     private var initialX: CGFloat = 0
-    /// The reservation's own pan where the system's interactive pop cannot be used
-    /// (`popsWithoutInteractiveTransition`).
-    private var ownedPan: UIPanGestureRecognizer?
-
-    /// Whether the reserved swipe pops the page with the plain animated pop, without the system's
-    /// interactive transition: the page still leaves on a swipe from the edge, it does not follow
-    /// the finger.
-    ///
-    /// A compatibility branch for a UIKit defect, not a second way to go back. On iOS 17.0 an
-    /// interactive pop between a page that hides the navigation bar (a reader) and one that shows
-    /// it (the detail page it was opened from) starts an interactive bar transition:
-    /// `-[UINavigationController _startInteractiveBarTransition:]` turns on
-    /// `+[UIViewPropertyAnimator _startTrackingAnimations]`, and no `_finishTrackingAnimations`
-    /// follows. The one finish after it in the trace is `+[UIView _finishAnimationTracking]`, the
-    /// other API, from `_setNavigationBarHidden:edge:duration:`: read as a mismatched pair, without
-    /// a trace of a healthy system to compare. Measured: `_trackingAnimationsCurrentlyEnabled` is
-    /// still YES once the app is idle, and the next pop's animations sit at speed 0. Every later
-    /// navigation transition and alert is built paused and never started: the screen answers
-    /// touches and moves one step each time the app goes to the background and back (FB-204, an
-    /// iPhone 13 Pro Max on iOS 17.0, and likely FB-132's dead taps before it; traced on the
-    /// iOS 17.0 simulator, 21A328, 2026-11-16). A pop that is not interactive between the same
-    /// two pages does not freeze.
-    ///
-    /// Only iOS 17.0 and its point releases take this branch (maintainer, 2026-11-16). iOS 17.5
-    /// does not freeze on the same test; its tracking was not traced. 17.1 to 17.4 could not be
-    /// run and keep the system's interactive pop: a report of this freeze from one of them means
-    /// the gate moves up. Delete the branch, `ownedPan` and `popWithoutInteractiveTransition(_:)`
-    /// when the deployment target is iOS 17.1 or later.
-    static let popsWithoutInteractiveTransition: Bool = {
-        if #available(iOS 17.1, *) { return false }
-        return true
-    }()
     /// The reservation's own pan where the system's interactive pop cannot be used
     /// (`popsWithoutInteractiveTransition`).
     private var ownedPan: UIPanGestureRecognizer?
@@ -219,13 +185,7 @@ final class NavigationBackSwipeReservationController: NSObject, UIGestureRecogni
         navigationController.popViewController(animated: true)
     }
 
-
-
     func detach() {
-        if let ownedPan {
-            ownedPan.view?.removeGestureRecognizer(ownedPan)
-            self.ownedPan = nil
-        }
         if let ownedPan {
             ownedPan.view?.removeGestureRecognizer(ownedPan)
             self.ownedPan = nil

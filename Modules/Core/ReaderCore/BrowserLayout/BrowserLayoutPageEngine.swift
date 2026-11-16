@@ -117,7 +117,10 @@ enum ChapterEngineChoice {
 struct BrowserChapterLayout {
     let spineIndex: Int
     var pages: [PageFragments] {
-        didSet { pageSourceRanges = Self.buildPageRanges(pages, sourceText: sourceText) }
+        didSet {
+            pageSourceRanges = Self.buildPageRanges(pages, sourceText: sourceText)
+            pageAddedStarts = Self.buildPageAddedStarts(pages, sourceText: sourceText)
+        }
     }
     let sourceText: String
     let anchorOffsets: [String: Int]
@@ -138,6 +141,10 @@ struct BrowserChapterLayout {
     /// chapter cost ~7 full rebuilds (tens of thousands of fragment visits), on
     /// every page turn and every progress update.
     private(set) var pageSourceRanges: [NSRange]
+    /// For a page of nothing but pictures added to the chapter (a module's comment cards), the
+    /// picture it starts with; nil for every other page. Such a page shows no character of the
+    /// source, so this is what its reading position is found by (`BrowserAddedContent`).
+    private(set) var pageAddedStarts: [Int?] = []
     let fontSize: CGFloat
     let themeTextColor: UIColor
     let themeBackgroundColor: UIColor
@@ -169,6 +176,7 @@ struct BrowserChapterLayout {
         self.paragraphRanges = paragraphRanges
         // `didSet` does not run during init.
         self.pageSourceRanges = Self.buildPageRanges(pages, sourceText: sourceText)
+        self.pageAddedStarts = Self.buildPageAddedStarts(pages, sourceText: sourceText)
         self.fontSize = fontSize
         self.themeTextColor = themeTextColor
         self.themeBackgroundColor = themeBackgroundColor
@@ -178,12 +186,19 @@ struct BrowserChapterLayout {
         BrowserPageGeometry.buildPageRanges(pages, sourceText: sourceText)
     }
 
+    /// For each page, the added picture it starts with when it shows nothing of the book's
+    /// (`BrowserChapterAdditions`): a page of cards alone is found by it.
+    static func buildPageAddedStarts(_ pages: [PageFragments], sourceText: String) -> [Int?] {
+        BrowserPageGeometry.buildPageAddedStarts(pages, sourceText: sourceText)
+    }
 
     /// Page index containing `charOffset` (binary search, clamped to the page
     /// whose range is nearest — offsets from another engine's collapse space
-    /// are approximate; the spec restores to *nearby* content).
-    func pageIndex(forCharOffset charOffset: Int) -> Int {
-        BrowserPageGeometry.pageIndex(forCharOffset: charOffset, ranges: pageSourceRanges, sourceText: sourceText)
+    /// are approximate; the spec restores to *nearby* content). With `addedIndex`, the page
+    /// of added pictures that holds that picture, when there is one.
+    func pageIndex(forCharOffset charOffset: Int, addedIndex: Int? = nil) -> Int {
+        BrowserPageGeometry.pageIndex(forCharOffset: charOffset, addedIndex: addedIndex, ranges: pageSourceRanges,
+                                      addedStarts: pageAddedStarts, sourceText: sourceText)
     }
 
     func displayList(forPage localPage: Int, themeTextColor: UIColor, oldThemeColor: UIColor) -> DisplayList {

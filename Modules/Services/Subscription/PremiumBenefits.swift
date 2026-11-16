@@ -12,8 +12,6 @@ enum PremiumPillar: String, CaseIterable, Identifiable {
     case habits
     /// 新增模组 (maintainer, 2026-11-15: its own group, not a row of 照你的习惯读).
     case modules
-    /// 新增模组 (maintainer, 2026-11-15: its own group, not a row of 照你的习惯读).
-    case modules
 
     var id: String { rawValue }
 
@@ -22,7 +20,6 @@ enum PremiumPillar: String, CaseIterable, Identifiable {
         case .understanding: return "AI 读懂一本书"
         case .comfort: return "读得更舒服"
         case .habits: return "照你的习惯读"
-        case .modules: return "接上更多内容"
         case .modules: return "接上更多内容"
         }
     }
@@ -33,7 +30,6 @@ enum PremiumPillar: String, CaseIterable, Identifiable {
         case .comfort: return "paintpalette"
         case .habits: return "hand.tap"
         case .modules: return "puzzlepiece.extension"
-        case .modules: return "puzzlepiece.extension"
         }
     }
 
@@ -43,8 +39,6 @@ enum PremiumPillar: String, CaseIterable, Identifiable {
         // Said up front: finding out after paying that AI needs your own key is a refund.
         case .understanding: return "AI 功能用你自己的 AI 服务金钥，支援 DeepSeek、OpenAI、Claude、Gemini 等。"
         case .comfort, .habits: return nil
-        // Said up front, as the AI key is: what was free before the gate stays free.
-        case .modules: return "官方模组、已安装的模组和它们的更新，不需要 Pro。"
         // Said up front, as the AI key is: what was free before the gate stays free.
         case .modules: return "官方模组、已安装的模组和它们的更新，不需要 Pro。"
         }
@@ -81,22 +75,11 @@ enum PremiumPillar: String, CaseIterable, Identifiable {
                 PremiumBenefit(feature: .touchZoneEditor, iconName: "hand.tap",
                                titleKey: "翻页区块", detailKey: "画面分成 3×3，每一格点了做什么由你决定"),
                 PremiumBenefit(feature: .layoutPresetImport, iconName: "slider.horizontal.3",
-                               titleKey: "排版备份", detailKey: "整套排版汇出汇入，也能读 Legado 的配置文件"),
+                               titleKey: "排版备份", detailKey: "整套排版汇出汇入，也能读 Legado 的设定档"),
                 PremiumBenefit(feature: .bottomBarCustomization, iconName: "square.grid.2x2",
                                titleKey: "底部分页", detailKey: "自订底部 Tab 的页面、大小与图示"),
                 PremiumBenefit(feature: .launchScreen, iconName: "app.dashed",
                                titleKey: "启动图", detailKey: "换上你自己的开屏画面"),
-            ]
-        case .modules:
-            // One entitlement, three reasons, as AI is: the way in, the repository, what a
-            // module brings.
-            return [
-                PremiumBenefit(feature: .moduleImport, iconName: "doc.badge.plus",
-                               titleKey: "新增模组", detailKey: "从网址、档案或剪贴簿加入第三方模组"),
-                PremiumBenefit(feature: .moduleImport, iconName: "shippingbox",
-                               titleKey: "模组仓库", detailKey: "订阅一个仓库，里面的模组选了就装"),
-                PremiumBenefit(feature: .moduleImport, iconName: "books.vertical",
-                               titleKey: "书单、搜寻与评论", detailKey: "模组把榜单、搜寻结果和读者评论带进探索与详情页"),
             ]
         case .modules:
             // One entitlement, three reasons, as AI is: the way in, the repository, what a
@@ -158,7 +141,7 @@ struct PremiumPitch: Equatable {
                          pitchKey: "对话排成聊天气泡，关键字依规则自动上色。")
         case .layoutPresetImport?:
             return .init(headlineKey: "整套排版一键带走",
-                         pitchKey: "字级、行距、标题样式与高亮一起汇出汇入，也能读 Legado 的配置文件。")
+                         pitchKey: "字级、行距、标题样式与高亮一起汇出汇入，也能读 Legado 的设定档。")
         case .readerBackgroundImport?:
             return .init(headlineKey: "把喜欢的图片变成书页",
                          pitchKey: "汇入图片当阅读背景。")
@@ -171,9 +154,6 @@ struct PremiumPitch: Equatable {
         case .launchScreen?:
             return .init(headlineKey: "打开 App，先看到你的画面",
                          pitchKey: "换上自己的开屏图片。")
-        case .moduleImport?:
-            return .init(headlineKey: "用模组接上更多内容",
-                         pitchKey: "从网址、档案或模组仓库加入第三方模组，榜单、搜寻和评论跟著进来。")
         case .moduleImport?:
             return .init(headlineKey: "用模组接上更多内容",
                          pitchKey: "从网址、档案或模组仓库加入第三方模组，榜单、搜寻和评论跟著进来。")

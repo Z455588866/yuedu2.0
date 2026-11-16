@@ -35,15 +35,6 @@ struct HomeSectionGroup: Identifiable, Equatable {
         return rows[0].listDescription
     }
 
-    /// The line under the section's name: its own (`HomeSection.displaySubtitle`), else, for a
-    /// section of one list, what that list holds (`HomeModel.Row.listDescription`), so the
-    /// defaults' sections each say what they are in the app's language.
-    var subtitle: String? {
-        if let own = section.displaySubtitle { return own }
-        guard !section.drawsLists, rows.count == 1 else { return nil }
-        return rows[0].listDescription
-    }
-
     /// The section's name. A row of one source titled by that source (a feed, a category
     /// list with no title) keeps the source's name as its title; a section of lists from one
     /// source, that source's own name, but for 排行榜's one ranking, which the header names
@@ -88,9 +79,6 @@ struct HomeSectionGroup: Identifiable, Equatable {
             let languages = HomeScopeFilter.keepsOrder(row.loadingSection.binding) ? nil : languages
             return CollectionSummary.cards(of: row, entries: loaded, languages: languages).map(CollectionEntry.collection)
         }
-        // 精选书单 as it was saved, its lists a card each in 偏好阅读语言's order, as they were
-        // while one card gave them all; once the reader puts the cards in an order, theirs.
-        if section.binding == .gutenbergLists, let languages { return .loaded(languages.arrange(cards)) }
         // 精选书单 as it was saved, its lists a card each in 偏好阅读语言's order, as they were
         // while one card gave them all; once the reader puts the cards in an order, theirs.
         if section.binding == .gutenbergLists, let languages { return .loaded(languages.arrange(cards)) }

@@ -122,7 +122,6 @@ final class HomePhotoFolder<ID: RawRepresentable & Hashable & Sendable>: Observa
         if isLoaded { images[new] = images[old] }
     }
 
-
     /// Every saved photo whose id is not in `ids` gone from the disk, read or not: what was left
     /// by what it belonged to going.
     func removePhotos(keeping ids: Set<ID>) {
@@ -221,11 +220,6 @@ struct HomeListCardPhotoID: RawRepresentable, Hashable, Sendable {
             }
         }
     }
-
-    /// The photo a card had while it stood for several lists (精选书单, until 2026-11-15) given
-    /// to each list's own card that has none, so the home looks as it did until the reader gives
-    /// a list another. Call before `removePhotos(keeping:)`, which then takes the old one.
-    @MainActor
 
     /// Nil, logged, when the list cannot be encoded; the card then keeps its designed face.
     init?(section: UUID, binding: HomeSectionBinding, parameters: [String: String]) {
