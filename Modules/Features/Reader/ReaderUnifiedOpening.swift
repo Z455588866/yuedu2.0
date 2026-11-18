@@ -13,9 +13,17 @@ import UIKit
 @MainActor
 final class ReaderOpeningTransitionDelegate: NSObject, UIViewControllerTransitioningDelegate {
     private let source: ReaderTransitionSource
+    /// 导入（Open In / 文件）路径的宿主是 present 完成之后才由 `fill()` 挂上本 delegate 的：
+    /// present 走的是系统全屏动画，只有 dismiss 会用到这里的卡片 pop。pop 动画假定
+    /// present 也是它建立的卡片舞台（transform / 临时舞台 / frame 都据此推算），套在
+    /// 系统动画 present 出来的宿主上，返回会让转场停在 in-flight —— 表现就是「导入后
+    /// 自动进书，点返回卡住」。这类宿主 dismiss 也交回系统动画，与它自己的 present 对称。
+    /// 正常入口（ReaderOpener.open）present/dismiss 都是卡片动画，不受影响。
+    private let dismissUsesSystemAnimation: Bool
 
-    init(source: ReaderTransitionSource) {
+    init(source: ReaderTransitionSource, dismissUsesSystemAnimation: Bool = false) {
         self.source = source
+        self.dismissUsesSystemAnimation = dismissUsesSystemAnimation
         super.init()
     }
 
@@ -30,7 +38,8 @@ final class ReaderOpeningTransitionDelegate: NSObject, UIViewControllerTransitio
     func animationController(
         forDismissed dismissed: UIViewController
     ) -> UIViewControllerAnimatedTransitioning? {
-        ReaderCardTransitionAnimator(operation: .pop, source: source) { _ in }
+        guard !dismissUsesSystemAnimation else { return nil }
+        return ReaderCardTransitionAnimator(operation: .pop, source: source) { _ in }
     }
 }
 
@@ -194,7 +203,12 @@ enum ReaderOpener {
             snapshot: image,
             direction: .leftSpine
         )
-        let delegate = ReaderOpeningTransitionDelegate(source: source)
+        // 这个宿主是 present 完成后才挂上 delegate 的，present 本身走系统动画；
+        // dismiss 也用系统动画，避免卡片 pop 套在系统 present 的宿主上导致返回卡住。
+        let delegate = ReaderOpeningTransitionDelegate(
+            source: source,
+            dismissUsesSystemAnimation: true
+        )
         host.transitioningDelegate = delegate
         // transitioningDelegate 是 weak；保留最近几个直到它们的转场结束。
         attachedDelegates.append(delegate)

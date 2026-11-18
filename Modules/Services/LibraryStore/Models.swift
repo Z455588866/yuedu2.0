@@ -262,6 +262,12 @@ struct ReadingBook: Identifiable, Codable {
     /// (launch / foreground / pull-to-refresh) and cleared when the book is opened.
     var hasNewChapterUpdate: Bool = false
 
+    /// How many chapters the last table-of-contents refresh discovered beyond what
+    /// the user had already seen. Drives the bookshelf's 「更新 N 章」 subtitle.
+    /// Cleared alongside `hasNewChapterUpdate` when the book is opened. Optional so
+    /// records written before this field existed decode to 0 (no badge).
+    var newChapterCount: Int = 0
+
     // Bookshelf grouping
     var group: String = ""
 
@@ -388,6 +394,7 @@ struct ReadingBook: Identifiable, Codable {
         self.onlineChapters = nil
         self.coverUrl = nil
         self.hasNewChapterUpdate = false
+        self.newChapterCount = 0
         self.bookmarks = []
         self.coverImagePath = nil
         self.rendererPreference = .defaultWeb
@@ -430,6 +437,7 @@ struct ReadingBook: Identifiable, Codable {
         latestChapterTitle = try? c.decode(String.self, forKey: .latestChapterTitle)
         coverUrl = try? c.decode(String.self, forKey: .coverUrl)
         hasNewChapterUpdate = (try? c.decode(Bool.self, forKey: .hasNewChapterUpdate)) ?? false
+        newChapterCount = (try? c.decode(Int.self, forKey: .newChapterCount)) ?? 0
         bookmarks = (try? c.decode([Bookmark].self, forKey: .bookmarks)) ?? []
         coverImagePath = try? c.decode(String.self, forKey: .coverImagePath)
         customCoverUrl = try? c.decode(String.self, forKey: .customCoverUrl)
@@ -464,7 +472,7 @@ struct ReadingBook: Identifiable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case id, title, author, source, contentFilename, contentPipelineKind, currentPosition, addedDate
-        case isOnline, bookSourceId, bookInfoURL, tocURL, runtimeVariables, coverUrl, hasNewChapterUpdate, bookmarks
+        case isOnline, bookSourceId, bookInfoURL, tocURL, runtimeVariables, coverUrl, hasNewChapterUpdate, newChapterCount, bookmarks
         case totalChapterNum, latestChapterTitle
         case coverImagePath, customCoverUrl, originalCoverImagePath
         case rendererPreference, compatibilityState

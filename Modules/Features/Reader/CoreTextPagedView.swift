@@ -1450,12 +1450,20 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
             _ spineIndex: Int?,
             on pageViewController: UIPageViewController
         ) {
-            if let spineIndex,
-               pendingNavigation == nil,
+            // `spineIndex == nil` means the whole book's page offsets were rebuilt
+            // (a preloaded chapter laid out, changing page counts). The page on screen
+            // is still the right one — only its global number changed. Resolve that
+            // number from the visible page's committed reading position under the NEW
+            // offsets and republish it. Never re-place the stack from
+            // `currentCoreTextPosition` here: during a fast turn that anchor is stale,
+            // and a stale global number now names a page in the previous chapter —
+            // the "翻着翻着跳回上一章" race. A placed chapter landing (spineIndex != nil)
+            // that differs from what is visible uses the same republish path.
+            if pendingNavigation == nil,
                externalTargetPosition == nil,
                let visible = readingPage(of: pageViewController),
                let visiblePosition = committedReadingPosition(of: visible),
-               visiblePosition.spineIndex != spineIndex,
+               (spineIndex == nil || visiblePosition.spineIndex != spineIndex),
                // Around a mid spine the spread's other page is on screen too, and can
                // be the 载入中 page of the chapter that just landed.
                !(usesMidSpine && (pageViewController.viewControllers ?? []).contains {
@@ -1478,10 +1486,22 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
                 targetPage = resolved.page
                 self.pendingNavigation = nil
             } else if let position = currentCoreTextPosition {
-                freshVC = displayViewController(for: position)
-                targetPage = engine.pageIndex(for: position)
-                    ?? (freshVC as? any PageIndexProviding)?.globalPageIndex
-                    ?? fallbackPage
+                // A chapter that reflowed mid-turn can leave this anchor describing a
+                // position whose old global number now resolves into a different spine.
+                // Re-asking the engine under the current offsets and finding a different
+                // chapter means the anchor is stale — keep the fallback (the page already
+                // on screen) instead of snapping back to that chapter.
+                let resolved = engine.pageIndex(for: position)
+                if let resolved,
+                   engine.localPosition(for: resolved).spineIndex != position.spineIndex {
+                    targetPage = fallbackPage
+                    freshVC = displayViewController(at: targetPage)
+                } else {
+                    freshVC = displayViewController(for: position)
+                    targetPage = resolved
+                        ?? (freshVC as? any PageIndexProviding)?.globalPageIndex
+                        ?? fallbackPage
+                }
             } else {
                 targetPage = fallbackPage
                 freshVC = displayViewController(at: targetPage)
@@ -1515,7 +1535,15 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
         private func publishCurrentPage(
             _ page: Int,
             position: CoreTextReadingPosition? = nil,
-            notify: Bool
+            notify: Bool,
+            /// A page-number rebase emitted after `rebuildPageOffsets` (spine offsets
+            /// shifted because a preloaded chapter laid out mid-turn). This is NOT a
+            /// new user intent — it is the same physical page under a new global
+            /// number. It must bypass the `isPageTransitioning` guard: dropping it
+            /// leaves `currentPage` on the old coordinate system, and the next turn
+            /// vends that stale number to `pageViewController(at:)`, which now names
+            /// a page in the previous chapter ("翻着翻着跳回上一章").
+            rebase: Bool = false
         ) {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -1526,7 +1554,8 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
                 // drag the binding behind the user's newest taps — eating them and
                 // triggering reverse "correction" transitions. The final transition
                 // in the chain publishes the real page.
-                if self.isPageTransitioning, self.currentPage != page {
+                // A rebase is exempt — see the parameter docs.
+                if !rebase, self.isPageTransitioning, self.currentPage != page {
                     return
                 }
 
@@ -1546,7 +1575,12 @@ struct CoreTextPageEngineView: UIViewControllerRepresentable {
 
         private func handleNavigate(to page: Int) {
             let clamped = max(0, min(page, max(currentEngine.totalPages - 1, 0)))
-            publishCurrentPage(clamped, notify: true)
+            // handleNavigate is only ever called for coordinate corrections (engine
+            // onNavigateToPage after an offset rebuild, initial alignment, and the
+            // chapter-ready page-number republish) — never for a user's swipe settle.
+            // Bypassing the turn guard here keeps the binding on the same coordinate
+            // system as the engine even when a chapter reflows mid-turn.
+            publishCurrentPage(clamped, notify: true, rebase: true)
         }
 
         /// A tapped in-content link (TOC table, cross-reference). Unlike `handleNavigate` —

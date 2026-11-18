@@ -1060,6 +1060,7 @@ class BookStore: @MainActor ObservableObject, BookProvider {
         records[idx].lastOpenedDate = Date()
         // Opening the book counts as acknowledging any new chapters.
         records[idx].hasNewChapterUpdate = false
+        records[idx].newChapterCount = 0
         saveMeta()
         readingGenres?.bookOpened(records[idx], metadata: importedMetadata, sources: .shared)
     }
@@ -2605,6 +2606,13 @@ class BookStore: @MainActor ObservableObject, BookProvider {
         }
         if plan.gainedChapters {
             updated.hasNewChapterUpdate = true
+            // How many chapters this refresh actually added, for the shelf's 「更新 N 章」
+            // subtitle. A refresh can also flag an update when only the tail title changed
+            // with no count change; in that case there is no number worth showing.
+            let gained = plan.merged.count - plan.existing.count
+            if gained > 0 {
+                updated.newChapterCount = gained
+            }
         }
 
         let titleChanged = updated.title != records[index].title

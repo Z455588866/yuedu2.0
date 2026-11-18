@@ -142,16 +142,20 @@ struct ShelfPaperView: View {
                 ZStack(alignment: .bottom) {
                     PaperBackground(scope: .bookshelf)
 
+                    // 有背景图时让山水透上来：这层柔边只兜住最底部的一小段，避免整页
+                    // 被盖成纯色（此前底部不透明度 0.92、高 420，几乎把主题背景全挡住，
+                    // 别的页面都显示了背景、只有书架看着像没同步）。中段压低到 0.3，
+                    // 书名那行在图上仍留一点托底可读，上半页的背景则完整露出。
                     LinearGradient(
                         stops: [
                             .init(color: PaperPalette.page(scheme).opacity(0), location: 0),
-                            .init(color: PaperPalette.page(scheme).opacity(0.55), location: 0.45),
-                            .init(color: PaperPalette.page(scheme).opacity(0.92), location: 1),
+                            .init(color: PaperPalette.page(scheme).opacity(0.3), location: 0.55),
+                            .init(color: PaperPalette.page(scheme).opacity(0.62), location: 1),
                         ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
-                    .frame(height: 420)
+                    .frame(height: 260)
                     .opacity(showsArtwork ? 1 : 0)
                     .allowsHitTesting(false)
                     .ignoresSafeArea(edges: .bottom)
@@ -859,9 +863,14 @@ struct ShelfPaperView: View {
         String(format: localized("第 %d 章"), index)
     }
 
-    /// 第 12 章 · 本地 — where it is, and how far in.
+    /// 更新 3 章 · 本地 — how far in, or how many new chapters a refresh found.
+    /// 下拉刷新 / 进 App 自动刷新发现新章后，书卡这一行直接显示「更新 N 章」，
+    /// 让刷新有看得见的反馈；点开书后 `newChapterCount` 清零，恢复成原来的进度显示。
     private func subtitle(for book: ReadingBook) -> String {
         let place = book.isOnline ? localized("云端") : localized("本地")
+        if book.hasNewChapterUpdate && book.newChapterCount > 0 {
+            return "\(String(format: localized("更新 %d 章"), book.newChapterCount)) · \(place)"
+        }
         guard let chapter = chapterLine(for: book) else {
             return "\(localized("未读")) · \(place)"
         }

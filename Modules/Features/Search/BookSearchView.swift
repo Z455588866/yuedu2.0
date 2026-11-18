@@ -973,6 +973,10 @@ private struct SearchSourceGroupEditor: View {
     @State private var selection: Set<UUID>
     @State private var newGroupName = ""
     @State private var query = ""
+    /// 长按「已有分组」里的分组做的操作：nil 无操作；重命名时带原分组名与输入框草稿。
+    @State private var groupToRename: String?
+    @State private var groupRenameText = ""
+    @State private var groupToDelete: String?
 
     init(
         sources: [BookSource],
@@ -1032,6 +1036,21 @@ private struct SearchSourceGroupEditor: View {
                                         .monospacedDigit()
                                 }
                             }
+                            // 长按分组：重命名或删除整个分组（把该组书源改回未分组）。
+                            .contextMenu {
+                                Button {
+                                    groupRenameText = group.name
+                                    groupToRename = group.name
+                                } label: {
+                                    Label(localized("重命名"), systemImage: "pencil")
+                                }
+                                Button(role: .destructive) {
+                                    groupToDelete = group.name
+                                } label: {
+                                    Label(localized("删除分组"), systemImage: "trash")
+                                }
+                            }
+                            .accessibilityLabel(group.name)
                         }
                     } header: {
                         Text(localized("已有分组"))
@@ -1112,6 +1131,33 @@ private struct SearchSourceGroupEditor: View {
                     .disabled(selection.isEmpty || trimmedName.isEmpty)
                 }
             }
+            // 长按「已有分组」→ 重命名：把该分组下所有书源改到新名字。
+            .alert(
+                localized("重命名分组"),
+                isPresented: Binding(
+                    get: { groupToRename != nil },
+                    set: { if !$0 { groupToRename = nil } }
+                )
+            ) {
+                TextField(localized("新分组名称"), text: $groupRenameText)
+                Button(localized("取消"), role: .cancel) { groupToRename = nil }
+                Button(localized("确定")) { commitGroupRename() }
+            } message: {
+                Text(localized("该分组下的所有来源配置会改到新名称。"))
+            }
+            // 长按「已有分组」→ 删除：该分组的书源回到未分组，分组本身随之消失。
+            .alert(
+                localized("删除分组"),
+                isPresented: Binding(
+                    get: { groupToDelete != nil },
+                    set: { if !$0 { groupToDelete = nil } }
+                )
+            ) {
+                Button(localized("取消"), role: .cancel) { groupToDelete = nil }
+                Button(localized("删除"), role: .destructive) { commitGroupDelete() }
+            } message: {
+                Text(localized("删除后，该分组里的来源配置会回到未分组，来源配置本身不会被删除。"))
+            }
         }
     }
 
@@ -1121,6 +1167,34 @@ private struct SearchSourceGroupEditor: View {
         } else {
             selection.insert(id)
         }
+    }
+
+    /// 分组里当前的书源 id —— 分组合并/改名都是对这些书源重写 `bookSourceGroup`。
+    private func sourceIDs(in group: String) -> Set<UUID> {
+        Set(sources.filter {
+            $0.bookSourceGroup.trimmingCharacters(in: .whitespacesAndNewlines) == group
+        }.map(\.id))
+    }
+
+    private func commitGroupRename() {
+        guard let old = groupToRename else { return }
+        defer { groupToRename = nil }
+        let newName = groupRenameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newName.isEmpty, newName != old else { return }
+        let ids = sourceIDs(in: old)
+        guard !ids.isEmpty else { return }
+        BookSourceStore.shared.setGroup(newName, ids: ids)
+        // 若正在新建框里选中的正是被改名的组，同步一下，避免勾选状态指向旧名。
+        if trimmedName == old { newGroupName = newName }
+    }
+
+    private func commitGroupDelete() {
+        guard let group = groupToDelete else { return }
+        defer { groupToDelete = nil }
+        let ids = sourceIDs(in: group)
+        guard !ids.isEmpty else { return }
+        BookSourceStore.shared.setGroup("", ids: ids)
+        if trimmedName == group { newGroupName = "" }
     }
 }
 

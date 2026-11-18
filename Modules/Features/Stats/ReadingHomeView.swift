@@ -565,7 +565,15 @@ struct ReadingHomeView: View {
     /// A book lying on the page: the cover, a darker spine down its left edge, and the shadow
     /// it casts to its right, so 3-D rather than a flat rectangle.
     private func cover(_ book: ReadingBook, width: CGFloat, height: CGFloat) -> some View {
-        BookCoverImage(readingBook: book)
+        // 换封面后首页这一格也必须跟着刷新。旧的 BookCoverImage(readingBook:) 只读
+        // coverUrl 并按 URL 做缓存 key —— 换封面改的是 coverImagePath，coverUrl 不变，
+        // 于是首页沿用旧图（书架详情页却会更新）。改走书架同款 BookshelfCoverStyle.artwork：
+        // 它读 coverImagePath 并监听 pipeline.invalidations，写封面 invalidate 后随即重载。
+        BookshelfCoverStyle.artwork(
+            for: book,
+            colorScheme: scheme,
+            displaySize: CGSize(width: width, height: height)
+        )
             .frame(width: width, height: height)
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             .overlay(alignment: .leading) {

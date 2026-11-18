@@ -25,6 +25,7 @@
 "热门" = "Popular";
 "最新" = "Latest";
 "有新章节" = "New chapters available";
+"更新 %d 章" = "%d new chapters";
 "不定时" = "Off";
 "并发数" = "Concurrent Requests";
 "亮度" = "Brightness";
@@ -4840,3 +4841,7 @@
 "账号" = "账号";
 "金钥只存在这台装置，语音费用由你的账号计算。" = "金钥只存在这台装置，语音费用由你的账号计算。";
 "金钥只存在这台装置，语音费用由你的账号计算。选好音色后可在朗读声音里设为当前语音源。" = "金钥只存在这台装置，语音费用由你的账号计算。选好音色后可在朗读声音里设为当前语音源。";
+"删除分组" = "Delete Group";
+"新分组名称" = "New group name";
+"该分组下的所有来源配置会改到新名称。" = "All sources in this group will be renamed to the new name.";
+"删除后，该分组里的来源配置会回到未分组，来源配置本身不会被删除。" = "After deletion, sources in this group return to Ungrouped. The sources themselves are not deleted.";
