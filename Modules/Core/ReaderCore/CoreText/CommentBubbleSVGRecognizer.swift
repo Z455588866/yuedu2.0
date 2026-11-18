@@ -537,9 +537,15 @@ struct CommentBubbleSVGRecognizer {
         guard let sourceBubble = sourceBubble ?? recognize(src: src, svgContent: svgContent) else {
             return nil
         }
-        if settings.commentBubbleFollowsSourceSVG && !isReaderOwnedBadge {
-            return draw(svg: sourceBubble, pointSize: pointSize, themeTextColor: themeTextColor, textFace: sourceTextFace)
-        }
+        // 段评气泡一律跟随用户在「阅读设置 › 段评气泡」里选中的样式。
+        // 以前这里会在「跟随来源」开启时用书源/模块自带的 SVG（灰色圆圈），
+        // 于是模块气泡和设置里选的黑白气泡长得不一样，用户改设置也不生效。
+        // 现在无论气泡来自书源、模块还是 <comment> 标记，也无论「跟随来源」
+        // 开关和 isReaderOwnedBadge 为何，都用同一个用户选中的模板绘制 —— 设置什么就显示什么。
+        // 保留对 commentBubbleFollowsSourceSVG 的读取仅是让它仍出现在缓存键里，
+        // 实际绘制不再因它而例外。
+        _ = settings.commentBubbleFollowsSourceSVG
+        _ = isReaderOwnedBadge
 
         let bubbleText = sourceBubble.displayText ?? "0"
         var templateSource = ReaderDocumentTrace.measuringSync("bubbleTemplateSource") {

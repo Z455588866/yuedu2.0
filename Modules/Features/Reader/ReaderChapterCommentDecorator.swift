@@ -177,6 +177,9 @@ struct ReaderReviewSheetContent: View {
     let onDismiss: (_ body: String?) -> Void
 
     var body: some View {
-        LegadoReviewBrowserView(target: target, onDismiss: onDismiss)
+        // usesOuterGlass: true —— 玻璃由外层呈现容器提供（ReviewPanelOverlayController /
+        // ReviewPanelOverlayPresenter），内层不再叠系统材质。否则系统 sheet 的白色装饰
+        // 会盖住材质采样，面板变成不透明白板，玻璃浓淡滑杆也失效。
+        LegadoReviewBrowserView(target: target, usesOuterGlass: true, onDismiss: onDismiss)
     }
 }

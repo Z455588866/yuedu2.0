@@ -836,6 +836,8 @@ final class BrowserLayoutPageViewController: UIViewController,
     private let mediaAttachments: [Int: EPUBMediaAttachment]
     private lazy var inlineVideos = BrowserInlineVideoCoordinator(owner: self)
     private var mediaAccessibilityActions: [UIAccessibilityCustomAction] = []
+    /// 当前的段评面板（自定义实时玻璃覆盖层，不是系统 sheet）。
+    private var reviewPanel: ReviewPanelOverlayController?
 
     init(
         globalPageIndex: Int,
@@ -914,19 +916,33 @@ final class BrowserLayoutPageViewController: UIViewController,
         )
     }
 
-    /// The comments a tapped bubble or card stands for, in the sheet a CoreText page shows them in
-    /// (`CoreTextPageViewController.presentReviewSheet`).
+    /// The comments a tapped bubble or card stands for. Presented with the SAME glass
+    /// overlay CoreText uses (`ReviewPanelOverlayController`), not a UIKit system sheet.
+    ///
+    /// A system sheet's presentation container carries an opaque Liquid-Glass backing + white
+    /// fog on device, so the panel's live material samples that white instead of the real page
+    /// behind it — it renders as an opaque white board and the 玻璃浓淡 slider does nothing.
+    /// `ReviewPanelOverlayController` attaches the panel to the reader's own view tree with
+    /// `usesOuterGlass: true`, so its glass samples the live book page exactly like CoreText.
     func presentReview(_ target: ReaderHTMLUtilities.ReviewTarget) {
-        weak var weakHost: UIViewController?
-        let host = UIHostingController(rootView: ReaderReviewSheetContent(target: target) { _ in
-            weakHost?.dismiss(animated: true)
-        })
-        weakHost = host
-        if let sheet = host.sheetPresentationController {
-            sheet.detents = [.medium(), .large()]
-            sheet.prefersGrabberVisible = true
+        let view = LegadoReviewBrowserView(
+            target: target,
+            backdrop: nil,
+            usesOuterGlass: true
+        ) { [weak self] _ in
+            self?.dismiss(animated: true)
         }
-        present(host, animated: true)
+        // A previous panel may still be attached (source switch / consecutive taps): drop it
+        // without animation so two layers of glass never stack.
+        reviewPanel?.view.removeFromSuperview()
+        reviewPanel?.removeFromParent()
+        reviewPanel = nil
+        let panel = ReviewPanelOverlayController(content: view) { [weak self] in
+            self?.reviewPanel = nil
+        }
+        reviewPanel = panel
+        let host = ReviewPanelOverlayController.topPresentedViewController(in: self.view.window) ?? self
+        panel.present(in: host)
     }
 
     /// Full-screen zoomable preview for a tapped image fragment — reuses the
