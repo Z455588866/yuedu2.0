@@ -303,7 +303,12 @@ private extension HTMLAttributedStringBuilder.ElementNode {
             let isReviewImageAnchor = className
                 .split(separator: " ")
                 .contains { $0 == "yd-review-image" }
-            if let marker = ReaderHTMLUtilities.decodeReviewHref(href), !isReviewImageAnchor {
+            // 段评气泡统一用「阅读设置 › 段评气泡」里的黑色气泡：模块评论（href 带 moduleToken）
+            // 即便被包成 yd-review-image（来源 SVG 形态），也要走 .commentBadge 路径，
+            // 由 ReaderCommentBubbleCustomStyle 的黑色气泡绘制，而不是书源自带的 SVG。
+            let marker = ReaderHTMLUtilities.decodeReviewHref(href)
+            let isModuleReview = !(marker?.moduleToken.isEmpty ?? true)
+            if let marker, (!isReviewImageAnchor || isModuleReview) {
                 node = .commentBadge(count: marker.count, reviewURL: href, title: marker.title)
             } else {
                 // `.anchor` carries only the href, so the anchor's own CSS (e.g. `a { font-weight:bold }`,

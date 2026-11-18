@@ -166,17 +166,17 @@ final class ReaderChapterCommentDecorator: ReaderChapterDecorationSource {
     }
 }
 
-/// What a tapped bubble or card opens: a module's comments in the app's own list, a source's
-/// in its own page.
+/// What a tapped bubble or card opens: always the glass review panel.
+///
+/// 段评气泡、热评、本章说、作者说点开后一律进玻璃面板 `LegadoReviewBrowserView`。
+/// 玻璃面板本身已支持模块评论路线（读 ModuleCommentTargets → ChapterCommentsModel →
+/// 原生玻璃卡片，可翻页），所以模块气泡不再另走不透明的 `ChapterCommentsSheet`。
+/// 这样 CoreText 与 BrowserLayout 两套排版引擎的段评面板外观一致，都跟随「玻璃浓淡」设置。
 struct ReaderReviewSheetContent: View {
     let target: ReaderHTMLUtilities.ReviewTarget
     let onDismiss: (_ body: String?) -> Void
 
     var body: some View {
-        if let comments = ModuleCommentTargets.target(target.moduleToken) {
-            ChapterCommentsSheet(target: comments)
-        } else {
-            LegadoReviewBrowserView(target: target, onDismiss: onDismiss)
-        }
+        LegadoReviewBrowserView(target: target, onDismiss: onDismiss)
     }
 }

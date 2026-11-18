@@ -643,8 +643,9 @@ struct LegadoReviewBrowserView: View {
             }
             let model = ChapterCommentsModel(target: comments)
             await model.load()
-            // 一页 20 条：多数段落一页就够；本章说再多读几页，读到没有新的为止。
-            for _ in 0..<4 where model.hasMore { await model.loadMore() }
+            // 一页 20 条。尽量把整章评论读全（上限 30 页 = 600 条，足够覆盖绝大多数
+            // 段落/本章说，同时防止极端热门章节无限加载卡住），读到没有新的为止。
+            for _ in 0..<30 where model.hasMore { await model.loadMore() }
             switch model.phase {
             case .unavailable:
                 moduleFailed = localized("找不到这一章的评论")
