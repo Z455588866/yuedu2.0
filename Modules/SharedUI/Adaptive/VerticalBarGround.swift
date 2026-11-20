@@ -18,14 +18,22 @@ private struct VerticalBarGround: ViewModifier {
     let isEnabled: Bool
 
     func body(content: Content) -> some View {
+        #if compiler(>=6.4)
         if #available(iOS 27.1, *) {
             content.modifier(VerticalBarEdgeGround(isEnabled: isEnabled))
         } else {
             content
         }
+        #else
+        content
+        #endif
     }
 }
 
+// Xcode 26.3 (Swift < 6.4) cannot resolve `\.toolbarVerticalEdge` (an iOS 27 SDK symbol), so
+// the whole type is compiled out there. On those runtimes the modifier above becomes a no-op,
+// which is exactly the pre-iOS-27.1 behaviour. Same `#if compiler(>=6.4)` guard RSSListView uses.
+#if compiler(>=6.4)
 @available(iOS 27.1, *)
 private struct VerticalBarEdgeGround: ViewModifier {
     let isEnabled: Bool
@@ -43,3 +51,4 @@ private struct VerticalBarEdgeGround: ViewModifier {
         }
     }
 }
+#endif

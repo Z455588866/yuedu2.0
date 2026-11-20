@@ -426,14 +426,22 @@ private struct HomeSectionCut: ViewModifier {
     let rowWidth: CGFloat
 
     func body(content: Content) -> some View {
+        #if compiler(>=6.4)
         if #available(iOS 27.1, *) {
             content.modifier(HomeSectionBarCut(home: home, rowWidth: rowWidth))
         } else {
             content.clipShape(HomeSectionFrame(outset: DSSpacing.xxl * home))
         }
+        #else
+        content.clipShape(HomeSectionFrame(outset: DSSpacing.xxl * home))
+        #endif
     }
 }
 
+// Xcode 26.3 (Swift < 6.4) cannot resolve `\.toolbarVerticalEdge` (an iOS 27 SDK symbol), so
+// the whole type is compiled out there. On those runtimes the plain cut above is the exact
+// pre-iOS-27.1 behaviour. Same `#if compiler(>=6.4)` guard RSSListView uses.
+#if compiler(>=6.4)
 @available(iOS 27.1, *)
 private struct HomeSectionBarCut: ViewModifier {
     let home: CGFloat
@@ -445,6 +453,7 @@ private struct HomeSectionBarCut: ViewModifier {
                                            barReach: rowWidth * home))
     }
 }
+#endif
 
 /// A section's ground on the home (maintainer, 2026-11-14, after Apple Books' store, whose
 /// sections run from white at the head to #EEEEEE at the foot): nothing at its head, deepening to
