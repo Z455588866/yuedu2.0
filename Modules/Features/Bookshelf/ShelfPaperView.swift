@@ -29,13 +29,13 @@ struct ShelfPaperView: View {
     @AppStorage("yd_shelf_display_style") private var displayStyleRaw: String = ShelfDisplayStyle.stage.rawValue
     private var displayStyle: ShelfDisplayStyle {
         get { ShelfDisplayStyle(rawValue: displayStyleRaw) ?? .stage }
-        set { displayStyleRaw = newValue.rawValue }
+        nonmutating set { displayStyleRaw = newValue.rawValue }
     }
     /// 展台底部书籍排布：随机书脊斜放 / 展台下方(挂绳翻书) / 多书脊拼图 / 网格封面。
     @AppStorage("yd_shelf_stage_arrangement") private var stageArrangementRaw: String = StageArrangement.spine.rawValue
     private var stageArrangement: StageArrangement {
         get { StageArrangement(rawValue: stageArrangementRaw) ?? .spine }
-        set { stageArrangementRaw = newValue.rawValue }
+        nonmutating set { stageArrangementRaw = newValue.rawValue }
     }
     /// 封面背景模糊（视频菜单里的开关）。
     @AppStorage("yd_shelf_cover_blur") private var coverBlur = true
