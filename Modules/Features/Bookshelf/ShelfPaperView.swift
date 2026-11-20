@@ -23,6 +23,24 @@ struct ShelfPaperView: View {
     @State private var sort: ShelfSort = .recent
     @State private var isManaging = false
     @State private var selection: Set<UUID> = []
+
+    // MARK: 展示样式（视频里的展台书架 + 现有经典书架，可切换）
+    /// 书架整体样式：展台（视频一比一，默认）/ 经典（接着读 + 网格）。
+    @AppStorage("yd_shelf_display_style") private var displayStyleRaw: String = ShelfDisplayStyle.stage.rawValue
+    private var displayStyle: ShelfDisplayStyle {
+        get { ShelfDisplayStyle(rawValue: displayStyleRaw) ?? .stage }
+        set { displayStyleRaw = newValue.rawValue }
+    }
+    /// 展台底部书籍排布：随机书脊斜放 / 展台下方(挂绳翻书) / 多书脊拼图 / 网格封面。
+    @AppStorage("yd_shelf_stage_arrangement") private var stageArrangementRaw: String = StageArrangement.spine.rawValue
+    private var stageArrangement: StageArrangement {
+        get { StageArrangement(rawValue: stageArrangementRaw) ?? .spine }
+        set { stageArrangementRaw = newValue.rawValue }
+    }
+    /// 封面背景模糊（视频菜单里的开关）。
+    @AppStorage("yd_shelf_cover_blur") private var coverBlur = true
+    /// 展台搜索关键字。
+    @State private var stageSearch = ""
     @State private var readingBookID: UUID?
     @State private var showsAddBook = false
     @State private var confirmsDelete = false
@@ -138,20 +156,49 @@ struct ShelfPaperView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    masthead
-                        .padding(.bottom, 22)
+                if displayStyle == .stage {
+                    StageShelfView(
+                        books: store.books,
+                        search: $stageSearch,
+                        arrangement: Binding(
+                            get: { stageArrangement },
+                            set: { stageArrangement = $0 }
+                        ),
+                        coverBlur: $coverBlur,
+                        isManaging: $isManaging,
+                        selection: $selection,
+                        onOpenBook: { openBook($0) },
+                        onOpenAudiobook: { NowPlayingHub.shared.openIfAudiobook($0, store: store) },
+                        onDetail: { showWorkDetail(for: $0) },
+                        onEdit: { editingBook = $0 },
+                        onCoverSearch: { requestCoverSearch(for: $0) },
+                        onFattening: { store.setFattening(!$0.isFattening, for: $0.id) },
+                        onDelete: { store.delete(bookId: $0.id) },
+                        onAdd: { showsAddBook = true },
+                        onDeleteSelected: { confirmsDelete = true },
+                        onSwitchToClassic: { displayStyle = .classic },
+                        onFilter: { filter = $0 },
+                        currentFilter: filter,
+                        onSort: { sort = $0 },
+                        currentSort: sort
+                    )
+                    .padding(.bottom, 32)
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        masthead
+                            .padding(.bottom, 22)
 
-                    if store.books.isEmpty {
-                        emptyShelf
-                    } else {
-                        continueReading
-                        chips
-                        restOfShelf
+                        if store.books.isEmpty {
+                            emptyShelf
+                        } else {
+                            continueReading
+                            chips
+                            restOfShelf
+                        }
                     }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 32)
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 32)
             }
             .scrollIndicators(.hidden)
             .background {
@@ -300,6 +347,12 @@ struct ShelfPaperView: View {
                 .buttonStyle(.plain)
             } else {
                 Menu {
+                    Button {
+                        withAnimation(.snappy(duration: 0.25)) { displayStyle = .stage }
+                    } label: {
+                        Label(localized("展台书架"), systemImage: "books.vertical")
+                    }
+                    Divider()
                     Button {
                         showsAddBook = true
                     } label: {
@@ -1106,5 +1159,616 @@ private extension View {
 
     func glassCircle(_ scheme: ColorScheme) -> some View {
         floatingSurface(in: Circle())
+    }
+}
+
+// MARK: - 书架展示样式（视频一比一的展台书架 / 经典书架）
+
+enum ShelfDisplayStyle: String, CaseIterable, Identifiable {
+    case stage
+    case classic
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .stage: return localized("展台书架")
+        case .classic: return localized("经典书架")
+        }
+    }
+}
+
+enum StageArrangement: String, CaseIterable, Identifiable {
+    case spine       // 随机书脊斜放
+    case hanging     // 展台下方（木夹子挂绳翻书）
+    case collage     // 多书脊拼图
+    case grid        // 网格封面
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .spine: return localized("随机书脊斜放")
+        case .hanging: return localized("展台下方")
+        case .collage: return localized("多书脊拼图")
+        case .grid: return localized("网格封面")
+        }
+    }
+    var icon: String {
+        switch self {
+        case .spine: return "books.vertical"
+        case .hanging: return "book.closed"
+        case .collage: return "square.grid.2x2"
+        case .grid: return "square.grid.3x3"
+        }
+    }
+}
+
+// MARK: - 展台书架（视频一比一）
+//
+// 顶部「书架⌄」胶囊 + 「≡ 视图切换 / +」胶囊 + 搜索框，居中大封面 + 书名作者进度，
+// 底部四种可切换排布（书脊斜放 / 展台下方 / 多书脊拼图 / 网格封面），全玻璃导航由外层提供。
+// 大封面与每本书都挂完整长按菜单（打开 / 书籍详情 / 编辑书籍资讯 / 搜索网络封面 /
+// 加入养肥 / 删除），管理模式保留全选 / 分享 / 删除 —— 与经典书架逐项一致。
+// 颜色全部走 ShelfInk / PaperPalette，背景由外层 ShelfPaperView 的 PaperBackground 提供，
+// 跟随主题、背景图与深浅模式联动。
+
+struct StageShelfView: View {
+    let books: [ReadingBook]
+    @Binding var search: String
+    @Binding var arrangement: StageArrangement
+    @Binding var coverBlur: Bool
+    @Binding var isManaging: Bool
+    @Binding var selection: Set<UUID>
+
+    let onOpenBook: (ReadingBook) -> Void
+    let onOpenAudiobook: (ReadingBook) -> Bool
+    let onDetail: (ReadingBook) -> Void
+    let onEdit: (ReadingBook) -> Void
+    let onCoverSearch: (ReadingBook) -> Void
+    let onFattening: (ReadingBook) -> Void
+    let onDelete: (ReadingBook) -> Void
+    let onAdd: () -> Void
+    let onDeleteSelected: () -> Void
+    let onSwitchToClassic: () -> Void
+    let onFilter: (ShelfFilter) -> Void
+    let currentFilter: ShelfFilter
+    let onSort: (ShelfSort) -> Void
+    let currentSort: ShelfSort
+
+    @Environment(\.colorScheme) private var scheme
+
+    /// 大封面居中对齐用的滚动坐标空间。
+    private static let stageSpace = "stageShelf"
+
+    private var filteredBooks: [ReadingBook] {
+        let base = books.filter { currentFilter.accepts($0) }
+            .sorted(by: currentSort.areInIncreasingOrder)
+        let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return base }
+        return base.filter {
+            $0.title.localizedCaseInsensitiveContains(q) || $0.author.localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    /// 最近读的那本作为展台主角；没有阅读记录时取第一本。
+    private var feature: ReadingBook? {
+        let f = filteredBooks
+        return f.first { $0.lastOpenedDate != nil } ?? f.first
+    }
+
+    private var otherBooks: [ReadingBook] {
+        guard let f = feature else { return filteredBooks }
+        return filteredBooks.filter { $0.id != f.id }
+    }
+
+    private var isAllSelected: Bool {
+        !selectable.isEmpty && selection.count == selectable.count
+    }
+    private var selectable: [ReadingBook] { filteredBooks }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            topBar
+            searchBar
+                .padding(.top, 10)
+
+            if books.isEmpty {
+                emptyStage
+            } else if let feature {
+                featureCard(feature)
+                    .padding(.top, 24)
+                if isManaging {
+                    manageBar
+                        .padding(.top, 18)
+                }
+                arrangementSection
+                    .padding(.top, 26)
+            } else {
+                noResult
+            }
+        }
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: 顶部栏
+
+    private var topBar: some View {
+        HStack(alignment: .center) {
+            Spacer(minLength: 0)
+
+            Menu {
+                ForEach(ShelfFilter.allCases) { f in
+                    Button {
+                        onFilter(f)
+                    } label: {
+                        HStack {
+                            Text(f.title)
+                            Spacer()
+                            if f == currentFilter { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(localized("书架"))
+                        .font(.system(size: 14, weight: .semibold))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(ShelfInk.strong(scheme))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .glassCapsule(scheme)
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 0) {
+                // ≡ 视图切换菜单 —— 视频里的「选择 / 分组 / 最近阅读 / 添加日期 /
+                // 格式·书名 / 书架显示 >」。这里保留其精神：排序、展台排布、封面模糊、
+                // 管理模式，以及切回经典书架。
+                Menu {
+                    Button {
+                        withAnimation(.snappy(duration: 0.2)) { isManaging.toggle() }
+                    } label: {
+                        Label(localized(isManaging ? "完成" : "选择"), systemImage: "checkmark.circle")
+                    }
+                    Divider()
+                    Picker(localized("排序"), selection: Binding(
+                        get: { currentSort },
+                        set: { onSort($0) }
+                    )) {
+                        ForEach(ShelfSort.allCases) { s in
+                            Text(s.title).tag(s)
+                        }
+                    }
+                    Divider()
+                    Menu {
+                        ForEach(StageArrangement.allCases) { a in
+                            Button {
+                                withAnimation(.snappy(duration: 0.2)) { arrangement = a }
+                            } label: {
+                                HStack {
+                                    Label(a.title, systemImage: a.icon)
+                                    Spacer()
+                                    if a == arrangement { Image(systemName: "checkmark") }
+                                }
+                            }
+                        }
+                    } label: {
+                        Label(localized("书架显示"), systemImage: "square.grid.2x2")
+                    }
+                    Toggle(localized("封面背景模糊"), isOn: $coverBlur)
+                    Divider()
+                    Button {
+                        onSwitchToClassic()
+                    } label: {
+                        Label(localized("经典书架"), systemImage: "rectangle.grid.2x2")
+                    }
+                } label: {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(ShelfInk.strong(scheme))
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+
+                Divider().frame(height: 18).opacity(0.4)
+
+                Button { onAdd() } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(ShelfInk.strong(scheme))
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+            }
+            .glassCapsule(scheme)
+        }
+        .padding(.top, 6)
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(ShelfInk.muted(scheme))
+            TextField(localized("搜索书架：书名 / 作者"), text: $search)
+                .font(.system(size: 13))
+                .foregroundStyle(ShelfInk.strong(scheme))
+            if !search.isEmpty {
+                Button {
+                    search = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(ShelfInk.muted(scheme))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(PaperPalette.card(scheme).opacity(0.65))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(PaperPalette.hairline(scheme).opacity(0.5), lineWidth: 0.6)
+        }
+    }
+
+    // MARK: 大封面主角
+
+    private func featureCard(_ book: ReadingBook) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            GeometryReader { proxy in
+                let w = proxy.size.width
+                let cw = min(212, w * 0.56)
+                let ch = cw * 1.42
+                HStack {
+                    Spacer(minLength: 0)
+                    stageCover(book, width: cw, height: ch)
+                    Spacer(minLength: 0)
+                }
+                .frame(height: ch)
+            }
+            .frame(height: 320)
+
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(book.author)
+                        .font(.system(size: 12))
+                        .foregroundStyle(ShelfInk.soft(scheme))
+                    Text(book.title)
+                        .font(PaperFont.serif(21))
+                        .foregroundStyle(ShelfInk.strong(scheme))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 10) {
+                        GeometryReader { g in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(PaperPalette.hairline(scheme).opacity(0.5))
+                                Capsule().fill(PaperPalette.ink(scheme))
+                                    .frame(width: g.size.width * CGFloat(min(max(book.currentPosition, 0), 1)))
+                            }
+                        }
+                        .frame(height: 5)
+                        Text(book.currentPosition > 0 ? "\(Int(book.currentPosition * 100))%" : localized("未读"))
+                            .font(.system(size: 11))
+                            .foregroundStyle(ShelfInk.muted(scheme))
+                            .frame(width: 42, alignment: .trailing)
+                    }
+                    .padding(.top, 3)
+                }
+                Spacer(minLength: 8)
+                // ... 按钮，点击弹出与长按相同的菜单（保证入口可见）
+                Menu {
+                    bookMenuItems(book)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(ShelfInk.soft(scheme))
+                        .frame(width: 36, height: 36)
+                        .glassCapsule(scheme)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 18)
+            .padding(.horizontal, 4)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onOpenBook(book) }
+        .contextMenu { bookMenuItems(book) }
+    }
+
+    @ViewBuilder
+    private func bookMenuItems(_ book: ReadingBook) -> some View {
+        Button {
+            if !onOpenAudiobook(book) { onOpenBook(book) }
+        } label: {
+            Label(localized("打开"), systemImage: "book")
+        }
+        Button { onDetail(book) } label: {
+            Label(localized("书籍详情"), systemImage: "books.vertical")
+        }
+        Button { onEdit(book) } label: {
+            Label(localized("编辑书籍资讯"), systemImage: "square.and.pencil")
+        }
+        Button { onCoverSearch(book) } label: {
+            Label(localized("搜索网络封面"), systemImage: "photo.on.rectangle.angled")
+        }
+        Button { onFattening(book) } label: {
+            Label(localized("加入养肥"), systemImage: "leaf")
+        }
+        Button(role: .destructive) { onDelete(book) } label: {
+            Label(localized("删除"), systemImage: "trash")
+        }
+    }
+
+    private func stageCover(_ book: ReadingBook, width: CGFloat, height: CGFloat) -> some View {
+        BookshelfCoverStyle.artwork(
+            for: book,
+            colorScheme: scheme,
+            displaySize: CGSize(width: width, height: height)
+        )
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(alignment: .leading) {
+            LinearGradient(colors: [Color.black.opacity(0.22), .clear], startPoint: .leading, endPoint: .trailing)
+                .frame(width: width * 0.1)
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.28), radius: 18, x: 4, y: 12)
+        .accessibilityHidden(true)
+    }
+
+    // MARK: 管理模式（全选 / 分享 / 删除 —— 与经典书架一致）
+
+    private var manageBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                withAnimation(.snappy(duration: 0.18)) {
+                    if isAllSelected { selection = [] }
+                    else { selection = Set(selectable.map(\.id)) }
+                }
+            } label: {
+                Text(localized(isAllSelected ? "全不选" : "全选"))
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(ShelfInk.strong(scheme))
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .glassCapsule(scheme)
+            }
+            .buttonStyle(.plain)
+            .disabled(selectable.isEmpty)
+
+            Text("\(selection.count) \(localized("已选"))")
+                .font(.system(size: 12))
+                .foregroundStyle(ShelfInk.muted(scheme))
+
+            Spacer()
+
+            Button {
+                onDeleteSelected()
+            } label: {
+                Text(localized("删除"))
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .glassCapsule(scheme)
+            }
+            .buttonStyle(.plain)
+            .disabled(selection.isEmpty)
+        }
+    }
+
+    // MARK: 底部书籍排布（可切换四种）
+
+    private var arrangementSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(arrangement.title)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(ShelfInk.strong(scheme))
+                Spacer()
+                Menu {
+                    ForEach(StageArrangement.allCases) { a in
+                        Button {
+                            withAnimation(.snappy(duration: 0.2)) { arrangement = a }
+                        } label: {
+                            HStack {
+                                Label(a.title, systemImage: a.icon)
+                                Spacer()
+                                if a == arrangement { Image(systemName: "checkmark") }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "square.grid.2x2")
+                        Image(systemName: "chevron.down").font(.system(size: 9))
+                    }
+                    .font(.system(size: 12))
+                    .foregroundStyle(ShelfInk.muted(scheme))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 4)
+
+            Group {
+                switch arrangement {
+                case .spine: spineRow
+                case .hanging: hangingRow
+                case .collage: collageRow
+                case .grid: gridView
+                }
+            }
+        }
+    }
+
+    /// 随机书脊斜放（视频默认）：一排竖立书脊，交替轻微倾斜，立在地平线上。
+    private var spineRow: some View {
+        ScrollView(.horizontal) {
+            HStack(alignment: .bottom, spacing: 12) {
+                ForEach(Array(otherBooks.prefix(12).enumerated()), id: \.offset) { idx, book in
+                    spine(for: book, tilt: (idx % 2 == 0 ? -3 : 3))
+                        .onTapGesture { onOpenBook(book) }
+                        .contextMenu { bookMenuItems(book) }
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.bottom, 8)
+        }
+        .scrollIndicators(.hidden)
+        .frame(height: 158)
+        .background(alignment: .bottom) {
+            Rectangle().frame(height: 1.5).foregroundStyle(PaperPalette.hairline(scheme))
+        }
+    }
+
+    private func spine(for book: ReadingBook, tilt: Double) -> some View {
+        let h: CGFloat = 132
+        return ZStack(alignment: .center) {
+            BookshelfCoverStyle.artwork(for: book, colorScheme: scheme, displaySize: CGSize(width: 92, height: h))
+                .frame(width: 46, height: h)
+                .clipped()
+                .overlay(
+                    LinearGradient(colors: [Color.black.opacity(0.3), .clear, Color.black.opacity(0.2)],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 46)
+                )
+            VStack(spacing: 1) {
+                ForEach(Array(book.title.prefix(8).enumerated()), id: \.offset) { _, ch in
+                    Text(String(ch))
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.95))
+                }
+            }
+            .shadow(color: .black.opacity(0.5), radius: 1)
+        }
+        .frame(width: 46, height: h)
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        .shadow(color: .black.opacity(0.3), radius: 5, x: 2, y: 4)
+        .rotationEffect(.degrees(tilt), anchor: .bottom)
+    }
+
+    /// 展台下方（视频）：一条横线 + 木夹子 + 翻开的书封。
+    private var hangingRow: some View {
+        ScrollView(.horizontal) {
+            HStack(alignment: .top, spacing: 18) {
+                ForEach(otherBooks.prefix(12)) { book in
+                    hangingBook(book)
+                        .onTapGesture { onOpenBook(book) }
+                        .contextMenu { bookMenuItems(book) }
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 14)
+        }
+        .scrollIndicators(.hidden)
+        .frame(height: 190)
+        .background(alignment: .top) {
+            Rectangle().frame(height: 1.5).foregroundStyle(PaperPalette.hairline(scheme))
+                .padding(.top, 6)
+        }
+    }
+
+    private func hangingBook(_ book: ReadingBook) -> some View {
+        VStack(spacing: 0) {
+            // 木夹子
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.brown.opacity(0.75))
+                .frame(width: 16, height: 22)
+            HStack(spacing: 0) {
+                stageCover(book, width: 68, height: 96)
+                // 翻开的右页
+                Rectangle()
+                    .fill(PaperPalette.card(scheme))
+                    .frame(width: 20, height: 96)
+                    .overlay(alignment: .center) {
+                        Text(book.author).font(.system(size: 7)).foregroundStyle(ShelfInk.muted(scheme))
+                            .rotationEffect(.degrees(90)).lineLimit(1)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+        }
+    }
+
+    /// 多书脊拼图（视频）：横向大图浏览，带页码。
+    private var collageRow: some View {
+        let items = otherBooks.prefix(8)
+        return ScrollView(.horizontal) {
+            HStack(spacing: 16) {
+                ForEach(items) { book in
+                    VStack(spacing: 10) {
+                        stageCover(book, width: 200, height: 280)
+                            .onTapGesture { onOpenBook(book) }
+                            .contextMenu { bookMenuItems(book) }
+                        Text("\(filteredBooks.firstIndex(where: { $0.id == book.id }).map { $0 + 1 } ?? 1) / \(filteredBooks.count)")
+                            .font(.system(size: 11)).foregroundStyle(ShelfInk.muted(scheme))
+                        Text(book.title)
+                            .font(PaperFont.serif(16))
+                            .foregroundStyle(ShelfInk.strong(scheme))
+                            .lineLimit(1)
+                        Text(book.author)
+                            .font(.system(size: 11))
+                            .foregroundStyle(ShelfInk.soft(scheme))
+                    }
+                    .frame(width: 200)
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    /// 网格封面：三列（窄屏两列由 GeometryReader 决定），与视频网格模式一致。
+    private var gridView: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: 2), spacing: 20) {
+            ForEach(otherBooks) { book in
+                VStack(alignment: .leading, spacing: 6) {
+                    stageCover(book, width: 150, height: 210)
+                        .frame(maxWidth: .infinity)
+                    Text(book.title)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(ShelfInk.strong(scheme))
+                        .lineLimit(1)
+                    Text(book.currentPosition > 0 ? "\(Int(book.currentPosition * 100))%" : localized("未读"))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(ShelfInk.muted(scheme))
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { onOpenBook(book) }
+                .contextMenu { bookMenuItems(book) }
+            }
+        }
+    }
+
+    // MARK: 空态
+
+    private var emptyStage: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "books.vertical").font(.system(size: 34)).foregroundStyle(ShelfInk.muted(scheme))
+            Text(localized("书架还是空的")).font(PaperFont.serif(20)).foregroundStyle(ShelfInk.strong(scheme))
+            Button { onAdd() } label: {
+                Text(localized("添加书籍"))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ShelfInk.strong(scheme))
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .glassCapsule(scheme)
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 80)
+    }
+
+    private var noResult: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.system(size: 30)).foregroundStyle(ShelfInk.muted(scheme))
+            Text(localized("没有找到匹配的书")).font(.system(size: 14)).foregroundStyle(ShelfInk.soft(scheme))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 80)
     }
 }
