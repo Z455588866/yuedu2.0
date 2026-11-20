@@ -885,7 +885,7 @@ struct ReadingHomeView: View {
                 let labels = ["日", "一", "二", "三", "四", "五", "六"]
                 ForEach(0..<7, id: \.self) { i in
                     Text(labels[i]).font(.system(size: 11))
-                        .foregroundStyle(weekRead(i) ? DSColor.textOnAccent : PaperPalette.textTertiary(scheme))
+                        .foregroundStyle(weekRead(i) ? Color.white : PaperPalette.textTertiary(scheme))
                         .frame(width: 32, height: 32)
                         .background(Circle().fill(weekRead(i) ? PaperPalette.ink(scheme) : PaperPalette.iconTile(scheme)))
                 }
