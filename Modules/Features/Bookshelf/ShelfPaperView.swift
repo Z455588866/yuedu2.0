@@ -104,6 +104,25 @@ struct ShelfPaperView: View {
             .sorted(by: sort.areInIncreasingOrder)
     }
 
+    // MARK: 管理模式 · 全选与分享
+
+    /// 管理模式下能被勾选的书 = 当前筛选/排序下的「其余书籍」网格。
+    /// 「接着读」卡片不参与多选（它的封面点击仍是直接打开书），所以全选也只覆盖这一批，
+    /// 与读者实际能看到勾选圈的书保持一致。
+    private var selectableBooks: [ReadingBook] { restBooks }
+
+    /// 是否已把当前可见的书全部选上（空列表不算，避免空书架时「全不选」误亮）。
+    private var isAllSelected: Bool {
+        !selectableBooks.isEmpty && selection.count == selectableBooks.count
+    }
+
+    /// 选中书对应的本地文件 URL，交给分享面板。在线书（无本地文件）会被跳过。
+    private var selectedShareableURLs: [URL] {
+        selection
+            .compactMap { id in store.books.first(where: { $0.id == id }) }
+            .compactMap { store.shareableFileURL(for: $0) }
+    }
+
     /// Every chip stays on the bar even when its count is 0 — 视频 / 漫画 / 听书 are how the
     /// maintainer looks for those books, so hiding the entry until one exists made them
     /// impossible to find. An empty chip now says so instead of disappearing.
@@ -526,9 +545,42 @@ struct ShelfPaperView: View {
                 Spacer(minLength: 8)
 
                 if isManaging {
+                    // 全选 / 全不选：只作用于当前筛选下可见的书，与能勾选的封面一致。
+                    Button {
+                        withAnimation(.snappy(duration: 0.18)) {
+                            if isAllSelected {
+                                selection = []
+                            } else {
+                                selection = Set(selectableBooks.map(\.id))
+                            }
+                        }
+                    } label: {
+                        Text(localized(isAllSelected ? "全不选" : "全选"))
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(ShelfInk.strong(scheme))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .glassCapsule(scheme)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(selectableBooks.isEmpty)
+
                     Text("\(selection.count) \(localized("已选"))")
                         .font(.system(size: 12))
                         .foregroundStyle(ShelfInk.muted(scheme))
+
+                    // 分享选中的书（本地文件）。ShareLink 必须留在普通 HStack 里，
+                    // 放进 Menu 会在 iOS 17 丢掉分享面板 —— 与书源汇出那边同一条约束。
+                    ShareLink(items: selectedShareableURLs) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(ShelfInk.strong(scheme))
+                            .frame(width: 30, height: 30)
+                            .glassCircle(scheme)
+                    }
+                    .disabled(selectedShareableURLs.isEmpty)
+                    .accessibilityLabel(localized("分享"))
+
                     Button {
                         confirmsDelete = true
                     } label: {
