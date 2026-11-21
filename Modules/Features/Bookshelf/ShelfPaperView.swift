@@ -34,7 +34,7 @@ struct ShelfPaperView: View {
     /// 展台底部书籍排布：随机书脊斜放 / 展台下方(挂绳翻书) / 多书脊拼图 / 网格封面。
     @AppStorage("yd_shelf_stage_arrangement") private var stageArrangementRaw: String = StageArrangement.showcase.rawValue
     private var stageArrangement: StageArrangement {
-        get { StageArrangement(rawValue: stageArrangementRaw) ?? .spine }
+        get { StageArrangement(rawValue: stageArrangementRaw) ?? .showcase }
         nonmutating set { stageArrangementRaw = newValue.rawValue }
     }
     /// 封面背景模糊（视频菜单里的开关）。
