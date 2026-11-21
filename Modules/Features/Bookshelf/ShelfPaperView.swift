@@ -1431,8 +1431,9 @@ struct StageShelfView: View {
         VStack(alignment: .leading, spacing: 0) {
             GeometryReader { proxy in
                 let w = proxy.size.width
-                let cw = min(212, w * 0.56)
-                let ch = cw * 1.42
+                // 一比一复刻青苔：封面宽约 55% 屏宽，宽高比 1:1.30（实测官方录屏）
+                let cw = min(212, w * 0.55)
+                let ch = cw * 1.30
                 HStack {
                     Spacer(minLength: 0)
                     stageCover(book, width: cw, height: ch)
@@ -1682,24 +1683,52 @@ struct StageShelfView: View {
     }
 
     private func hangingBook(_ book: ReadingBook) -> some View {
+        // 一比一复刻青苔：横线下挂木夹子 + 竖排书脊(书脊上竖排书名)。
+        // 不再画翻书白页——真实青苔此模式并无空白右页。
         VStack(spacing: 0) {
-            // 木夹子
             RoundedRectangle(cornerRadius: 2)
-                .fill(Color.brown.opacity(0.75))
-                .frame(width: 16, height: 22)
-            HStack(spacing: 0) {
-                stageCover(book, width: 68, height: 96)
-                // 翻开的右页
-                Rectangle()
-                    .fill(PaperPalette.card(scheme))
-                    .frame(width: 20, height: 96)
-                    .overlay(alignment: .center) {
-                        Text(book.author).font(.system(size: 7)).foregroundStyle(ShelfInk.muted(scheme))
-                            .rotationEffect(.degrees(90)).lineLimit(1)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                .fill(Color(red: 0.65, green: 0.46, blue: 0.25))
+                .frame(width: 13, height: 16)
+                .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                .zIndex(2)
+            ZStack {
+                // 书脊本体：用封面主色派生出的深色书脊
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(spineColor(for: book))
+                    .frame(width: 34, height: 132)
+                    .shadow(color: .black.opacity(0.32), radius: 6, x: 2, y: 4)
+                // 书脊上的高光与折痕
+                HStack(spacing: 0) {
+                    Rectangle().fill(Color.white.opacity(0.20)).frame(width: 1)
+                    Spacer()
+                    Rectangle().fill(Color.black.opacity(0.25)).frame(width: 2)
+                }
+                .frame(width: 34, height: 132)
+                // 竖排书名
+                Text(book.title)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.92))
+                    .shadow(color: .black.opacity(0.5), radius: 1, y: 1)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .rotationEffect(.degrees(90))
+                    .frame(width: 116)
             }
         }
+    }
+
+    /// 由书名稳定派生书脊颜色，保证同一本书颜色一致。
+    private func spineColor(for book: ReadingBook) -> Color {
+        let palette: [Color] = [
+            Color(red: 0.42, green: 0.32, blue: 0.27),
+            Color(red: 0.20, green: 0.24, blue: 0.31),
+            Color(red: 0.31, green: 0.22, blue: 0.16),
+            Color(red: 0.36, green: 0.36, blue: 0.34),
+            Color(red: 0.24, green: 0.30, blue: 0.24),
+            Color(red: 0.44, green: 0.35, blue: 0.22),
+        ]
+        let h = abs(book.title.unicodeScalars.reduce(0) { $0 + Int($1.value) })
+        return palette[h % palette.count]
     }
 
     /// 多书脊拼图（视频）：横向大图浏览，带页码。

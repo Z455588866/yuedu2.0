@@ -298,20 +298,21 @@ struct ReadingHomeView: View {
 
     private func progressBar(progress: Double) -> some View {
         let p = min(max(progress, 0), 1)
-        return HStack(spacing: 8) {
+        // 一比一复刻青苔：黑色粗进度条(约9pt)，浅灰轨道，25% 灰字
+        return HStack(spacing: 10) {
             GeometryReader { g in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(PaperPalette.hairline(scheme).opacity(0.5))
-                    Capsule().fill(PaperPalette.ink(scheme))
+                    Capsule().fill(Color.gray.opacity(0.3))
+                    Capsule().fill(Color(red: 0.08, green: 0.08, blue: 0.08))
                         .frame(width: g.size.width * CGFloat(p))
                 }
             }
-            .frame(height: 5)
+            .frame(height: 9)
             Text("\(Int(p * 100))%")
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundStyle(PaperPalette.textTertiary(scheme))
                 .monospacedDigit()
-                .frame(width: 34, alignment: .trailing)
+                .frame(width: 40, alignment: .leading)
         }
     }
 
@@ -605,29 +606,35 @@ struct ReadingHomeView: View {
     private var bookInfo: some View {
         Group {
             if let book = centeredBook {
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if !book.author.isEmpty {
-                            Text(book.author).font(.system(size: 11.5)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                VStack(alignment: .leading, spacing: 0) {
+                    // 作者/书名/章节在左，黑色实心耳机圆在右垂直居中（一比一复刻青苔）
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if !book.author.isEmpty {
+                                Text(book.author).font(.system(size: 12.5)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                            }
+                            Text(book.title).font(.system(size: 22, weight: .heavy))
+                                .foregroundStyle(PaperPalette.textPrimary(scheme)).lineLimit(2)
+                            if let chapter = chapterTitle(of: book) {
+                                Text(chapter).font(.system(size: 12.5)).foregroundStyle(PaperPalette.textTertiary(scheme)).lineLimit(1)
+                            }
                         }
-                        Text(book.title).font(.system(size: 19, weight: .bold))
-                            .foregroundStyle(PaperPalette.textPrimary(scheme)).lineLimit(2)
-                        if let chapter = chapterTitle(of: book) {
-                            Text(chapter).font(.system(size: 11.5)).foregroundStyle(PaperPalette.textSecondary(scheme)).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Button { listen(book) } label: {
+                            Image(systemName: "headphones")
+                                .font(.system(size: 24, weight: .semibold))
+                                .foregroundStyle(Color.white)
+                                .frame(width: 54, height: 54)
+                                .background(Circle().fill(Color(red: 0.08, green: 0.08, blue: 0.08)))
+                                .shadow(color: .black.opacity(0.28), radius: 10, x: 0, y: 5)
                         }
-                        progressBar(progress: book.currentPosition).padding(.top, 4)
+                        .buttonStyle(.plain).accessibilityLabel(localized("听书"))
                     }
-                    Spacer(minLength: 4)
-                    Button { listen(book) } label: {
-                        Image(systemName: "headphones")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(DSColor.textOnAccent)
-                            .frame(width: 46, height: 46)
-                            .background(Circle().fill(PaperPalette.ink(scheme)))
-                    }
-                    .buttonStyle(.plain).accessibilityLabel(localized("听书"))
+                    // 黑色粗进度条 + 25% 独占下方一行
+                    progressBar(progress: book.currentPosition)
+                        .padding(.top, 12)
                 }
-                .padding(.horizontal, 24).padding(.top, 18)
+                .padding(.horizontal, 24).padding(.top, 14)
             } else {
                 emptyHint()
             }
