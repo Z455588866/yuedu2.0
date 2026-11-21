@@ -62,6 +62,10 @@ class BookStore: @MainActor ObservableObject, BookProvider {
     /// Every refresh that moved chapters to other indices. An event, not state: the full-screen
     /// reader does not observe the store, so it takes this with `onReceive`.
     let chapterRenumberings = PassthroughSubject<ChapterRenumbering, Never>()
+    /// Emitted whenever a book is opened (every reader's open path calls `updateLastOpened`).
+    /// An event, not state: the home page uses it to re-sort 继续阅读/最近阅读 in real time
+    /// without a full `objectWillChange` refresh.
+    let bookOpened = PassthroughSubject<UUID, Never>()
     private var records: [ReadingBook] {
         get { recordStorage.values }
         set { replaceRecords(newValue) }
@@ -1063,6 +1067,7 @@ class BookStore: @MainActor ObservableObject, BookProvider {
         records[idx].newChapterCount = 0
         saveMeta()
         readingGenres?.bookOpened(records[idx], metadata: importedMetadata, sources: .shared)
+        bookOpened.send(bookId)
     }
 
     /// 从继续阅读移除 (unified library 5d-3c): out of 继续阅读 until the book is opened again.

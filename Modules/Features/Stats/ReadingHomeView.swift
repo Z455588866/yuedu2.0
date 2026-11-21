@@ -62,14 +62,14 @@ struct ReadingHomeView: View {
     @State private var restingBookID: UUID?
 
     private static let carouselSpace = "homeCarousel"
-    private static let carouselLimit = 12
     private static let goalMinutes = 15
 
     private var carouselBooks: [ReadingBook] {
-        let sorted = store.books.sorted {
+        // 展示全部书籍，不再截断——否则加了 16 本只显示 12 本。
+        // 居中/滚动定位都按 book.id 查找，不依赖固定数量，去掉上限无副作用。
+        return store.books.sorted {
             ($0.lastOpenedDate ?? $0.addedDate) > ($1.lastOpenedDate ?? $1.addedDate)
         }
-        return Array(sorted.prefix(Self.carouselLimit))
     }
 
     private var centeredBook: ReadingBook? {
@@ -136,6 +136,14 @@ struct ReadingHomeView: View {
             settleCarousel()
         }
         .onChange(of: store.books.count) { _, _ in settleCarousel() }
+        // 在书架/TTS/任意入口读了一本书时，BookStore 会发出 bookOpened。这里实时把那本
+        // 设为轮播焦点：carouselBooks 按 lastOpenedDate 排序，刚读的会自动排到第一位，
+        // 于是「继续阅读」大卡和「最近阅读」横排都跟着刷新，不再要等重启才同步。
+        .onReceive(store.bookOpened) { bookId in
+            withAnimation(.easeInOut(duration: 0.25)) {
+                focusBook(bookId)
+            }
+        }
         .fullScreenCover(isPresented: Binding(
             get: { readingBookID != nil },
             set: { isPresented in
@@ -185,6 +193,18 @@ struct ReadingHomeView: View {
         let settled = target?.id ?? carouselBooks.first?.id
         centeredBookID = settled
         restingBookID = settled
+    }
+
+    /// 刚打开的书：把它设为轮播焦点。carouselBooks 已按 lastOpenedDate 排序，bookId 现在排在
+    /// 第一位；更新 centeredBookID/restingBookID 让「继续阅读」大卡与滚动位置一起落到它上面。
+    /// 若这本书不在书架（例如已被移除），则退回最近读的一本。
+    private func focusBook(_ bookId: UUID) {
+        guard carouselBooks.contains(where: { $0.id == bookId }) else {
+            settleCarousel()
+            return
+        }
+        centeredBookID = bookId
+        restingBookID = bookId
     }
 
     private func settleResting(_ book: ReadingBook, midX: CGFloat, middle: CGFloat, slot: CGFloat) {
@@ -1168,7 +1188,7 @@ struct ReadingHomeView: View {
                     bilingualHeader(localized("本期在读"), "FEATURED")
                     ScrollView(.horizontal) {
                         HStack(alignment: .top, spacing: 14) {
-                            ForEach(carouselBooks.prefix(8)) { book in
+                            ForEach(carouselBooks) { book in
                                 VStack(alignment: .leading, spacing: 8) {
                                     cover(book, width: 132, height: 184)
                                     Text(book.title).font(.system(size: 12, weight: .semibold))
@@ -1245,7 +1265,7 @@ struct ReadingHomeView: View {
                     bilingualHeader(localized("馆藏书架"), "ON SHELF")
                     ScrollView(.horizontal) {
                         HStack(alignment: .bottom, spacing: 10) {
-                            ForEach(carouselBooks.prefix(12)) { book in
+                            ForEach(carouselBooks) { book in
                                 spineView(book).onTapGesture { openBook(book) }
                             }
                         }

@@ -214,6 +214,17 @@ struct ShelfPaperView: View {
                 ZStack(alignment: .bottom) {
                     // 与首页一致走 global：让 tab 层铺的全局主题背景图从纸感层下透出来，
                     // 书架不再是一片与主题无关的纯色。
+                    // 强制复用首页背景图：首页 tab 的 rawValue 是 library，背景分类表里没有
+                    // 这个 case，所以首页读的是 global。书架无论主题有没有给自己单独配背景，
+                    // 都直接把首页这张图铺进来 —— 不依赖 tab backdrop 是否透出，也不会因为
+                    // bookshelf scope 那条「有颜色、无图」的残留配置而变成一片空白。
+                    if subscription.hasAccess(.readerThemePacks),
+                       let homeSlice = gs.resolvedPageBackgroundSlice(for: .global, colorScheme: scheme),
+                       !homeSlice.isEmpty {
+                        AppearancePageBackgroundLayerView(slice: homeSlice)
+                            .ignoresSafeArea()
+                    }
+
                     PaperBackground(scope: .global)
 
                     // 展台模式一比一复刻青苔：深棕木质展台背景，向下渐隐到页面色。
@@ -884,6 +895,8 @@ struct ShelfPaperView: View {
             }
             .shadow(color: .black.opacity(0.16), radius: 8, x: 3, y: 6)
             .accessibilityHidden(true)
+            // 书籍有新章节时左上角贴红色「更新」角标（所有书架模式共用同一枚）。
+            .shelfUpdateBadge(for: book)
             .reportBookshelfCoverFrame(into: coverBoxes.box(for: book.id), onChange: nil)
     }
 
@@ -1270,6 +1283,19 @@ struct StageShelfView: View {
     /// 只在本视图内保存，切模式/重进书架会回落到默认，符合视频里的行为。
     @State private var featuredBookID: UUID?
 
+    // MARK: 上滑飞入过渡（复刻视频）
+    /// 主封面用 `.id(feature.id)` + 自定义 transition：切换时新书从下方缩小上移、放大进入，
+    /// 旧书淡出。不用 matchedGeometryEffect —— 下方书列在横向 ScrollView 里、主封面在外，
+    /// 跨 ScrollView 的坐标补间在 iOS 17 上正是闪退高发区；transition 视觉一致且更稳。
+
+    /// 手指正往上推、但还没滑过临界点的那本书 —— 用于在主封面上叠「小封面+书名」预览卡。
+    @State private var previewBook: ReadingBook?
+    /// 上滑进度 0...1（手指从书列往上推的距离换算），驱动预览卡的位移与透明度。
+    @State private var previewProgress: CGFloat = 0
+
+    /// 上滑多少点算「滑上去」从而切换主书。低于它松手就回弹、只当翻看了下详情。
+    private static let promoteThreshold: CGFloat = 72
+
     private var filteredBooks: [ReadingBook] {
         let base = books.filter { currentFilter.accepts($0) }
             .sorted(by: currentSort.areInIncreasingOrder)
@@ -1336,7 +1362,12 @@ struct StageShelfView: View {
                 case .library:
                     libraryView.padding(.top, 24)
                 case .hanging:
-                    hangingFullView.padding(.top, 24)
+                    // 挂绳：一整条麻绳 + 木夹子夹住展开的正面封面，整排可左右滑动。
+                    // 顶部仍保留主封面大图；上滑某本夹着的书才飞到中间替换主封面。
+                    if let feature {
+                        featureCard(feature).padding(.top, 24)
+                        hangingFullView.padding(.top, 26)
+                    }
                 }
             }
         }
@@ -1347,8 +1378,7 @@ struct StageShelfView: View {
 
     private var topBar: some View {
         HStack(alignment: .center) {
-            Spacer(minLength: 0)
-
+            // 「书架 ∨」分类胶囊贴最左，与右侧 ≡ + 胶囊两端对称（原先左侧有 Spacer 导致居中）。
             Menu {
                 ForEach(ShelfFilter.allCases) { f in
                     Button {
@@ -1511,6 +1541,17 @@ struct StageShelfView: View {
                 HStack {
                     Spacer(minLength: 0)
                     stageCover(book, width: cw, height: ch)
+                        // 换主书时触发「从下方飞上来放大」的过渡；旧主书同时淡出缩小。
+                        .id(book.id)
+                        .transition(
+                            .asymmetric(
+                                insertion: .scale(scale: 0.72, anchor: .bottom)
+                                    .combined(with: .offset(y: 150))
+                                    .combined(with: .opacity),
+                                removal: .scale(scale: 0.8, anchor: .bottom)
+                                    .combined(with: .opacity)
+                            )
+                        )
                     Spacer(minLength: 0)
                 }
                 .frame(height: ch)
@@ -1564,6 +1605,91 @@ struct StageShelfView: View {
         .contextMenu { bookMenuItems(book) }
     }
 
+    /// 上滑半途的「原地翻面」预览（复刻视频）：书列里那本竖着的书脊，就在原来的那一格
+    /// 绕竖轴翻过来露出正面封面（仍是竖版 portrait，只是从侧面书脊转成正面），停在下边不飞走。
+    /// 书名/作者/进度/阅读按钮的详情条单独放在搁板下方（见 hangingRow 里的 previewDetailBar）。
+    private func promotionPreviewCard(_ book: ReadingBook) -> some View {
+        let flip = min(1, max(0, previewProgress))
+        // -88°(侧看只见书脊) → 0°(正面封面)：书"翻过来"露正脸
+        let coverAngle = -88 * (1 - flip)
+        let coverW: CGFloat = 108
+        let coverH: CGFloat = 148
+        return ZStack(alignment: .bottom) {
+            // 起始态：竖着的窄书脊
+            spine(for: book, tilt: 0)
+                .opacity(1 - flip)
+            // 翻过来的正面封面（竖版，跟截图里福尔摩斯那本一样是立着的宽封面）
+            stageCover(book, width: coverW, height: coverH)
+                .rotation3DEffect(.degrees(coverAngle), axis: (x: 0, y: 1, z: 0), anchor: .center)
+                .opacity(flip)
+        }
+        .frame(width: coverW, height: coverH, alignment: .bottom)
+        .shadow(color: .black.opacity(0.34), radius: 16, y: 8)
+        .allowsHitTesting(false)                    // 不拦截点击，切换逻辑仍在书列手势里
+        .animation(.interactiveSpring(response: 0.26, dampingFraction: 0.9), value: previewProgress)
+        .accessibilityHidden(true)
+    }
+
+    /// 搁板下方的预览详情条：书名 / 作者 / 进度 / 未读 + 阅读按钮 + 更多。
+    /// 对应截图里「福尔摩斯」横过来后，下方那整条带阅读按钮的详情。
+    private func previewDetailBar(_ book: ReadingBook) -> some View {
+        let detailOpacity = max(0, (min(1, previewProgress) - 0.35) / 0.65)
+        return HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(book.title)
+                    .font(PaperFont.serif(15))
+                    .foregroundStyle(ShelfInk.strong(scheme))
+                    .lineLimit(1)
+                Text(book.author.isEmpty ? "—" : book.author)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ShelfInk.soft(scheme))
+                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(PaperPalette.hairline(scheme).opacity(0.5))
+                            Capsule().fill(PaperPalette.ink(scheme))
+                                .frame(width: g.size.width * CGFloat(min(max(book.currentPosition, 0), 1)))
+                        }
+                    }
+                    .frame(height: 4)
+                    Text(book.currentPosition > 0 ? "\(Int(book.currentPosition * 100))%" : localized("未读"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(ShelfInk.muted(scheme))
+                        .frame(width: 36, alignment: .trailing)
+                }
+            }
+            Spacer(minLength: 4)
+            Button {
+                if !onOpenAudiobook(book) { onOpenBook(book) }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "book")
+                    Text(localized("阅读"))
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ShelfInk.strong(scheme))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .glassCapsule(scheme)
+            }
+            .buttonStyle(.plain)
+            Menu { bookMenuItems(book) } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(ShelfInk.soft(scheme))
+                    .frame(width: 34, height: 34)
+                    .glassCapsule(scheme)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 12)
+        .opacity(detailOpacity)
+        .animation(.interactiveSpring(response: 0.26, dampingFraction: 0.9), value: previewProgress)
+        .accessibilityHidden(detailOpacity < 0.5)
+    }
+
     @ViewBuilder
     private func bookMenuItems(_ book: ReadingBook) -> some View {
         Button {
@@ -1603,6 +1729,8 @@ struct StageShelfView: View {
         }
         .shadow(color: .black.opacity(0.28), radius: 18, x: 4, y: 12)
         .accessibilityHidden(true)
+        // 书籍有新章节时左上角贴红色「更新」角标（经典书架/展台 7 模式共用）。
+        .shelfUpdateBadge(for: book)
     }
 
     // MARK: 管理模式（全选 / 分享 / 删除 —— 与经典书架一致）
@@ -1880,34 +2008,60 @@ struct StageShelfView: View {
 
     // MARK: 挂绳（视频：木夹子夹住正面封面，挂在线上，可多行）
 
-    /// 木夹子 + 正面封面 —— 仅供「挂绳」整页模式使用。
+    /// 小木夹：竖长圆角橙木色小条 + 中间偏上一道灰色金属弹簧条，骑跨在细麻绳上，
+    /// 下端夹住展开的正面封面（对齐用户截图：夹子约为书宽 1/9，很小）——仅供「挂绳」整页模式使用。
     private func hangingBook(_ book: ReadingBook) -> some View {
         VStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color(red: 0.66, green: 0.48, blue: 0.27))
-                .frame(width: 15, height: 20)
-                .shadow(color: .black.opacity(0.32), radius: 2, x: 0, y: 1)
-                .zIndex(2)
+            // 夹身：13×30 圆角橙色小木条；绳子在偏上处穿过；中间灰金属条
+            ZStack(alignment: .top) {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.85, green: 0.60, blue: 0.31),
+                                Color(red: 0.92, green: 0.69, blue: 0.42),
+                                Color(red: 0.79, green: 0.53, blue: 0.24),
+                            ],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                    )
+                    .frame(width: 13, height: 30)
+                // 灰色金属弹簧条（横向，偏上）
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.54, green: 0.55, blue: 0.56),
+                                Color(red: 0.71, green: 0.72, blue: 0.73),
+                                Color(red: 0.49, green: 0.50, blue: 0.51),
+                            ],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 13, height: 4)
+                    .offset(y: 10)
+            }
+            .shadow(color: .black.opacity(0.28), radius: 1.5, x: 0, y: 1)
+            .zIndex(2)
+            // 展开的正面封面（夹子下端紧贴书顶）
             ZStack(alignment: .topTrailing) {
                 stageCover(book, width: 76, height: 108)
                 selectBadge(book)
             }
+            .offset(y: -4)
         }
     }
 
     private var hangingFullView: some View {
-        // 视频真实：一整条挂绳，书横向排成一排可左右滑动（不是多行静态网格）
+        // 视频真实：一整条麻绳横穿，木夹子骑跨在绳上夹住正面封面，整排可左右滑动。
         VStack(spacing: 0) {
-            // 挂绳横线
-            Rectangle()
-                .fill(Color(red: 0.72, green: 0.62, blue: 0.46))
-                .frame(height: 1.5)
-                .padding(.horizontal, 4)
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 20) {
+                HStack(alignment: .top, spacing: -8) {   // 书叠着挂，互相遮挡（对齐截图）
                     ForEach(filteredBooks) { book in
                         VStack(spacing: 5) {
                             hangingBook(book)
+                                // 上滑预览时轻微上浮高亮（封面已是正面，无需翻面）
+                                .offset(y: previewBook?.id == book.id ? -10 * min(1, previewProgress) : 0)
                             Text(book.title)
                                 .font(.system(size: 10))
                                 .foregroundStyle(ShelfInk.soft(scheme))
@@ -1916,12 +2070,39 @@ struct StageShelfView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture { activate(book) }
+                        // 上滑：半途停留显示详情条，滑过临界点切主书飞入；横向滑动让给 ScrollView。
+                        .simultaneousGesture(promotionDrag(for: book))
                         .contextMenu { bookMenuItems(book) }
                     }
                 }
                 .padding(.horizontal, 4)
-                .padding(.top, 2)
+                .padding(.top, 0)
             }
+            // 细麻绳（浅棕、几乎水平）：作为书列层背景放在夹子「后面」，穿过夹子金属条位置，夹子盖住绳子形成骑跨。
+            .background(alignment: .top) {
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.72, green: 0.59, blue: 0.38),
+                                Color(red: 0.91, green: 0.83, blue: 0.65),
+                                Color(red: 0.72, green: 0.59, blue: 0.38),
+                            ],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
+                    .frame(height: 2)
+                    .padding(.horizontal, 4)
+                    .offset(y: 12)   // 对齐夹子金属条（y=10..14）
+                    .shadow(color: .black.opacity(0.22), radius: 1, y: 1)
+            }
+            // 上滑半途那本书的详情条（书名/作者/进度/阅读按钮），停在下方
+            VStack(spacing: 0) {
+                if let pb = previewBook { previewDetailBar(pb) }
+            }
+            .frame(height: previewBook != nil ? 74 : 0, alignment: .top)
+            .clipped()
+            .animation(.easeOut(duration: 0.2), value: previewBook?.id)
         }
     }
 
@@ -1943,14 +2124,29 @@ struct StageShelfView: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .bottom, spacing: 16) {
-                    ForEach(Array(otherBooks.prefix(12).enumerated()), id: \.offset) { idx, book in
-                        ZStack(alignment: .topTrailing) {
+                    ForEach(Array(otherBooks.enumerated()), id: \.offset) { idx, book in
+                        ZStack(alignment: .bottom) {
                             // 复用立体书脊组件，微微倾斜斜靠，像真实排在书架上的书
                             spine(for: book, tilt: stageSpineTilt(idx))
+                                // 正在被上滑预览时，隐藏竖书脊，让位给下面的横封面展开卡
+                                .opacity(previewBook?.id == book.id ? 0 : 1)
                             selectBadge(book)
+                            // 上滑一点点：就地在原位把竖书脊翻转成横封面 + 书名作者详情。
+                            if previewBook?.id == book.id {
+                                promotionPreviewCard(book)
+                                    .zIndex(2)
+                            }
                         }
+                        // 固定高度底部对齐：给横封面+详情留空间，避免展开时被 ScrollView 裁切、书列跳动。
+                        .frame(height: 196, alignment: .bottom)
                         .contentShape(Rectangle())
+                        // 轻点：切换主书（管理模式则勾选）。拖动达到 minimumDistance 后
+                        // 系统会自动取消这个 tap，于是不会和上滑手势双触发。
                         .onTapGesture { tapStageSpine(book) }
+                        // 上滑：半途就地翻转展开详情，滑过临界点松手才真正切主书并飞入。
+                        // simultaneousGesture：让下方绳子那一排的左右滑动（外层 ScrollView）照常进行，
+                        // 手势内部再按方向判断——横向为主时让给滚动，竖向为主时才触发翻面。
+                        .simultaneousGesture(promotionDrag(for: book))
                         .contextMenu { bookMenuItems(book) }
                     }
                 }
@@ -1978,6 +2174,17 @@ struct StageShelfView: View {
                         .frame(height: 1)
                 }
                 .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.14), radius: 6, y: 3)
+
+            // 搁板下方的预览详情条：上滑半途那本书翻过来后，这里显示书名/作者/进度/阅读按钮。
+            // 用高度动画滑入滑出，避免生硬跳动；未预览时不占空间。
+            VStack(spacing: 0) {
+                if let pb = previewBook {
+                    previewDetailBar(pb)
+                }
+            }
+            .frame(height: previewBook != nil ? 74 : 0, alignment: .top)
+            .clipped()
+            .animation(.easeOut(duration: 0.2), value: previewBook?.id)
         }
     }
 
@@ -1998,8 +2205,59 @@ struct StageShelfView: View {
         } else {
             withAnimation(.snappy(duration: 0.28)) {
                 featuredBookID = book.id
+                // 轻点切主书时，清掉之前"滑一点点停留"的翻面状态，避免两本同时处于展开
+                previewBook = nil
+                previewProgress = 0
             }
         }
+    }
+
+    /// 下方书列的上滑手势（复刻视频 + 你的截图）：
+    /// · 往上滑一点点就松手（没过临界点）：这本书就**停在翻开的状态**——原地露出正面封面、
+    ///   搁板下方详情条留着（就是你截图那样），不会弹回去。
+    /// · 继续往上滑过临界点松手：才切主书 → 触发 featureCard 的飞入 transition，翻面状态清除。
+    /// · 已是翻开停留的那本再次被滑：保持全翻不回跳，只有滑过临界点才切主书。
+    private func promotionDrag(for book: ReadingBook) -> some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+            .onChanged { value in
+                guard !isManaging else { return }
+                // 方向判断：横向位移占优时是"整排书沿绳子左右滑"，交给外层 ScrollView，不做翻面。
+                let dx = abs(value.translation.width)
+                let dy = abs(value.translation.height)
+                guard dy > dx, dy > 4 else { return }
+                // translation.y < 0 表示往上推；取反成正数进度。
+                let up = -value.translation.height
+                if up > 4 {
+                    if previewBook?.id != book.id {
+                        // 一本新的书：进度跟手 0→1
+                        previewBook = book
+                        previewProgress = min(1, up / Self.promoteThreshold)
+                    } else {
+                        // 已经是翻开停留的那本：保持全翻，避免重新滑时先弹回竖脊再翻开
+                        previewProgress = 1
+                    }
+                }
+            }
+            .onEnded { value in
+                guard !isManaging else { return }
+                let dx = abs(value.translation.width)
+                let dy = abs(value.translation.height)
+                guard dy > dx else { return }   // 横向滑动不处理翻面
+                let up = -value.translation.height
+                let committed = up >= Self.promoteThreshold || value.predictedEndTranslation.height <= -Self.promoteThreshold * 1.4
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                    if committed {
+                        // 完全滑上去：切主书、飞入，翻面详情清除
+                        featuredBookID = book.id
+                        previewBook = nil
+                        previewProgress = 0
+                    } else if up > 4 || previewBook?.id == book.id {
+                        // 只滑一点点松手：停在翻开状态（progress=1），保持截图那样的详情，不回弹
+                        previewBook = book
+                        previewProgress = 1
+                    }
+                }
+            }
     }
 
     // MARK: 书脊辅助（图书馆模式 + 书脊颜色派生）
@@ -2025,6 +2283,8 @@ struct StageShelfView: View {
             .shadow(color: .black.opacity(0.5), radius: 1)
         }
         .frame(width: 46, height: h)
+        // 书脊模式（图书馆 / 展台下方横排）也带更新提示，角标加在旋转前贴住封面本体。
+        .shelfUpdateBadgeCompact(for: book)
         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
         .shadow(color: .black.opacity(0.3), radius: 5, x: 2, y: 4)
         .rotationEffect(.degrees(tilt), anchor: .bottom)
@@ -2120,6 +2380,51 @@ private struct ShelfShowcaseWoodBackdrop: View {
                     )
                 )
             }
+        }
+    }
+}
+
+// MARK: - 更新角标（所有书架模式共用）
+
+/// 书籍有未读新章节（`hasNewChapterUpdate`）时，贴在封面左上角的红色「更新」胶囊。
+/// 由 BookStore 的下拉刷新/自动刷新点亮；点开书后计数清零，角标随即消失。
+/// 经典书架的 `shelfCover` 与展台书架 7 种模式的 `stageCover`/`spine` 都复用这一枚。
+private struct ShelfUpdateBadge: View {
+    let book: ReadingBook
+    /// 窄书脊（图书馆模式 / 展台下方横排）用更小的字号与留白，避免文字溢出。
+    var compact = false
+
+    var body: some View {
+        if book.hasNewChapterUpdate {
+            Text(localized("更新"))
+                .font(.system(size: compact ? 8 : 10, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, compact ? 4 : 7)
+                .padding(.vertical, compact ? 1.5 : 2.5)
+                .background(
+                    Capsule().fill(Color(red: 0.86, green: 0.16, blue: 0.20))
+                )
+                .shadow(color: .black.opacity(0.25), radius: 3, x: 0, y: 1)
+                .padding(.leading, compact ? 0 : 5)
+                .padding(.top, compact ? 0 : 5)
+                .accessibilityLabel(localized("有新章节"))
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+private extension View {
+    /// 在封面左上角叠加红色「更新」角标；无更新时不显示、不占布局。
+    func shelfUpdateBadge(for book: ReadingBook) -> some View {
+        self.overlay(alignment: .topLeading) {
+            ShelfUpdateBadge(book: book)
+        }
+    }
+
+    /// 窄书脊用的紧凑角标。
+    func shelfUpdateBadgeCompact(for book: ReadingBook) -> some View {
+        self.overlay(alignment: .topLeading) {
+            ShelfUpdateBadge(book: book, compact: true)
         }
     }
 }
