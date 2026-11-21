@@ -545,9 +545,12 @@ struct ReadingHomeView: View {
     private var carousel: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
-            let slot = min(212, width * 0.54)
+            // 一比一复刻青苔展台：书封宽度约 54.6% 屏宽，宽高比 1:1.30
+            // （实测官方录屏：书封左22.7%/右77.3% → 宽54.6%；上34%/下67% → 高33%；
+            //   以 iPhone 393×852 计，宽≈215pt、高≈281pt，宽高比≈1.30）
+            let slot = min(224, width * 0.546)
             let coverWidth = slot
-            let coverHeight = coverWidth * 1.42
+            let coverHeight = coverWidth * 1.30
 
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 0) {
