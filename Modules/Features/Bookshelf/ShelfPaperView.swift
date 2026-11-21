@@ -1259,6 +1259,10 @@ struct StageShelfView: View {
     /// 大封面居中对齐用的滚动坐标空间。
     private static let stageSpace = "stageShelf"
 
+    /// 展台主角：用户点下方书脊后指向那本书；未点过时跟随最近读/第一本。
+    /// 只在本视图内保存，切模式/重进书架会回落到默认，符合视频里的行为。
+    @State private var featuredBookID: UUID?
+
     private var filteredBooks: [ReadingBook] {
         let base = books.filter { currentFilter.accepts($0) }
             .sorted(by: currentSort.areInIncreasingOrder)
@@ -1269,9 +1273,13 @@ struct StageShelfView: View {
         }
     }
 
-    /// 最近读的那本作为展台主角；没有阅读记录时取第一本。
+    /// 展台主角：优先用户点选的书，其次最近读的那本，最后第一本。
+    /// 点选的书若已被过滤/删除，自动回落到默认，不会指向不存在的书。
     private var feature: ReadingBook? {
         let f = filteredBooks
+        if let picked = featuredBookID, let hit = f.first(where: { $0.id == picked }) {
+            return hit
+        }
         return f.first { $0.lastOpenedDate != nil } ?? f.first
     }
 
@@ -1439,8 +1447,6 @@ struct StageShelfView: View {
                         .frame(width: 34, height: 34)
                 }
                 .buttonStyle(.plain)
-
-                Divider().frame(height: 18).opacity(0.4)
 
                 Button { onAdd() } label: {
                     Image(systemName: "plus")
@@ -1867,6 +1873,21 @@ struct StageShelfView: View {
 
     // MARK: 挂绳（视频：木夹子夹住正面封面，挂在线上，可多行）
 
+    /// 木夹子 + 正面封面 —— 仅供「挂绳」整页模式使用。
+    private func hangingBook(_ book: ReadingBook) -> some View {
+        VStack(spacing: 0) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color(red: 0.66, green: 0.48, blue: 0.27))
+                .frame(width: 15, height: 20)
+                .shadow(color: .black.opacity(0.32), radius: 2, x: 0, y: 1)
+                .zIndex(2)
+            ZStack(alignment: .topTrailing) {
+                stageCover(book, width: 76, height: 108)
+                selectBadge(book)
+            }
+        }
+    }
+
     private var hangingFullView: some View {
         // 视频真实：一整条挂绳，书横向排成一排可左右滑动（不是多行静态网格）
         VStack(spacing: 0) {
@@ -1909,41 +1930,67 @@ struct StageShelfView: View {
         return result
     }
 
-    // MARK: 展台下方挂绳（大封面下方那一排：木夹 + 正面封面）
+    // MARK: 展台下方书脊（视频真实：立体书脊斜靠在玻璃搁板上，点书脊切换上方主书封）
 
     private var hangingRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 16) {
-                ForEach(otherBooks.prefix(12)) { book in
-                    hangingBook(book)
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .bottom, spacing: 16) {
+                    ForEach(Array(otherBooks.prefix(12).enumerated()), id: \.offset) { idx, book in
+                        ZStack(alignment: .topTrailing) {
+                            // 复用立体书脊组件，微微倾斜斜靠，像真实排在书架上的书
+                            spine(for: book, tilt: stageSpineTilt(idx))
+                            selectBadge(book)
+                        }
                         .contentShape(Rectangle())
-                        .onTapGesture { activate(book) }
+                        .onTapGesture { tapStageSpine(book) }
                         .contextMenu { bookMenuItems(book) }
+                    }
                 }
+                .padding(.horizontal, 4)
+                .padding(.bottom, 6)
             }
-            .padding(.horizontal, 4)
-            .padding(.top, 16)
-        }
-        .background(alignment: .top) {
-            // 挂绳横线
+
+            // 玻璃搁板：主题色 + 毛玻璃 + 顶部高光，书脊压在上面
             Rectangle()
-                .fill(Color(red: 0.72, green: 0.62, blue: 0.46))
-                .frame(height: 1.5)
-                .padding(.top, 10)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            PaperPalette.card(scheme).opacity(0.9),
+                            PaperPalette.hairline(scheme).opacity(0.7),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(height: 12)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(Color.white.opacity(scheme == .dark ? 0.12 : 0.55))
+                        .frame(height: 1)
+                }
+                .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.14), radius: 6, y: 3)
         }
     }
 
-    /// 木夹子 + 正面封面（视频真实：挂绳模式下书是正面朝前，不是书脊）。
-    private func hangingBook(_ book: ReadingBook) -> some View {
-        VStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color(red: 0.66, green: 0.48, blue: 0.27))
-                .frame(width: 15, height: 20)
-                .shadow(color: .black.opacity(0.32), radius: 2, x: 0, y: 1)
-                .zIndex(2)
-            ZStack(alignment: .topTrailing) {
-                stageCover(book, width: 76, height: 108)
-                selectBadge(book)
+    /// 书脊轻微倾斜：0 / 左倾 / 右倾 循环，模拟视频里自然斜靠的排布。
+    private func stageSpineTilt(_ idx: Int) -> Double {
+        switch idx % 3 {
+        case 0: return 0
+        case 1: return -3
+        default: return 2.5
+        }
+    }
+
+    /// 点下方书脊：管理模式勾选；普通模式切换上方主书封（联动），而非直接打开书。
+    private func tapStageSpine(_ book: ReadingBook) {
+        if isManaging {
+            if selection.contains(book.id) { selection.remove(book.id) }
+            else { selection.insert(book.id) }
+        } else {
+            withAnimation(.snappy(duration: 0.28)) {
+                featuredBookID = book.id
             }
         }
     }

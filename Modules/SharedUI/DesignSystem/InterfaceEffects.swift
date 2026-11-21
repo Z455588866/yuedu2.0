@@ -47,7 +47,7 @@ extension View {
         in shape: SurfaceShape,
         fill: Color = DSColor.surface
     ) -> some View {
-        modifier(InterfaceSurfaceModifier(shape: shape, fill: fill, glassAllowed: true))
+        modifier(InterfaceSurfaceModifier(shape: shape, fill: fill, glassAllowed: true, allowsCardBorder: false))
     }
 
     /// 清透玻璃：保留 `.ultraThinMaterial` 的通透（比 `.regular` 更透、不起雾），
@@ -180,6 +180,11 @@ private struct InterfaceSurfaceModifier<SurfaceShape: Shape>: ViewModifier {
     /// layer, where the system design puts glass unconditionally. Content-layer
     /// cards pass 分组卡片, which is opt-in.
     let glassAllowed: Bool
+    /// Whether the appearance theme's card border (borderHex) is painted on this
+    /// surface. Cards keep it; floating chrome — buttons, capsules, toolbars —
+    /// passes false so a themed 0.8pt outline never turns a clean glass button
+    /// into one with a coloured "杂边" (maintainer, 2026-11-21).
+    var allowsCardBorder: Bool = true
 
     @Bindable private var settings = GlobalSettings.shared
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -193,6 +198,7 @@ private struct InterfaceSurfaceModifier<SurfaceShape: Shape>: ViewModifier {
 
     /// The active theme's card artwork for this appearance, or nil for the plain fill.
     private var cardLayer: AppearanceCardBackgroundLayer? {
+        guard allowsCardBorder else { return nil }
         guard let background = settings.appearanceCardBackground, !background.isEmpty else {
             return nil
         }
@@ -365,8 +371,8 @@ private struct FloatingSurfaceModifier<SurfaceShape: Shape>: ViewModifier {
     func body(content: Content) -> some View {
         content
             // Floating chrome is the functional layer: it follows 毛玻璃 directly,
-            // with no extra opt-in.
-            .modifier(InterfaceSurfaceModifier(shape: shape, fill: fill, glassAllowed: true))
+            // with no extra opt-in. 卡片描边不属于按钮/胶囊, 传 false 去掉主题 borderHex 的杂边。
+            .modifier(InterfaceSurfaceModifier(shape: shape, fill: fill, glassAllowed: true, allowsCardBorder: false))
             .interfaceGlow(in: shape, tint: glowTint)
     }
 }
