@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26   # 仅此镜像自带 Xcode 26.4.1（修 iOS17 闪退的唯一版本）；macos-15 无 26.4
     timeout-minutes: 240
     env:
       # —— 改成你自己签名证书的 App ID（必须是「精确 ID」，不能带 * ）——
@@ -81,23 +81,27 @@ jobs:
           fi
           echo "源码版本校验通过"
 
-      # 选用最新 Xcode（工程用 Xcode 26 开发，需要 iOS 26 SDK）
-      - name: Pick newest Xcode
+      # 强制锁定 Xcode 26.4（Swift 6.2.5 系）：这是修复 iOS 17.0 搜书闪退的版本。
+      # 绝不能「选最新」——27.1 会让 build19 的闪退复发。找不到 26.4 就构建中止。
+      - name: Pick locked Xcode 26.4 (fix iOS17 crash)
         run: |
           BEST=""
-          BEST_V=0
-          for x in /Applications/Xcode*.app; do
-            v=$(defaults read "$x/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo 0)
-            maj=${v%%.*}
-            rest=${v#*.}
-            min=${rest%%.*}
-            n=$((maj * 100 + 10#${min:-0}))
-            if [ "$n" -gt "$BEST_V" ]; then
-              BEST_V=$n
-              BEST="$x"
-            fi
+          # 1) 精确匹配 26.4.x 系列
+          for x in /Applications/Xcode_26.4*.app /Applications/Xcode_26.4.app; do
+            if [ -d "$x" ]; then BEST="$x"; break; fi
           done
-          echo "选中: $BEST"
+          # 2) 默认名 Xcode.app 恰好是 26.4 的情况
+          if [ -z "$BEST" ] && [ -d "/Applications/Xcode.app" ]; then
+            v=$(defaults read /Applications/Xcode.app/Contents/Info CFBundleShortVersionString 2>/dev/null || echo 0)
+            case "$v" in 26.4*) BEST="/Applications/Xcode.app";; esac
+          fi
+          if [ -z "$BEST" ]; then
+            echo "!! 未找到 Xcode 26.4 系列，机器上现有："
+            ls -d /Applications/Xcode*.app 2>/dev/null || true
+            echo "!! 拒绝用非 26.4 工具链构建（会导致 iOS 17 闪退），构建中止"
+            exit 1
+          fi
+          echo "选中锁定的 26.4: $BEST"
           sudo xcode-select -s "$BEST"
           xcodebuild -version
           xcodebuild -showsdks | grep -i iphone || true
