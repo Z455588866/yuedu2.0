@@ -338,7 +338,13 @@ struct ContentView: View {
             ForEach(gs.visibleRootTabs) { tab in
                 rootTabContent(for: tab)
                     .modifier(ThemedSurfaceBackground(
-                        scope: AppearancePageBackgroundScope(rawValue: tab.rawValue) ?? .global,
+                        // 书架（bookshelf）与首页（library → global）统一走全局主题背景：
+                        // bookshelf 这条 scope 过去常被主题包写成「有颜色、无图」的残留配置，
+                        // 解析时便不再回退 global，导致只有书架看不到主题背景图、一片空白。
+                        // 让所有 tab 的 backdrop 都指向 global，主题背景才会铺满每个分类。
+                        scope: tab == .bookshelf
+                            ? .global
+                            : (AppearancePageBackgroundScope(rawValue: tab.rawValue) ?? .global),
                         isProActive: subscriptionStore.hasAccess(.readerThemePacks)
                     ))
                     .background { RootTabBarHider(visibility: rootTabBar) }

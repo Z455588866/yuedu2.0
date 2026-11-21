@@ -46,28 +46,33 @@ fi
 echo "源码版本校验通过"
 
 echo ""
-echo "===== Pick Xcode ====="
-# 优先 26.2（Swift 6.2.3）：iOS 17.0 真机 swift_task_dealloc LIFO 崩溃
-# （swiftlang/swift#84793）实测 26.2 干净、26.5/26.6 崩，6.2.4+ 产物在旧运行时崩
-# （#88036）。没有 26.2 时退回「选最新」。
+echo "===== Pick Xcode（锁定 26.4 / Swift 6.2.5：修复 iOS 17.0 搜书闪退）====="
+# iOS 17.0 真机搜书闪退 = Swift 并发运行时 task 分配器 LIFO 断言
+# （swiftlang/swift#84793 + #88036），只在部署目标 <18.0 + -O 的旧运行时触发。
+# 实测结论（2026-11-12 两台 iOS 17.0 真机）：
+#   - 26.2 (6.2.3) / 26.3 (6.2.4) 的产物照样崩
+#   - 26.5 / 26.6 是 Swift 6.3.x，有新的并发回归，会编译不过
+#   - 只有 26.4（Swift 6.2.5 系，26.4.1 起修复 #84793）干净
+# 【2026-11-21 修正】旧脚本优先 26.2、找不到就「选最新」→ 实际选到 27.1，
+# 这正是 build19 闪退复发的根因。现在强制锁定 26.4 系列，绝不「选最新」。
+# codemagic.yaml 的 `xcode: 26.4` 会确保机器装好 26.4，这里找到即用。
 BEST=""
-if [ -d "/Applications/Xcode_26.2.0.app" ]; then
-  BEST="/Applications/Xcode_26.2.0.app"
-else
-  BEST_V=0
-  for x in /Applications/Xcode*.app; do
-    v=$(defaults read "$x/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo 0)
-    maj=${v%%.*}
-    rest=${v#*.}
-    min=${rest%%.*}
-    n=$((maj * 100 + 10#${min:-0}))
-    if [ "$n" -gt "$BEST_V" ]; then
-      BEST_V=$n
-      BEST="$x"
-    fi
-  done
+# 1) 精确匹配 26.4.x 系列
+for x in /Applications/Xcode_26.4*.app /Applications/Xcode_26.4.app; do
+  if [ -d "$x" ]; then BEST="$x"; break; fi
+done
+# 2) 默认名 Xcode.app 恰好是 26.4 的情况
+if [ -z "$BEST" ] && [ -d "/Applications/Xcode.app" ]; then
+  v=$(defaults read /Applications/Xcode.app/Contents/Info CFBundleShortVersionString 2>/dev/null || echo 0)
+  case "$v" in 26.4*) BEST="/Applications/Xcode.app";; esac
 fi
-echo "选中: $BEST"
+if [ -z "$BEST" ]; then
+  echo "!! 未找到 Xcode 26.4 系列，机器上现有："
+  ls -d /Applications/Xcode*.app 2>/dev/null || true
+  echo "!! 拒绝用非 26.4 工具链构建（会导致 iOS 17 闪退），构建中止"
+  exit 1
+fi
+echo "选中锁定的 26.4: $BEST"
 sudo xcode-select -s "$BEST"
 xcodebuild -version
 xcodebuild -showsdks | grep -i iphone || true

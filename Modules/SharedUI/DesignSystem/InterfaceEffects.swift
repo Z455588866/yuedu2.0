@@ -321,7 +321,8 @@ private struct InterfaceCardSurfaceModifier<SurfaceShape: Shape>: ViewModifier {
             InterfaceSurfaceModifier(
                 shape: shape,
                 fill: fill,
-                glassAllowed: true
+                glassAllowed: true,
+                allowsCardBorder: false
             )
         )
     }
@@ -353,7 +354,8 @@ private struct InterfaceSectionSurfaceModifier: ViewModifier {
                         InterfaceSurfaceModifier(
                             shape: RoundedRectangle(cornerRadius: DSRadius.xl, style: .continuous),
                             fill: fill,
-                            glassAllowed: true
+                            glassAllowed: true,
+                            allowsCardBorder: false
                         )
                     )
                     // Row bounds are the glass's bounds; the inset is what separates

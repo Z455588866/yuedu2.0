@@ -146,11 +146,16 @@ struct ShelfPaperView: View {
     /// impossible to find. An empty chip now says so instead of disappearing.
     private var availableFilters: [ShelfFilter] { ShelfFilter.allCases }
 
-    /// 读者给书架设了页面背景图时，页面下半的书名会直接坐在图上 —— 那时才需要底下那层
-    /// 从透明回到页面色的柔边。没设图时整页都是底色，柔边只会让页面发灰。
+    /// 是否铺了主题背景图（走 global，与首页 / 其他分类完全一致）。
+    ///
+    /// 书架过去读 `.bookshelf` scope，而 tab 的 backdrop 也读它；主题包常把这条 scope
+    /// 写成「有颜色、无图」的残留配置，解析时不再回退 global，于是只有书架看到一片纯色、
+    /// 其余分类都显示了 global 的主题背景图。现在统一走 global：tab 层铺 global 主题图，
+    /// 下面两层据此让位 / 兜底，书架背景就跟着主题走了。
+    /// 有图时页面下半的书名会坐在图上，需要那层从透明回到页面色的柔边；没图时整页底色。
     private var showsArtwork: Bool {
         guard subscription.hasAccess(.readerThemePacks) else { return false }
-        return gs.resolvedPageBackgroundSlice(for: .bookshelf, colorScheme: scheme) != nil
+        return gs.resolvedPageBackgroundSlice(for: .global, colorScheme: scheme) != nil
     }
 
     var body: some View {
@@ -207,7 +212,9 @@ struct ShelfPaperView: View {
                 // 渐回页面底色，图仍从上半页透出来；它铺在内容**之下**，所以封面和文字照旧
                 // 清楚，只是它们背后的图淡了。没设图时它整层隐形。
                 ZStack(alignment: .bottom) {
-                    PaperBackground(scope: .bookshelf)
+                    // 与首页一致走 global：让 tab 层铺的全局主题背景图从纸感层下透出来，
+                    // 书架不再是一片与主题无关的纯色。
+                    PaperBackground(scope: .global)
 
                     // 展台模式一比一复刻青苔：深棕木质展台背景，向下渐隐到页面色。
                     // 仅在展台、且未设置主题背景图时显示；设了背景图则让位，仍跟随主题。
