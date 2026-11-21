@@ -108,7 +108,7 @@ enum EPUBMediaPlaceholderRenderer {
 
         return UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { _ in
             let bounds = CGRect(x: 0, y: 0, width: width, height: height)
-            let frame = UIBezierPath(roundedRect: bounds, cornerRadius: 10)
+            let frame = UIBezierPath(roundedRect: bounds, cornerRadius: 20)
             UIColor(red: 0.11, green: 0.12, blue: 0.14, alpha: 1).setFill()
             frame.fill()
             frame.addClip()
@@ -149,7 +149,7 @@ enum EPUBMediaPlaceholderRenderer {
         return UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { _ in
             let bounds = CGRect(x: 0, y: 0, width: width, height: height)
             UIColor(red: 0.11, green: 0.12, blue: 0.14, alpha: 1).setFill()
-            UIBezierPath(roundedRect: bounds, cornerRadius: 10).fill()
+            UIBezierPath(roundedRect: bounds, cornerRadius: 20).fill()
 
             let diameter = min(width, height) * 0.24
             let disc = CGRect(x: (width - diameter) / 2, y: (height - diameter) / 2 - 12, width: diameter, height: diameter)
@@ -199,7 +199,7 @@ enum EPUBMediaPlaceholderRenderer {
             let bounds = CGRect(x: 0, y: 0, width: width, height: height)
             let fill = textColor.withAlphaComponent(0.08)
             fill.setFill()
-            UIBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), cornerRadius: 12).fill()
+            UIBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), cornerRadius: 20).fill()
 
             let stroke = textColor.withAlphaComponent(0.22)
             stroke.setStroke()

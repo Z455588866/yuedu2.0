@@ -273,7 +273,7 @@ struct NativeReviewPanelView: View {
                     .background {
                         // 引用原文框也用玻璃：跟面板同一套設定驅動，比面板略實並留一圈
                         // 細白描邊，做出參考圖那種淡玻璃卡片，不再是白底實心方塊。
-                        ReviewQuoteGlass(cornerRadius: 14)
+                        ReviewQuoteGlass(cornerRadius: 20)
                     }
             }
         }
@@ -688,7 +688,7 @@ private struct ReviewCommentCard: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(Color.secondary.opacity(colorScheme == .dark ? 0.14 : 0.075))
         )
     }

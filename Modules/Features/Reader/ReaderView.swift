@@ -16,9 +16,10 @@ private enum ReaderSettingsDeferredPresentationRoute {
 struct ReaderView: View {
     let bookId: UUID
 
-    init(bookId: UUID, openingTOCTarget: ReaderTOCTarget? = nil) {
+    init(bookId: UUID, openingTOCTarget: ReaderTOCTarget? = nil, openingAutoListen: Bool = false) {
         self.bookId = bookId
         _pendingOpeningTOCTarget = State(initialValue: openingTOCTarget)
+        _pendingOpeningAutoListen = State(initialValue: openingAutoListen)
         // The book's 整章翻译 setting is part of the first layout, so a translated book never
         // opens on its untranslated text first.
         _readerTranslation = State(initialValue: ReaderTranslationSettingsStore.presentation(for: bookId))
@@ -277,6 +278,8 @@ struct ReaderView: View {
     /// 作品详情's 目录 entry this reader was opened at. The opening restore lands on its spine
     /// item first; the entry's anchor is then reached by the reader's own 目录 jump, once.
     @State var pendingOpeningTOCTarget: ReaderTOCTarget?
+    /// 首页书卡「听书」入口请求：本次打开在章节就绪后自动开始朗读一次。默认 false。
+    @State var pendingOpeningAutoListen = false
     /// Bumped by every chapter jump: a 目录 jump still waiting on its spine item's layout lands
     /// only if no other jump came since.
     @State var chapterJumpGeneration = 0
@@ -3182,6 +3185,8 @@ struct ReaderView: View {
                 syncCoreTextTextAnnotations()
                 applyInitialProgressIfNeeded()
                 relocateReadingStatsPosition()
+                // 首页「听书」入口：新书 / 无恢复位置时也在此就绪点自动朗读（一次性）。
+                tryOpeningAutoListen()
             }
         }
         .onChanged(of: epubRenderer.fixedLayoutOrientation) { _ in
@@ -3493,6 +3498,23 @@ struct ReaderView: View {
         isRestoringPosition = false
         alignToAdoptedNarration()
         openAtOpeningTOCTarget(restoredSpine: restoredSpine)
+        // 首页「听书」入口：本次打开到这里章节与正文已就绪，自动开始朗读一次。
+        tryOpeningAutoListen()
+    }
+
+    /// 首页书卡「听书」入口的一次性自动朗读：章节与排版引擎就绪后触发一次，随后清空标记。
+    /// 有阅读进度的书经 `finishCoreTextRestore` 到达这里；新书则在 `isCoreTextReady` 就绪时到达。
+    func tryOpeningAutoListen() {
+        guard pendingOpeningAutoListen,
+              !spineChapters.isEmpty,
+              epubRenderer.isCoreTextReady
+        else { return }
+        pendingOpeningAutoListen = false
+        let idx = min(max(currentChapterIndex, 0), spineChapters.count - 1)
+        // 异步一次，确保 onAppear 里的 TTS 回调（onNextNarrationUnit 等）已装配完成。
+        Task { @MainActor in
+            _ = self.startTTSChapter(idx, syncReader: false)
+        }
     }
 
     func beginCurlStartupTrace(reason: String) {

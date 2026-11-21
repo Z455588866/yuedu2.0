@@ -7,6 +7,8 @@ struct BookReaderView: View {
     let bookId: UUID
     /// 作品详情's 目录 entry the reader opens at (`ReaderView`'s opening restore goes on to it).
     var openingTOCTarget: ReaderTOCTarget?
+    /// 首页书卡「听书」入口：打开阅读器后自动开始朗读当前章节。默认关闭，其它入口不受影响。
+    var openingAutoListen: Bool = false
     @Environment(\.readerNavigator) private var readerNavigator
     /// The version 换源 switched to, and where its reader opens.
     @State private var switched: SwitchedVersion?
@@ -18,7 +20,7 @@ struct BookReaderView: View {
 
     var body: some View {
         let id = switched?.id ?? bookId
-        BookReaderContent(bookId: id, openingTOCTarget: switched.map { $0.opening } ?? openingTOCTarget)
+        BookReaderContent(bookId: id, openingTOCTarget: switched.map { $0.opening } ?? openingTOCTarget, openingAutoListen: openingAutoListen)
             // Another copy is another reader: its own resources, layout and restore.
             .id(id)
             .environment(\.readerVersionSwitch, ReaderVersionSwitchAction { target, opening in
@@ -48,6 +50,8 @@ extension EnvironmentValues {
 private struct BookReaderContent: View {
     let bookId: UUID
     var openingTOCTarget: ReaderTOCTarget?
+    /// 首页听书入口透传：交给 ReaderView 在打开后自动朗读。
+    var openingAutoListen: Bool = false
     @EnvironmentObject var store: BookStore
     @Environment(\.appDependencies) private var dependencies
     @Environment(\.readerNavigator) private var readerNavigator
@@ -92,7 +96,7 @@ private struct BookReaderContent: View {
             } else if shouldUseFixedPageReader {
                 FixedPageReaderView(bookId: bookId)
             } else {
-                ReaderView(bookId: bookId, openingTOCTarget: openingTOCTarget)
+                ReaderView(bookId: bookId, openingTOCTarget: openingTOCTarget, openingAutoListen: openingAutoListen)
             }
         }
         .environment(\.rootTabBarVisibility, isInTabNavigation ? rootTabBarVisibility : nil)

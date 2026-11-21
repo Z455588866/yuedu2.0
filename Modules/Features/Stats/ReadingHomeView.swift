@@ -49,6 +49,8 @@ struct ReadingHomeView: View {
     private var mode: HomeMode { HomeMode(rawValue: modeRaw) ?? .stage }
 
     @State private var readingBookID: UUID?
+    /// 首页书卡「听书」耳机按钮点下的那一本：打开阅读器后自动开始朗读（仅此入口开启）。
+    @State private var autoListenBookID: UUID?
     @State private var showsStats = false
     @State private var now = Date()
 
@@ -139,11 +141,12 @@ struct ReadingHomeView: View {
             set: { isPresented in
                 guard !isPresented else { return }
                 readingBookID = nil
+                autoListenBookID = nil
                 recenterCarousel()
             }
         )) {
             if let id = readingBookID {
-                BookReaderView(bookId: id)
+                BookReaderView(bookId: id, openingAutoListen: id == autoListenBookID)
                     .environmentObject(store)
             }
         }
@@ -201,8 +204,13 @@ struct ReadingHomeView: View {
     }
 
     private func listen(_ book: ReadingBook) {
+        // 有声书：直接交给全局播放器播放。
         if NowPlayingHub.shared.openIfAudiobook(book, store: store) { return }
-        openBook(book)
+        // 普通文字书：打开阅读器并请求自动开始 TTS 朗读（打开即听书），
+        // 而不是只打开一个静止的阅读页。仅本入口开启 openingAutoListen。
+        autoListenBookID = book.id
+        readingBookID = book.id
+        store.updateLastOpened(bookId: book.id)
     }
 
     private func recenterCarousel() {
@@ -335,7 +343,7 @@ struct ReadingHomeView: View {
             displaySize: CGSize(width: width, height: height)
         )
         .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .shadow(color: Color.black.opacity(0.24), radius: 10, x: 2, y: 5)
         .accessibilityHidden(true)
     }
@@ -688,33 +696,150 @@ struct ReadingHomeView: View {
 
     private var classicContent: some View {
         Group {
-            dateHeaderSmall
-            if let book = centeredBook {
-                VStack(alignment: .leading, spacing: 14) {
+            if !carouselBooks.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    // 经典 = 第二张图：深棕横滑继续阅读卡 + 半圆弧阅读目标大卡
                     sectionHeader(localized("继续阅读"))
-                    classicContinueCard(book)
-                    if carouselBooks.count > 1 {
-                        sectionHeader(localized("最近阅读"))
-                        ScrollView(.horizontal) {
-                            HStack(spacing: 12) {
-                                ForEach(carouselBooks.filter { $0.id != book.id }) { other in
-                                    classicTile(other)
-                                }
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 12) {
+                            ForEach(carouselBooks) { book in
+                                classicDarkCard(book)
                             }
                         }
-                        .scrollIndicators(.hidden)
-                        .scrollClipDisabled()
-                        .padding(.horizontal, -20)
                         .padding(.horizontal, 20)
                     }
-                    todayRingCard
-                    streakCard
+                    .scrollIndicators(.hidden)
+                    .scrollClipDisabled()
+                    classicGoalArcCard
                 }
-                .padding(.top, 18)
+                .padding(.top, 16)
             } else {
                 emptyHint()
             }
         }
+    }
+
+    /// 下半屏（第一张图）：阅读目标 › + 今日阅读 + 连续阅读 18 周 + 今年已读（手账/经典共用）
+    private var readingGoalStatsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(localized("阅读目标")).font(.system(size: 15, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(PaperPalette.textTertiary(scheme))
+            }
+            .padding(.horizontal, 4)
+            journalRingCard
+            journalStreak18Card
+            yearCard
+        }
+        .padding(.top, 22)
+    }
+
+    /// 经典·继续阅读深棕渐变横滑卡（对标参考图第二屏）
+    private func classicDarkCard(_ book: ReadingBook) -> some View {
+        HStack(spacing: 12) {
+            cover(book, width: 62, height: 84)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(book.title).font(.system(size: 14, weight: .bold)).foregroundStyle(Color.white).lineLimit(1)
+                if !book.author.isEmpty {
+                    Text(book.author).font(.system(size: 11)).foregroundStyle(Color.white.opacity(0.68)).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Text(book.currentPosition > 0 ? String(format: localized("书籍 · %d%%"), Int(book.currentPosition * 100)) : localized("书籍 · 未读"))
+                    .font(.system(size: 11)).foregroundStyle(Color.white.opacity(0.72))
+            }
+            Spacer(minLength: 2)
+            VStack {
+                Spacer()
+                Button { openBook(book) } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.9))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(14)
+        .frame(width: 290, height: 112)
+        .background(
+            LinearGradient(gradient: Gradient(colors: [Color(red: 0.45, green: 0.42, blue: 0.33),
+                                                      Color(red: 0.36, green: 0.34, blue: 0.26),
+                                                      Color(red: 0.29, green: 0.27, blue: 0.20)]),
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .onTapGesture { openBook(book) }
+    }
+
+    /// 经典·阅读目标半圆弧大卡（对标参考图第二屏）
+    private var classicGoalArcCard: some View {
+        let progress = min(CGFloat(todaySeconds) / CGFloat(Self.goalMinutes * 60), 1)
+        return VStack(spacing: 0) {
+            Text(localized("阅读目标")).font(.system(size: 19, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
+            Text(localized("日知其所亡，月无忘其所能，可谓好学也已矣。"))
+                .font(.system(size: 11.5)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                .padding(.top, 6)
+
+            // 半圆弧：从左到右的上半圆，左端一个黑点
+            ZStack(alignment: .top) {
+                ArcShape()
+                    .stroke(PaperPalette.hairline(scheme).opacity(0.55), style: StrokeStyle(lineWidth: 13, lineCap: .round))
+                VStack(spacing: 2) {
+                    Text(localized("今日阅读进度")).font(.system(size: 14, weight: .semibold)).foregroundStyle(PaperPalette.textPrimary(scheme))
+                    Text(clockString(todaySeconds)).font(.system(size: 46, weight: .bold)).monospacedDigit()
+                        .foregroundStyle(PaperPalette.textPrimary(scheme))
+                    Text(String(format: localized("（目标 %d 分钟）›"), Self.goalMinutes))
+                        .font(.system(size: 12)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                }
+                .padding(.top, 34)
+                // 弧左端黑点
+                Circle().fill(Color(red: 0.09, green: 0.09, blue: 0.09))
+                    .frame(width: 15, height: 15)
+                    .offset(x: -136, y: 62)
+            }
+            .frame(height: 150)
+            .padding(.top, 4)
+
+            Button { openCenteredOrShelf() } label: {
+                VStack(spacing: 3) {
+                    Text(localized("继续阅读")).font(.system(size: 15, weight: .bold)).foregroundStyle(DSColor.textOnAccent)
+                    if let book = centeredBook {
+                        Text(book.title).font(.system(size: 10.5)).foregroundStyle(Color.white.opacity(0.68)).lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                .background(Capsule().fill(PaperPalette.ink(scheme)))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 2)
+
+            // 周日 → 周六，周五周六实心
+            HStack(spacing: 8) {
+                let labels = [localized("周日"), localized("周一"), localized("周二"), localized("周三"), localized("周四"), localized("周五"), localized("周六")]
+                ForEach(0..<7, id: \.self) { i in
+                    let filled = (i == 5 || i == 6)
+                    Text(labels[i]).font(.system(size: 11))
+                        .foregroundStyle(filled ? Color.white : PaperPalette.textTertiary(scheme))
+                        .frame(width: 38, height: 38)
+                        .background(Circle().fill(filled ? Color(red: 0.72, green: 0.71, blue: 0.69) : Color.clear))
+                        .overlay(Circle().strokeBorder(filled ? Color.clear : PaperPalette.hairline(scheme), lineWidth: 1))
+                }
+            }
+            .padding(.top, 16)
+
+            VStack(spacing: 4) {
+                Text(String(format: localized("连续阅读 %d 天 ›"), consecutiveDays))
+                    .font(.system(size: 15, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
+                Text(String(format: localized("你的记录是 %d 天。"), consecutiveDays))
+                    .font(.system(size: 11.5)).foregroundStyle(PaperPalette.textTertiary(scheme))
+            }
+            .padding(.top, 16)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(20)
+        .background(PaperPalette.card(scheme))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
     }
 
     private func classicContinueCard(_ book: ReadingBook) -> some View {
@@ -787,21 +912,116 @@ struct ReadingHomeView: View {
         }
         .padding(12)
         .frame(width: 264)
-        .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 18, style: .continuous), fill: PaperPalette.card(scheme))
+        .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 20, style: .continuous), fill: PaperPalette.card(scheme))
     }
 
     // MARK: - ③ 手账（journal）：统计流
 
     private var journalContent: some View {
-        VStack(spacing: 14) {
-            dateMasthead
-            journalTodayCard
-            streakCard
-            yearCard
-            planCard
-            statsLink
+        Group {
+            if let book = centeredBook {
+                VStack(alignment: .leading, spacing: 14) {
+                    // 手账 = 第一张图：日期 + 继续阅读大卡 + 最近阅读 + 阅读目标统计流
+                    dateHeaderSmall
+                    sectionHeader(localized("继续阅读"))
+                    classicContinueCard(book)
+                    if carouselBooks.count > 1 {
+                        sectionHeader(localized("最近阅读"))
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 12) {
+                                ForEach(carouselBooks.filter { $0.id != book.id }) { other in
+                                    classicTile(other)
+                                }
+                            }
+                        }
+                        .scrollIndicators(.hidden)
+                        .scrollClipDisabled()
+                    }
+                    readingGoalStatsSection
+                    planCard
+                    statsLink
+                }
+                .padding(.top, 14)
+            } else {
+                emptyHint()
+            }
         }
-        .padding(.top, 14)
+    }
+
+    // 手账专属：今日阅读圆环卡（对标视频：0% 圆环 + 0:00 + 目标15分钟 + 阅读/听书分钟）
+    private var journalRingCard: some View {
+        let progress = min(CGFloat(todaySeconds) / CGFloat(Self.goalMinutes * 60), 1)
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(localized("今日阅读")).font(.system(size: 14, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
+                Spacer()
+                Text(localized("调整目标　···")).font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
+            }
+            HStack(spacing: 18) {
+                ZStack {
+                    Circle().stroke(PaperPalette.hairline(scheme).opacity(0.5), lineWidth: 11)
+                    Circle().trim(from: 0, to: max(progress, 0.001))
+                        .stroke(PaperPalette.ink(scheme), style: StrokeStyle(lineWidth: 11, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    Text("\(Int(progress * 100))%").font(.system(size: 13, weight: .semibold)).foregroundStyle(PaperPalette.textSecondary(scheme))
+                }
+                .frame(width: 88, height: 88)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(clockString(todaySeconds)).font(.system(size: 32, weight: .bold)).monospacedDigit().foregroundStyle(PaperPalette.textPrimary(scheme))
+                    Text(String(format: localized("目标 %d 分钟"), Self.goalMinutes)).font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                    HStack(spacing: 14) {
+                        Label(String(format: localized("阅读 %d 分钟"), todaySeconds / 60), systemImage: "book.closed")
+                        Label(localized("听书 0 分钟"), systemImage: "headphones")
+                    }
+                    .font(.system(size: 10.5)).foregroundStyle(PaperPalette.textSecondary(scheme))
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 20, style: .continuous), fill: PaperPalette.card(scheme))
+    }
+
+    // 手账专属：连续阅读 + 近18周格子打卡（对标视频）
+    private var journalStreak18Card: some View {
+        VStack(alignment: .leading, spacing: 13) {
+            HStack {
+                Text(localized("连续阅读")).font(.system(size: 14, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
+                Spacer()
+                Text("···").font(.system(size: 13)).foregroundStyle(PaperPalette.textTertiary(scheme))
+            }
+            HStack(spacing: 34) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(localized("当前连续")).font(.system(size: 10.5)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                    Text("\(consecutiveDays) 天").font(.system(size: 22, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(localized("最长纪录")).font(.system(size: 10.5)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                    Text("\(longestStreak) 天").font(.system(size: 22, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
+                }
+            }
+            // 18 周 × 7 天格子
+            HStack(spacing: 2.5) {
+                ForEach(0..<18, id: \.self) { w in
+                    VStack(spacing: 2.5) {
+                        ForEach(0..<7, id: \.self) { d in
+                            RoundedRectangle(cornerRadius: 1.5)
+                                .fill((w == 17 && d <= consecutiveDays) ? PaperPalette.ink(scheme) : PaperPalette.hairline(scheme).opacity(0.42))
+                                .frame(width: 8, height: 8)
+                        }
+                    }
+                }
+            }
+            HStack {
+                Text(localized("近 18 周")).font(.system(size: 10)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                Spacer()
+                Text(localized("少　▪▪▪▪▪　多")).font(.system(size: 10)).foregroundStyle(PaperPalette.textTertiary(scheme))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 20, style: .continuous), fill: PaperPalette.card(scheme))
     }
 
     private var journalTodayCard: some View {
@@ -865,7 +1085,7 @@ struct ReadingHomeView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity)
-        .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 18, style: .continuous), fill: PaperPalette.card(scheme))
+        .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 20, style: .continuous), fill: PaperPalette.card(scheme))
         .padding(.horizontal, 4)
     }
 
@@ -917,7 +1137,7 @@ struct ReadingHomeView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(20)
-        .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 22, style: .continuous), fill: PaperPalette.card(scheme))
+        .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 20, style: .continuous), fill: PaperPalette.card(scheme))
     }
 
     // MARK: - ⑤ 杂志（magazine）：阅读特刊
@@ -1210,5 +1430,21 @@ private struct ShowcaseWoodBackdrop: View {
                 )
             }
         }
+    }
+}
+
+// MARK: - 经典模式「阅读目标」半圆弧（对标参考图第二屏的上半圆弧进度条）
+private struct ArcShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        // 上半圆：起点左端 → 顶点 → 右端
+        let radius = min(rect.width / 2, rect.height)
+        let center = CGPoint(x: rect.midX, y: rect.minY + radius)
+        p.addArc(center: center,
+                 radius: radius,
+                 startAngle: .degrees(180),
+                 endAngle: .degrees(0),
+                 clockwise: true)
+        return p
     }
 }

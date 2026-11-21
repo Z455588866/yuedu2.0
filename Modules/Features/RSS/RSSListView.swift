@@ -1201,7 +1201,7 @@ struct RSSOPMLImportSheet: View {
                 if isLoading {
                     ProgressView(localized("汇入中，请稍候…"))
                         .padding()
-                        .floatingSurfaceBackground(in: RoundedRectangle(cornerRadius: 12))
+                        .floatingSurfaceBackground(in: RoundedRectangle(cornerRadius: 20))
                 }
             }
             .copiedFileImporter(
@@ -1486,7 +1486,7 @@ struct ImportLegadoJSONURLSheet: View {
                 if isLoading {
                     ProgressView(localized("汇入中，请稍候…"))
                         .padding()
-                        .floatingSurfaceBackground(in: RoundedRectangle(cornerRadius: 12))
+                        .floatingSurfaceBackground(in: RoundedRectangle(cornerRadius: 20))
                 }
             }
         }
@@ -1583,7 +1583,7 @@ struct AddRSSSourceSheet: View {
                 if isLoading {
                     ProgressView(localized("正在抓取 RSS 资讯…"))
                         .padding()
-                        .floatingSurfaceBackground(in: RoundedRectangle(cornerRadius: 12))
+                        .floatingSurfaceBackground(in: RoundedRectangle(cornerRadius: 20))
                 }
             }
         }

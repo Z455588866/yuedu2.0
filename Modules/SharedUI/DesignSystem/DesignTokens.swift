@@ -1252,17 +1252,17 @@ enum DSLayout {
 
 enum DSRadius {
     /// Small radius (labels, small buttons)
-    static let sm: CGFloat = 6
+    static let sm: CGFloat = 8
     /// Medium radius (buttons, input fields)
-    static let md: CGFloat = 8
+    static let md: CGFloat = 12
     /// Large radius (cards, dialogs)
-    static let lg: CGFloat = 12
+    static let lg: CGFloat = 20
     /// Extra-large radius (image containers)
-    static let xl: CGFloat = 16
+    static let xl: CGFloat = 20
     /// A public-library carousel card's top corners, fitted to Apple Books' store card.
     static let carouselCard: CGFloat = 35
     /// Extra-extra-large radius (large preview tiles, prominent panel buttons)
-    static let xxl: CGFloat = 20
+    static let xxl: CGFloat = 24
     /// A cover in the 搜索 page's lists: nearly square, as Apple Books' search draws them.
     static let searchListCover: CGFloat = 2
     /// The grey tag after a title (有声书).

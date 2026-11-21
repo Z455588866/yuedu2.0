@@ -83,7 +83,7 @@ struct FileImportTab: View {
                     .background(DSColor.accentLight)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 14)
+                        RoundedRectangle(cornerRadius: 20)
                             .strokeBorder(
                                 DSColor.accent.opacity(0.4),
                                 style: StrokeStyle(lineWidth: 1.5, dash: [6])))

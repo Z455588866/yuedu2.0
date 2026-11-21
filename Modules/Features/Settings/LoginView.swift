@@ -126,7 +126,7 @@ struct LoginView: View {
                             .background(Color.white)
                             .cornerRadius(12)
                             .overlay(
-                                RoundedRectangle(cornerRadius: 12)
+                                RoundedRectangle(cornerRadius: 20)
                                     .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
                             )
                         }

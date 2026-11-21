@@ -101,7 +101,7 @@ struct ReaderProfileHeader: View {
             statColumn(value: "\(dayCount)", unit: localized("天"), label: localized("阅读天数"))
         }
         .padding(.vertical, 15)
-        .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 

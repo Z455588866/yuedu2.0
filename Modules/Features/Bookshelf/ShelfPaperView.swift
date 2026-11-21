@@ -32,7 +32,7 @@ struct ShelfPaperView: View {
         nonmutating set { displayStyleRaw = newValue.rawValue }
     }
     /// 展台底部书籍排布：随机书脊斜放 / 展台下方(挂绳翻书) / 多书脊拼图 / 网格封面。
-    @AppStorage("yd_shelf_stage_arrangement") private var stageArrangementRaw: String = StageArrangement.spine.rawValue
+    @AppStorage("yd_shelf_stage_arrangement") private var stageArrangementRaw: String = StageArrangement.showcase.rawValue
     private var stageArrangement: StageArrangement {
         get { StageArrangement(rawValue: stageArrangementRaw) ?? .spine }
         nonmutating set { stageArrangementRaw = newValue.rawValue }
@@ -176,6 +176,7 @@ struct ShelfPaperView: View {
                         onDelete: { store.delete(bookId: $0.id) },
                         onAdd: { showsAddBook = true },
                         onDeleteSelected: { confirmsDelete = true },
+                        shareableURLs: selectedShareableURLs,
                         onSwitchToClassic: { displayStyle = .classic },
                         onFilter: { filter = $0 },
                         currentFilter: filter,
@@ -489,7 +490,7 @@ struct ShelfPaperView: View {
                 .paperCard(radius: 22)
                 // 长按整张卡都能弹出菜单，不只是封面和文字那几块 —— 读者圈著整张卡说
                 // 「这里删不掉」，就是因为空白处（右半边、书名右侧）没有命中区域。
-                .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 // The book being read is the one most often 养肥-ed (a serial you are
                 // letting run), and it never appears in the grid below — so the menu
                 // has to be reachable here too.
@@ -1101,7 +1102,7 @@ enum ShelfSort: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .recent: return localized("最近阅读")
-        case .added: return localized("最近添加")
+        case .added: return localized("添加日期")
         case .title: return localized("书名")
         }
     }
@@ -1184,26 +1185,38 @@ enum ShelfDisplayStyle: String, CaseIterable, Identifiable {
     }
 }
 
+/// 视频里「书架显示」菜单的 7 种整页模式，逐字对应官方新版（2.0.7）：
+/// 宫格 / 列表 / 展台 / 翻阅 / 杂志 / 图书馆 / 挂绳。
+/// 每一种都会整页切换布局（不再只是展台下方的一小排）。
 enum StageArrangement: String, CaseIterable, Identifiable {
-    case spine       // 随机书脊斜放
-    case hanging     // 展台下方（木夹子挂绳翻书）
-    case collage     // 多书脊拼图
-    case grid        // 网格封面
+    case grid        // 宫格
+    case list        // 列表
+    case showcase    // 展台
+    case flip        // 翻阅
+    case magazine    // 杂志
+    case library     // 图书馆
+    case hanging     // 挂绳
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .spine: return localized("随机书脊斜放")
-        case .hanging: return localized("展台下方")
-        case .collage: return localized("多书脊拼图")
-        case .grid: return localized("网格封面")
+        case .grid: return localized("宫格")
+        case .list: return localized("列表")
+        case .showcase: return localized("展台")
+        case .flip: return localized("翻阅")
+        case .magazine: return localized("杂志")
+        case .library: return localized("图书馆")
+        case .hanging: return localized("挂绳")
         }
     }
     var icon: String {
         switch self {
-        case .spine: return "books.vertical"
-        case .hanging: return "book.closed"
-        case .collage: return "square.grid.2x2"
-        case .grid: return "square.grid.3x3"
+        case .grid: return "square.grid.2x2"
+        case .list: return "list.bullet"
+        case .showcase: return "rectangle.portrait"
+        case .flip: return "book.closed"
+        case .magazine: return "book.closed"
+        case .library: return "books.vertical"
+        case .hanging: return "paperclip"
         }
     }
 }
@@ -1234,6 +1247,7 @@ struct StageShelfView: View {
     let onDelete: (ReadingBook) -> Void
     let onAdd: () -> Void
     let onDeleteSelected: () -> Void
+    let shareableURLs: [URL]
     let onSwitchToClassic: () -> Void
     let onFilter: (ShelfFilter) -> Void
     let currentFilter: ShelfFilter
@@ -1277,19 +1291,38 @@ struct StageShelfView: View {
             searchBar
                 .padding(.top, 10)
 
+            if isManaging && !books.isEmpty {
+                manageBar
+                    .padding(.top, 14)
+            }
+
             if books.isEmpty {
                 emptyStage
-            } else if let feature {
-                featureCard(feature)
-                    .padding(.top, 24)
-                if isManaging {
-                    manageBar
-                        .padding(.top, 18)
-                }
-                arrangementSection
-                    .padding(.top, 26)
-            } else {
+            } else if filteredBooks.isEmpty {
                 noResult
+            } else {
+                // 7 种显示模式整页切换 —— 对应视频「书架显示」菜单逐字：
+                // 宫格 / 列表 / 展台 / 翻阅 / 杂志 / 图书馆 / 挂绳。
+                // 每一种模式里的书都挂完整长按菜单，管理模式勾选与全选分享全程保留。
+                switch arrangement {
+                case .grid:
+                    gridView.padding(.top, 22)
+                case .list:
+                    listView.padding(.top, 16)
+                case .showcase:
+                    if let feature {
+                        featureCard(feature).padding(.top, 24)
+                        hangingRow.padding(.top, 26)
+                    }
+                case .flip:
+                    flipView.padding(.top, 22)
+                case .magazine:
+                    magazineView.padding(.top, 22)
+                case .library:
+                    libraryView.padding(.top, 24)
+                case .hanging:
+                    hangingFullView.padding(.top, 24)
+                }
             }
         }
         .padding(.horizontal, 20)
@@ -1330,9 +1363,8 @@ struct StageShelfView: View {
             Spacer(minLength: 0)
 
             HStack(spacing: 0) {
-                // ≡ 视图切换菜单 —— 视频里的「选择 / 分组 / 最近阅读 / 添加日期 /
-                // 格式·书名 / 书架显示 >」。这里保留其精神：排序、展台排布、封面模糊、
-                // 管理模式，以及切回经典书架。
+                // ≡ 视图切换菜单 —— 一比一对应视频新版（2.0.7）的菜单结构：
+                // 选择 / 分组 › / 排序(最近阅读·添加日期) / 格式 书名 / 书架显示 ›
                 Menu {
                     Button {
                         withAnimation(.snappy(duration: 0.2)) { isManaging.toggle() }
@@ -1340,6 +1372,27 @@ struct StageShelfView: View {
                         Label(localized(isManaging ? "完成" : "选择"), systemImage: "checkmark.circle")
                     }
                     Divider()
+
+                    // 分组：沿用书架分类维度（全部/本地/漫画/视频/听书/养肥）
+                    Menu {
+                        ForEach(ShelfFilter.allCases) { f in
+                            Button {
+                                onFilter(f)
+                            } label: {
+                                HStack {
+                                    Text(f.title)
+                                    Spacer()
+                                    if f == currentFilter { Image(systemName: "checkmark") }
+                                }
+                            }
+                        }
+                    } label: {
+                        Label(localized("分组"), systemImage: "folder")
+                    }
+
+                    Divider()
+
+                    // 排序：最近阅读 / 添加日期（视频里就这两项为主，书名作第三项保留）
                     Picker(localized("排序"), selection: Binding(
                         get: { currentSort },
                         set: { onSort($0) }
@@ -1348,7 +1401,15 @@ struct StageShelfView: View {
                             Text(s.title).tag(s)
                         }
                     }
+
                     Divider()
+
+                    // 格式：书名（视频固定显示格式）
+                    Label(localized("格式　书名"), systemImage: "textformat")
+
+                    Divider()
+
+                    // 书架显示：视频 7 种模式整页切换
                     Menu {
                         ForEach(StageArrangement.allCases) { a in
                             Button {
@@ -1416,11 +1477,11 @@ struct StageShelfView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
         .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(PaperPalette.card(scheme).opacity(0.65))
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .strokeBorder(PaperPalette.hairline(scheme).opacity(0.5), lineWidth: 0.6)
         }
     }
@@ -1554,6 +1615,17 @@ struct StageShelfView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(ShelfInk.muted(scheme))
 
+            // 分享选中的书（本地文件）—— 与经典书架同一份能力，7 种模式下都在。
+            ShareLink(items: shareableURLs) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ShelfInk.strong(scheme))
+                    .frame(width: 30, height: 30)
+                    .glassCircle(scheme)
+            }
+            .disabled(shareableURLs.isEmpty)
+            .accessibilityLabel(localized("分享"))
+
             Spacer()
 
             Button {
@@ -1570,70 +1642,313 @@ struct StageShelfView: View {
         }
     }
 
-    // MARK: 底部书籍排布（可切换四种）
+    // MARK: - 7 种显示模式（视频「书架显示」逐字：宫格/列表/展台/翻阅/杂志/图书馆/挂绳）
+    //
+    // 每一种模式里的书都挂完整长按菜单 bookMenuItems（打开/详情/编辑/封面/养肥/删除），
+    // 管理模式下的勾选圈、顶部全选/分享/删除 manageBar 全部贯通，不因模式切换而丢失。
 
-    private var arrangementSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(arrangement.title)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .tracking(0.6)
-                    .foregroundStyle(ShelfInk.strong(scheme))
-                Spacer()
-                Menu {
-                    ForEach(StageArrangement.allCases) { a in
-                        Button {
-                            withAnimation(.snappy(duration: 0.2)) { arrangement = a }
-                        } label: {
-                            HStack {
-                                Label(a.title, systemImage: a.icon)
-                                Spacer()
-                                if a == arrangement { Image(systemName: "checkmark") }
-                            }
+    /// 勾选圈：管理模式叠在每本书封面右上角，点击切换选中。
+    @ViewBuilder
+    private func selectBadge(_ book: ReadingBook) -> some View {
+        if isManaging {
+            Image(systemName: selection.contains(book.id) ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 20))
+                .foregroundStyle(
+                    selection.contains(book.id)
+                        ? ShelfInk.strong(scheme)
+                        : Color.white.opacity(0.92)
+                )
+                .shadow(color: .black.opacity(0.35), radius: 3)
+                .padding(6)
+                .transition(.scale(scale: 0.7).combined(with: .opacity))
+        }
+    }
+
+    /// 统一的书本点击：管理模式勾选，普通模式打开（听书优先走播放器）。
+    private func activate(_ book: ReadingBook) {
+        if isManaging {
+            if selection.contains(book.id) { selection.remove(book.id) }
+            else { selection.insert(book.id) }
+        } else if !onOpenAudiobook(book) {
+            onOpenBook(book)
+        }
+    }
+
+    // MARK: 宫格（视频：2 列封面，每本下方书名/作者/进度 + … 按钮）
+
+    private var gridView: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14, alignment: .top), count: 2), spacing: 24) {
+            ForEach(filteredBooks) { book in
+                VStack(alignment: .leading, spacing: 7) {
+                    GeometryReader { g in
+                        let cw = g.size.width
+                        let ch = cw * 1.34
+                        ZStack(alignment: .topTrailing) {
+                            stageCover(book, width: cw, height: ch)
+                            selectBadge(book)
                         }
+                        .contentShape(Rectangle())
+                        .onTapGesture { activate(book) }
+                        .contextMenu { bookMenuItems(book) }
+                        .frame(width: cw, height: ch)
                     }
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: "square.grid.2x2")
-                        Image(systemName: "chevron.down").font(.system(size: 9))
-                    }
-                    .font(.system(size: 12))
-                    .foregroundStyle(ShelfInk.muted(scheme))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 4)
+                    .frame(height: (UIScreen.main.bounds.width - 40 - 14) / 2 * 1.34)
 
-            Group {
-                switch arrangement {
-                case .spine: spineRow
-                case .hanging: hangingRow
-                case .collage: collageRow
-                case .grid: gridView
+                    HStack(alignment: .center) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(book.title)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(ShelfInk.strong(scheme))
+                                .lineLimit(1)
+                            Text(book.author.isEmpty ? "—" : book.author)
+                                .font(.system(size: 11))
+                                .foregroundStyle(ShelfInk.soft(scheme))
+                                .lineLimit(1)
+                            Text(book.currentPosition > 0 ? "\(Int(book.currentPosition * 100))%" : localized("未读"))
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(ShelfInk.muted(scheme))
+                        }
+                        Spacer(minLength: 2)
+                        Menu {
+                            bookMenuItems(book)
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(ShelfInk.muted(scheme))
+                                .frame(width: 26, height: 26)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
         }
     }
 
-    /// 随机书脊斜放（视频默认）：一排竖立书脊，交替轻微倾斜，立在地平线上。
-    private var spineRow: some View {
-        ScrollView(.horizontal) {
-            HStack(alignment: .bottom, spacing: 12) {
-                ForEach(Array(otherBooks.prefix(12).enumerated()), id: \.offset) { idx, book in
-                    spine(for: book, tilt: (idx % 2 == 0 ? -3 : 3))
-                        .onTapGesture { onOpenBook(book) }
+    // MARK: 列表（视频：每行小封面 + 书名/作者/进度）
+
+    private var listView: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(filteredBooks) { book in
+                HStack(spacing: 14) {
+                    ZStack(alignment: .topTrailing) {
+                        stageCover(book, width: 58, height: 82)
+                        selectBadge(book)
+                    }
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(book.title)
+                            .font(.system(size: 14.5, weight: .semibold))
+                            .foregroundStyle(ShelfInk.strong(scheme))
+                            .lineLimit(1)
+                        Text(book.author.isEmpty ? "—" : book.author)
+                            .font(.system(size: 12))
+                            .foregroundStyle(ShelfInk.soft(scheme))
+                            .lineLimit(1)
+                        Text(book.currentPosition > 0 ? "\(Int(book.currentPosition * 100))% · \(localized("在读"))" : localized("未读"))
+                            .font(.system(size: 11))
+                            .foregroundStyle(ShelfInk.muted(scheme))
+                            .lineLimit(1)
+                        GeometryReader { g in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(PaperPalette.hairline(scheme).opacity(0.5))
+                                Capsule().fill(PaperPalette.ink(scheme))
+                                    .frame(width: g.size.width * CGFloat(min(max(book.currentPosition, 0), 1)))
+                            }
+                        }
+                        .frame(height: 4)
+                    }
+                    Spacer(minLength: 0)
+                    Menu {
+                        bookMenuItems(book)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(ShelfInk.muted(scheme))
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+                .onTapGesture { activate(book) }
+                .contextMenu { bookMenuItems(book) }
+                Divider().opacity(0.35)
+            }
+        }
+    }
+
+    // MARK: 翻阅（视频：横向大卡片一本一本翻，带页码）
+
+    private var flipView: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(spacing: 18) {
+                ForEach(Array(filteredBooks.enumerated()), id: \.offset) { idx, book in
+                    VStack(spacing: 12) {
+                        ZStack(alignment: .topTrailing) {
+                            stageCover(book, width: 230, height: 300)
+                            selectBadge(book)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { activate(book) }
+                        .contextMenu { bookMenuItems(book) }
+                        Text("\(idx + 1) / \(filteredBooks.count)")
+                            .font(.system(size: 11)).foregroundStyle(ShelfInk.muted(scheme))
+                        Text(book.title)
+                            .font(PaperFont.serif(16))
+                            .foregroundStyle(ShelfInk.strong(scheme))
+                            .lineLimit(1)
+                    }
+                    .frame(width: 230)
+                }
+            }
+            .padding(.horizontal, 2)
+            .padding(.bottom, 8)
+        }
+    }
+
+    // MARK: 杂志（视频：大图主导的杂志化排版，交错封面 + 书名块）
+
+    private var magazineView: some View {
+        LazyVStack(spacing: 28) {
+            ForEach(Array(filteredBooks.enumerated()), id: \.offset) { idx, book in
+                HStack(alignment: .top, spacing: 16) {
+                    if idx % 2 == 1 { Spacer(minLength: 0) }
+                    VStack(alignment: .leading, spacing: 10) {
+                        ZStack(alignment: .topTrailing) {
+                            stageCover(book, width: 168, height: 224)
+                            selectBadge(book)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { activate(book) }
+                        .contextMenu { bookMenuItems(book) }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(book.title)
+                                .font(PaperFont.serif(16))
+                                .foregroundStyle(ShelfInk.strong(scheme))
+                                .lineLimit(2)
+                            Text(book.author.isEmpty ? "—" : book.author)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(ShelfInk.soft(scheme))
+                        }
+                    }
+                    .frame(width: 168, alignment: .leading)
+                    if idx % 2 == 0 { Spacer(minLength: 0) }
+                }
+            }
+        }
+    }
+
+    // MARK: 图书馆（视频：一排竖立书脊陈列，可横滑）
+
+    private var libraryView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .bottom, spacing: 10) {
+                    ForEach(Array(filteredBooks.enumerated()), id: \.offset) { idx, book in
+                        ZStack(alignment: .topTrailing) {
+                            spine(for: book, tilt: (idx % 3 - 1) == 0 ? 0 : Double(idx % 3 - 1) * 2.5)
+                            selectBadge(book)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { activate(book) }
+                        .contextMenu { bookMenuItems(book) }
+                    }
+                }
+                .padding(.horizontal, 4)
+                .padding(.bottom, 6)
+            }
+            // 木质书架搁板
+            Rectangle()
+                .fill(LinearGradient(colors: [Color(red: 0.42, green: 0.31, blue: 0.21), Color(red: 0.30, green: 0.21, blue: 0.14)], startPoint: .top, endPoint: .bottom))
+                .frame(height: 10)
+                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                .shadow(color: .black.opacity(0.3), radius: 4, y: 3)
+        }
+    }
+
+    // MARK: 挂绳（视频：木夹子夹住正面封面，挂在线上，可多行）
+
+    private var hangingFullView: some View {
+        // 视频真实：一整条挂绳，书横向排成一排可左右滑动（不是多行静态网格）
+        VStack(spacing: 0) {
+            // 挂绳横线
+            Rectangle()
+                .fill(Color(red: 0.72, green: 0.62, blue: 0.46))
+                .frame(height: 1.5)
+                .padding(.horizontal, 4)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 20) {
+                    ForEach(filteredBooks) { book in
+                        VStack(spacing: 5) {
+                            hangingBook(book)
+                            Text(book.title)
+                                .font(.system(size: 10))
+                                .foregroundStyle(ShelfInk.soft(scheme))
+                                .lineLimit(1)
+                                .frame(width: 88)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture { activate(book) }
+                        .contextMenu { bookMenuItems(book) }
+                    }
+                }
+                .padding(.horizontal, 4)
+                .padding(.top, 2)
+            }
+        }
+    }
+
+    /// 把数组按 n 个一组切分，供挂绳多行布局用。
+    private func chunked(_ array: [ReadingBook], _ n: Int) -> [[ReadingBook]] {
+        guard n > 0 else { return [] }
+        var result: [[ReadingBook]] = []
+        var i = 0
+        while i < array.count {
+            result.append(Array(array[i..<min(i + n, array.count)]))
+            i += n
+        }
+        return result
+    }
+
+    // MARK: 展台下方挂绳（大封面下方那一排：木夹 + 正面封面）
+
+    private var hangingRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(otherBooks.prefix(12)) { book in
+                    hangingBook(book)
+                        .contentShape(Rectangle())
+                        .onTapGesture { activate(book) }
                         .contextMenu { bookMenuItems(book) }
                 }
             }
             .padding(.horizontal, 4)
-            .padding(.bottom, 8)
+            .padding(.top, 16)
         }
-        .scrollIndicators(.hidden)
-        .frame(height: 158)
-        .background(alignment: .bottom) {
-            Rectangle().frame(height: 1.5).foregroundStyle(PaperPalette.hairline(scheme))
+        .background(alignment: .top) {
+            // 挂绳横线
+            Rectangle()
+                .fill(Color(red: 0.72, green: 0.62, blue: 0.46))
+                .frame(height: 1.5)
+                .padding(.top, 10)
         }
     }
+
+    /// 木夹子 + 正面封面（视频真实：挂绳模式下书是正面朝前，不是书脊）。
+    private func hangingBook(_ book: ReadingBook) -> some View {
+        VStack(spacing: 0) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color(red: 0.66, green: 0.48, blue: 0.27))
+                .frame(width: 15, height: 20)
+                .shadow(color: .black.opacity(0.32), radius: 2, x: 0, y: 1)
+                .zIndex(2)
+            ZStack(alignment: .topTrailing) {
+                stageCover(book, width: 76, height: 108)
+                selectBadge(book)
+            }
+        }
+    }
+
+    // MARK: 书脊辅助（图书馆模式 + 书脊颜色派生）
 
     private func spine(for book: ReadingBook, tilt: Double) -> some View {
         let h: CGFloat = 132
@@ -1661,62 +1976,6 @@ struct StageShelfView: View {
         .rotationEffect(.degrees(tilt), anchor: .bottom)
     }
 
-    /// 展台下方（视频）：一条横线 + 木夹子 + 翻开的书封。
-    private var hangingRow: some View {
-        ScrollView(.horizontal) {
-            HStack(alignment: .top, spacing: 18) {
-                ForEach(otherBooks.prefix(12)) { book in
-                    hangingBook(book)
-                        .onTapGesture { onOpenBook(book) }
-                        .contextMenu { bookMenuItems(book) }
-                }
-            }
-            .padding(.horizontal, 4)
-            .padding(.top, 14)
-        }
-        .scrollIndicators(.hidden)
-        .frame(height: 190)
-        .background(alignment: .top) {
-            Rectangle().frame(height: 1.5).foregroundStyle(PaperPalette.hairline(scheme))
-                .padding(.top, 6)
-        }
-    }
-
-    private func hangingBook(_ book: ReadingBook) -> some View {
-        // 一比一复刻青苔：横线下挂木夹子 + 竖排书脊(书脊上竖排书名)。
-        // 不再画翻书白页——真实青苔此模式并无空白右页。
-        VStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color(red: 0.65, green: 0.46, blue: 0.25))
-                .frame(width: 13, height: 16)
-                .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
-                .zIndex(2)
-            ZStack {
-                // 书脊本体：用封面主色派生出的深色书脊
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(spineColor(for: book))
-                    .frame(width: 34, height: 132)
-                    .shadow(color: .black.opacity(0.32), radius: 6, x: 2, y: 4)
-                // 书脊上的高光与折痕
-                HStack(spacing: 0) {
-                    Rectangle().fill(Color.white.opacity(0.20)).frame(width: 1)
-                    Spacer()
-                    Rectangle().fill(Color.black.opacity(0.25)).frame(width: 2)
-                }
-                .frame(width: 34, height: 132)
-                // 竖排书名
-                Text(book.title)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color.white.opacity(0.92))
-                    .shadow(color: .black.opacity(0.5), radius: 1, y: 1)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .rotationEffect(.degrees(90))
-                    .frame(width: 116)
-            }
-        }
-    }
-
     /// 由书名稳定派生书脊颜色，保证同一本书颜色一致。
     private func spineColor(for book: ReadingBook) -> Color {
         let palette: [Color] = [
@@ -1729,56 +1988,6 @@ struct StageShelfView: View {
         ]
         let h = abs(book.title.unicodeScalars.reduce(0) { $0 + Int($1.value) })
         return palette[h % palette.count]
-    }
-
-    /// 多书脊拼图（视频）：横向大图浏览，带页码。
-    private var collageRow: some View {
-        let items = otherBooks.prefix(8)
-        return ScrollView(.horizontal) {
-            HStack(spacing: 16) {
-                ForEach(items) { book in
-                    VStack(spacing: 10) {
-                        stageCover(book, width: 200, height: 280)
-                            .onTapGesture { onOpenBook(book) }
-                            .contextMenu { bookMenuItems(book) }
-                        Text("\(filteredBooks.firstIndex(where: { $0.id == book.id }).map { $0 + 1 } ?? 1) / \(filteredBooks.count)")
-                            .font(.system(size: 11)).foregroundStyle(ShelfInk.muted(scheme))
-                        Text(book.title)
-                            .font(PaperFont.serif(16))
-                            .foregroundStyle(ShelfInk.strong(scheme))
-                            .lineLimit(1)
-                        Text(book.author)
-                            .font(.system(size: 11))
-                            .foregroundStyle(ShelfInk.soft(scheme))
-                    }
-                    .frame(width: 200)
-                }
-            }
-            .padding(.horizontal, 4)
-        }
-        .scrollIndicators(.hidden)
-    }
-
-    /// 网格封面：三列（窄屏两列由 GeometryReader 决定），与视频网格模式一致。
-    private var gridView: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: 2), spacing: 20) {
-            ForEach(otherBooks) { book in
-                VStack(alignment: .leading, spacing: 6) {
-                    stageCover(book, width: 150, height: 210)
-                        .frame(maxWidth: .infinity)
-                    Text(book.title)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(ShelfInk.strong(scheme))
-                        .lineLimit(1)
-                    Text(book.currentPosition > 0 ? "\(Int(book.currentPosition * 100))%" : localized("未读"))
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(ShelfInk.muted(scheme))
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { onOpenBook(book) }
-                .contextMenu { bookMenuItems(book) }
-            }
-        }
     }
 
     // MARK: 空态
