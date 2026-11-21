@@ -106,6 +106,14 @@ struct ReadingHomeView: View {
         .background {
             ZStack(alignment: .bottom) {
                 PaperBackground(scope: .global)
+                // 一比一复刻青苔展台：深棕木质展台背景，向下渐隐到页面色。
+                // 仅在展台模式、且用户未设置主题背景图时显示；设了背景图则整层让位，
+                // 因此仍然跟随主题（换主题 / 深浅模式都会变），不是写死的独立背景。
+                if mode == .stage && !showsArtwork {
+                    ShowcaseWoodBackdrop(scheme: scheme)
+                        .allowsHitTesting(false)
+                        .ignoresSafeArea()
+                }
                 LinearGradient(
                     stops: [
                         .init(color: PaperPalette.page(scheme).opacity(0), location: 0),
@@ -1139,5 +1147,58 @@ struct ReadingHomeView: View {
             let d = book.lastOpenedDate ?? book.addedDate
             return Calendar.current.component(.year, from: d) == year
         }.count
+    }
+}
+
+// MARK: - 展台木质背景（一比一复刻青苔展台）
+//
+// 顶部深棕木质展台、向下渐隐到页面色，是青苔展台首页最标志性的质感。
+// 颜色取自官方高清录屏的实测主色（#736C5F / #AAA59A）。
+// 深浅两套：深色模式用更深的棕黑，保证日期大字仍然清晰。
+private struct ShowcaseWoodBackdrop: View {
+    let scheme: ColorScheme
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                LinearGradient(
+                    stops: scheme == .dark ? [
+                        .init(color: Color(red: 0.15, green: 0.13, blue: 0.11), location: 0),
+                        .init(color: Color(red: 0.24, green: 0.21, blue: 0.18), location: 0.30),
+                        .init(color: Color(red: 0.30, green: 0.27, blue: 0.23).opacity(0.55), location: 0.50),
+                        .init(color: Color.clear, location: 0.70),
+                    ] : [
+                        .init(color: Color(red: 0.40, green: 0.37, blue: 0.32), location: 0),
+                        .init(color: Color(red: 0.53, green: 0.50, blue: 0.44), location: 0.22),
+                        .init(color: Color(red: 0.67, green: 0.64, blue: 0.59), location: 0.42),
+                        .init(color: Color(red: 0.82, green: 0.80, blue: 0.77).opacity(0.5), location: 0.58),
+                        .init(color: Color.clear, location: 0.74),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                // 极淡的木质横向纹理，增加展台的材质感（不抢戏）
+                VStack(spacing: 0) {
+                    ForEach(0..<6, id: \.self) { i in
+                        Rectangle()
+                            .fill(Color.white.opacity(scheme == .dark ? 0.012 : 0.022))
+                            .frame(height: 1)
+                            .padding(.horizontal, 12)
+                        Spacer().frame(height: proxy.size.height * 0.055)
+                    }
+                }
+                .opacity(0.9)
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .clear, location: 0.62),
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+            }
+        }
     }
 }

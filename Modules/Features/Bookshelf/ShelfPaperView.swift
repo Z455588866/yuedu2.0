@@ -208,6 +208,14 @@ struct ShelfPaperView: View {
                 ZStack(alignment: .bottom) {
                     PaperBackground(scope: .bookshelf)
 
+                    // 展台模式一比一复刻青苔：深棕木质展台背景，向下渐隐到页面色。
+                    // 仅在展台、且未设置主题背景图时显示；设了背景图则让位，仍跟随主题。
+                    if displayStyle == .stage && !showsArtwork {
+                        ShelfShowcaseWoodBackdrop(scheme: scheme)
+                            .allowsHitTesting(false)
+                            .ignoresSafeArea()
+                    }
+
                     // 有背景图时让山水透上来：这层柔边只兜住最底部的一小段，避免整页
                     // 被盖成纯色（此前底部不透明度 0.92、高 420，几乎把主题背景全挡住，
                     // 别的页面都显示了背景、只有书架看着像没同步）。中段压低到 0.3，
@@ -1770,5 +1778,56 @@ struct StageShelfView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 80)
+    }
+}
+
+// MARK: - 书架展台木质背景（一比一复刻青苔展台）
+//
+// 与首页展台同一套质感：顶部深棕木质、向下渐隐到页面色。
+// 颜色取自官方高清录屏实测主色（#736C5F / #AAA59A）。深浅各一套。
+private struct ShelfShowcaseWoodBackdrop: View {
+    let scheme: ColorScheme
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                LinearGradient(
+                    stops: scheme == .dark ? [
+                        .init(color: Color(red: 0.15, green: 0.13, blue: 0.11), location: 0),
+                        .init(color: Color(red: 0.24, green: 0.21, blue: 0.18), location: 0.30),
+                        .init(color: Color(red: 0.30, green: 0.27, blue: 0.23).opacity(0.55), location: 0.50),
+                        .init(color: Color.clear, location: 0.70),
+                    ] : [
+                        .init(color: Color(red: 0.40, green: 0.37, blue: 0.32), location: 0),
+                        .init(color: Color(red: 0.53, green: 0.50, blue: 0.44), location: 0.22),
+                        .init(color: Color(red: 0.67, green: 0.64, blue: 0.59), location: 0.42),
+                        .init(color: Color(red: 0.82, green: 0.80, blue: 0.77).opacity(0.5), location: 0.58),
+                        .init(color: Color.clear, location: 0.74),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                VStack(spacing: 0) {
+                    ForEach(0..<6, id: \.self) { i in
+                        Rectangle()
+                            .fill(Color.white.opacity(scheme == .dark ? 0.012 : 0.022))
+                            .frame(height: 1)
+                            .padding(.horizontal, 12)
+                        Spacer().frame(height: proxy.size.height * 0.055)
+                    }
+                }
+                .opacity(0.9)
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .clear, location: 0.62),
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+            }
+        }
     }
 }
