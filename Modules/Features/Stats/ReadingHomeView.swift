@@ -1423,37 +1423,8 @@ struct ReadingHomeView: View {
                     .foregroundStyle(PaperPalette.textSecondary(scheme))
                     .padding(.top, 4)
 
-                Picker(localized("每日目标"), selection: $draftGoalMinutes) {
-                    ForEach(Array(stride(from: 5, through: 600, by: 5)), id: \.self) { m in
-                        Text(durationText(m)).tag(m)
-                    }
-                }
-                .pickerStyle(.wheel)
-                .labelsHidden()
-                .frame(maxHeight: 160)
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach([15, 30, 45, 60, 90, 120], id: \.self) { m in
-                            Button {
-                                withAnimation(.snappy(duration: 0.2)) { draftGoalMinutes = m }
-                            } label: {
-                                Text(durationText(m))
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(draftGoalMinutes == m ? DSColor.textOnAccent : PaperPalette.textSecondary(scheme))
-                                    .padding(.horizontal, 12).padding(.vertical, 7)
-                                    .background(
-                                        Capsule().fill(draftGoalMinutes == m
-                                                       ? PaperPalette.ink(scheme)
-                                                       : PaperPalette.iconTile(scheme))
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                }
-                .padding(.bottom, 6)
+                goalWheelPicker
+                goalQuickPicks
             }
             .background(PaperBackground(scope: .global).ignoresSafeArea())
             .navigationTitle(localized("调整阅读目标"))
@@ -1478,6 +1449,55 @@ struct ReadingHomeView: View {
             // 滚轮落在当前值上，而不是每次都从 5 分钟开始
             clampDraftToWheel()
         }
+    }
+
+    /// 滚轮：5 分钟一档，5 分钟 ~ 10 小时。单独抽出来，避免整个面板表达式过深、
+    /// 编译器类型推断超时（1.91 第一次构建就是卡在这里）。
+    private var goalWheelPicker: some View {
+        Picker(localized("每日目标"), selection: $draftGoalMinutes) {
+            ForEach(Array(stride(from: 5, through: 600, by: 5)), id: \.self) { m in
+                let label: String = durationText(m)
+                Text(label).tag(m)
+            }
+        }
+        .pickerStyle(.wheel)
+        .labelsHidden()
+        .frame(maxHeight: 160)
+    }
+
+    /// 常用值快捷条：点一下把滚轮切过去，不用一直拨。
+    private var goalQuickPicks: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach([15, 30, 45, 60, 90, 120], id: \.self) { m in
+                    goalQuickPick(m)
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.bottom, 6)
+    }
+
+    /// 单个快捷值。选中态只是一层淡强调色玻璃，不是实心色块。
+    private func goalQuickPick(_ minutes: Int) -> some View {
+        let selected = draftGoalMinutes == minutes
+        let textColor = selected ? DSColor.accent : PaperPalette.textSecondary(scheme)
+        let label: String = durationText(minutes)
+        return Button {
+            withAnimation(.snappy(duration: 0.2)) { draftGoalMinutes = minutes }
+        } label: {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(textColor)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .glassButtonChrome(
+                    in: Capsule(),
+                    scheme: scheme,
+                    tint: selected ? DSColor.accent : nil
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     /// 把已有目标对齐到 5 分钟档位（用户以前存过 15、30 这类值不会跑偏）。

@@ -565,7 +565,7 @@ extension View {
     ///   - scheme: 不传就取当前环境的深浅色，调用点不用各自再读一次。
     ///   - onCard: 按钮本身铺在玻璃卡上时传 true。
     ///   - tint: 主操作按钮传 `DSColor.accent`，得到一层淡主题色薄雾（不是实心色块）。
-    func glassButtonChrome<SurfaceShape: Shape>(
+    func glassButtonChrome<SurfaceShape: InsettableShape>(
         in shape: SurfaceShape,
         scheme: ColorScheme? = nil,
         onCard: Bool = false,
@@ -575,7 +575,7 @@ extension View {
     }
 }
 
-private struct GlassButtonChromeModifier<SurfaceShape: Shape>: ViewModifier {
+private struct GlassButtonChromeModifier<SurfaceShape: InsettableShape>: ViewModifier {
     let shape: SurfaceShape
     let schemeOverride: ColorScheme?
     /// 按钮本身就铺在玻璃卡上：不再叠材质，只用单层半透明填充。
