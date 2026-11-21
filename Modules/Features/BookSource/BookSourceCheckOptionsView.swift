@@ -56,11 +56,10 @@ struct BookSourceCheckOptionsView: View {
                             Text(localized("开始验证"))
                         }
                         .font(DSFont.bodyBold)
-                        .foregroundStyle(DSColor.textOnAccent)
+                        .foregroundStyle(DSColor.accent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, DSSpacing.md)
-                        .background(DSColor.accent)
-                        .clipShape(Capsule())
+                        .glassButtonChrome(in: Capsule(), tint: DSColor.accent)
                     }
                     .buttonStyle(.plain)
                     .disabled(sourceCount == 0)

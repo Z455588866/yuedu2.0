@@ -134,6 +134,40 @@ struct PageBackgroundView: View {
     }
 }
 
+/// 搜索页专用的页面背景。
+///
+/// `PageBackgroundView(scope: .search)` 只在 `.search` 自己配了图（或全局配了图）时才画出图案，
+/// 而实际上大家基本只给「设置」那一页配图 —— 于是搜索页永远是一片纯色，和设置页对不上。
+/// 这里把「设置」那张强制借过来：搜索自己配了就用搜索的，没配就用设置的，再没配才回落全局。
+struct SearchPageBackground: View {
+    @Bindable private var gs = GlobalSettings.shared
+    @ObservedObject private var subscriptionStore = SubscriptionStore.shared
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack {
+            DSColor.groupedBackground
+            if let slice {
+                AppearancePageBackgroundLayerView(slice: slice)
+            }
+        }
+    }
+
+    /// 搜索自己配过 → 设置那张 → 全局。
+    private var slice: AppearancePageBackgroundSlice? {
+        guard subscriptionStore.hasAccess(.readerThemePacks) else { return nil }
+        // 只认「这一页自己配过」的：不能走 resolved…，它对空 scope 会回落到全局，
+        // 那样全局有图时就永远轮不到设置那张。
+        if let own = configured(.search) { return own }
+        if let settings = configured(.settings) { return settings }
+        return gs.resolvedPageBackgroundSlice(for: .global, colorScheme: colorScheme)
+    }
+
+    private func configured(_ scope: AppearancePageBackgroundScope) -> AppearancePageBackgroundSlice? {
+        gs.appearancePageBackgrounds[scope.rawValue]?.slice(for: colorScheme)
+    }
+}
+
 private struct ThemedAppSurfaceModifier: ViewModifier {
     let scope: AppearancePageBackgroundScope
     @Bindable private var gs = GlobalSettings.shared
@@ -172,6 +206,9 @@ private struct ThemedAppSurfaceModifier: ViewModifier {
 /// nav-bar region (behind the title and toolbar buttons).
 private struct PageBackgroundToolbarModifier: ViewModifier {
     let scope: AppearancePageBackgroundScope
+    /// 额外认可的背景来源。搜索页把「设置」那张借用过来画时，导航栏也要跟着让开，
+    /// 否则页面有图、顶上那条栏仍是不透明的系统材质。
+    var fallbackScopes: [AppearancePageBackgroundScope] = []
     @Bindable private var gs = GlobalSettings.shared
     @ObservedObject private var subscriptionStore = SubscriptionStore.shared
     @Environment(\.colorScheme) private var colorScheme
@@ -180,9 +217,12 @@ private struct PageBackgroundToolbarModifier: ViewModifier {
     @Environment(\.appThemes) private var appThemes
 
     private var hasBackground: Bool {
-        if subscriptionStore.hasAccess(.readerThemePacks),
-           gs.resolvedPageBackgroundSlice(for: scope, colorScheme: colorScheme) != nil {
-            return true
+        if subscriptionStore.hasAccess(.readerThemePacks) {
+            for candidate in ([scope] + fallbackScopes) {
+                if gs.resolvedPageBackgroundSlice(for: candidate, colorScheme: colorScheme) != nil {
+                    return true
+                }
+            }
         }
         // 默认 with its 背景 as shipped keeps the system's page, and the bar that goes with it.
         guard let theme = appThemes.theme(for: colorScheme) else { return false }
@@ -215,8 +255,11 @@ extension View {
     /// theme is active. Use on views that paint their own background via
     /// `PageBackgroundView` (non-`Form`/`List` surfaces like `ScrollView`,
     /// `ZStack`, etc.) so the nav-bar region shows the page background.
-    func pageBackgroundToolbar(for scope: AppearancePageBackgroundScope = .global) -> some View {
-        modifier(PageBackgroundToolbarModifier(scope: scope))
+    func pageBackgroundToolbar(
+        for scope: AppearancePageBackgroundScope = .global,
+        fallbacks: [AppearancePageBackgroundScope] = []
+    ) -> some View {
+        modifier(PageBackgroundToolbarModifier(scope: scope, fallbackScopes: fallbacks))
     }
 }
 
@@ -266,6 +309,8 @@ struct DSCapsuleLabel: View {
     /// otherwise make a capsule narrower than it is tall.
     var minWidth: CGFloat? = nil
 
+    @Environment(\.colorScheme) private var scheme
+
     var body: some View {
         HStack(spacing: DSSpacing.xs) {
             if let systemImage {
@@ -279,7 +324,7 @@ struct DSCapsuleLabel: View {
             if let detail {
                 Text(detail)
                     .fontWeight(.regular)
-                    .foregroundStyle(isSelected ? AnyShapeStyle(DSColor.textOnAccent) : AnyShapeStyle(DSColor.textSecondary))
+                    .foregroundStyle(isSelected ? AnyShapeStyle(DSColor.accent) : AnyShapeStyle(DSColor.textSecondary))
                     .lineLimit(1)
             }
             if let trailingSystemImage {
@@ -289,15 +334,17 @@ struct DSCapsuleLabel: View {
             }
         }
         .font(DSFont.subheadline.weight(.medium))
-        .foregroundStyle(isSelected ? AnyShapeStyle(DSColor.textOnAccent) : AnyShapeStyle(DSColor.textPrimary))
+        .foregroundStyle(isSelected ? AnyShapeStyle(DSColor.accent) : AnyShapeStyle(DSColor.textPrimary))
         .padding(.horizontal, fillsWidth ? DSSpacing.sm : DSSpacing.md)
         .padding(.vertical, fillsWidth ? DSSpacing.xs : 0)
         .frame(minWidth: minWidth, maxWidth: fillsWidth ? .infinity : nil, minHeight: DSLayout.capsuleControlHeight)
         .background {
             if isSelected {
-                Capsule().fill(DSColor.accent)
+                // 选中态也用玻璃：只铺一层很淡的强调色薄雾，不再是整块实心 accent。
+                Color.clear.glassButtonChrome(in: Capsule(), scheme: scheme, tint: DSColor.accent)
             } else if onCard {
-                Capsule().fill(DSColor.neutralControlFill)
+                // 已经在玻璃卡上：单层中性半透明，避免两层材质互采糊掉。
+                Color.clear.glassButtonChrome(in: Capsule(), scheme: scheme, onCard: true)
             } else {
                 Color.clear.floatingSurfaceBackground(in: Capsule())
             }

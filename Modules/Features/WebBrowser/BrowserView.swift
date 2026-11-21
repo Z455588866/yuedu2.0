@@ -1276,9 +1276,8 @@ struct WebTOCSheet: View {
                         .font(DSFont.fixed(size: 16, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(DSColor.accent)
-                        .foregroundStyle(DSColor.textOnAccent)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .foregroundStyle(DSColor.accent)
+                        .glassButtonChrome(in: RoundedRectangle(cornerRadius: 14, style: .continuous), tint: DSColor.accent)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)

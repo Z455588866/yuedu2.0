@@ -544,3 +544,92 @@ private struct InterfaceGlowModifier<SurfaceShape: Shape>: ViewModifier {
         .scrollContentBackground(.hidden)
     }
 }
+
+// MARK: - 按钮的统一玻璃底
+
+/// 按钮（胶囊 / 圆角 / 圆形）的**唯一**玻璃底。
+///
+/// 为什么单独做一套：
+/// 1. 之前主按钮是 `.background(Capsule().fill(主题墨色))` —— 一整块纯色，和周围
+///    玻璃卡片完全两种材质，看着像贴上去的黑条。
+/// 2. 之前玻璃按钮外面又套了一圈 `strokeBorder(主题 hairline)`，在木纹/背景图这类
+///    彩色底上就成了一环**异色描边**（用户说的「按钮边缘有异色」）。
+///
+/// 这里定死三条规矩：
+/// - 底只有两层：`.ultraThinMaterial` 透明材质 + 一层几乎看不见的同色薄雾；
+/// - 描边只允许同色高光（白），**永远不取 accent / hairline / borderHex**；
+/// - 已经躺在玻璃卡上的按钮（`onCard`）不再叠材质（两层 glassEffect 会互采糊掉），
+///   改用单层中性半透明填充，观感仍是玻璃。
+extension View {
+    /// - Parameters:
+    ///   - scheme: 不传就取当前环境的深浅色，调用点不用各自再读一次。
+    ///   - onCard: 按钮本身铺在玻璃卡上时传 true。
+    ///   - tint: 主操作按钮传 `DSColor.accent`，得到一层淡主题色薄雾（不是实心色块）。
+    func glassButtonChrome<SurfaceShape: Shape>(
+        in shape: SurfaceShape,
+        scheme: ColorScheme? = nil,
+        onCard: Bool = false,
+        tint: Color? = nil
+    ) -> some View {
+        modifier(GlassButtonChromeModifier(shape: shape, schemeOverride: scheme, onCard: onCard, tint: tint))
+    }
+}
+
+private struct GlassButtonChromeModifier<SurfaceShape: Shape>: ViewModifier {
+    let shape: SurfaceShape
+    let schemeOverride: ColorScheme?
+    /// 按钮本身就铺在玻璃卡上：不再叠材质，只用单层半透明填充。
+    let onCard: Bool
+    /// 选中 / 主操作用的淡主题色（只是薄薄一层，不是实心）。
+    let tint: Color?
+
+    @Bindable private var settings = GlobalSettings.shared
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var environmentScheme
+
+    private var scheme: ColorScheme { schemeOverride ?? environmentScheme }
+
+    private var usesGlass: Bool {
+        !onCard && settings.interfaceFrostedGlass && !reduceTransparency
+    }
+
+    /// 材质上的薄雾：只提亮一点点，保持能透出底下内容。
+    private var mist: Color {
+        if let tint { return tint.opacity(scheme == .dark ? 0.18 : 0.14) }
+        return Color.white.opacity(scheme == .dark ? 0.05 : 0.20)
+    }
+
+    /// 关玻璃 / 卡片内叠层时的单层填充：中性半透明，不是主题色块。
+    private var plainFill: Color {
+        if let tint { return tint.opacity(scheme == .dark ? 0.20 : 0.14) }
+        return Color.white.opacity(scheme == .dark ? 0.10 : 0.50)
+    }
+
+    /// 边缘只给同色高光。一环异色（accent / hairline / borderHex）就是「杂边」的来源。
+    private var edge: Color {
+        Color.white.opacity(scheme == .dark ? 0.10 : 0.38)
+    }
+
+    @ViewBuilder
+    private func backdrop() -> some View {
+        if usesGlass {
+            ZStack {
+                shape.fill(.ultraThinMaterial)
+                shape.fill(mist)
+            }
+        } else {
+            shape.fill(plainFill)
+        }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .background { backdrop() }
+            .overlay {
+                shape.strokeBorder(edge, lineWidth: 0.7)
+                    .allowsHitTesting(false)
+            }
+            .clipShape(shape)
+            .shadow(color: Color.black.opacity(scheme == .dark ? 0.28 : 0.08), radius: 8, y: 3)
+    }
+}

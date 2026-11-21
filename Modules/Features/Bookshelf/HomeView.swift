@@ -1900,9 +1900,9 @@ struct EmptyLibraryView: View {
                 showAdd = true
             } label: {
                 Label(localized("添加书籍"), systemImage: "plus")
-                    .font(DSFont.headline).foregroundStyle(DSColor.textOnAccent)
+                    .font(DSFont.headline).foregroundStyle(DSColor.accent)
                     .padding(.horizontal, DSSpacing.xxl).padding(.vertical, 14)
-                    .background(DSColor.accent).clipShape(Capsule())
+                    .glassButtonChrome(in: Capsule(), tint: DSColor.accent)
             }
             NavigationLink {
                 SearchView()

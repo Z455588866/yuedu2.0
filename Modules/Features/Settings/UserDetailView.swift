@@ -83,11 +83,10 @@ struct UserDetailView: View {
                             } label: {
                                 Text(localized("登入 / 注册"))
                                     .font(DSFont.fixed(size: 15, weight: .semibold))
-                                    .foregroundStyle(DSColor.textOnAccent)
+                                    .foregroundStyle(DSColor.accent)
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 12)
-                                    .background(DSColor.accent)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                                    .glassButtonChrome(in: RoundedRectangle(cornerRadius: 12, style: .continuous), tint: DSColor.accent)
                             }
                             .padding(.top, 8)
                         }

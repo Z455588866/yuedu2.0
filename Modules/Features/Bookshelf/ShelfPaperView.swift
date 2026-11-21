@@ -492,12 +492,7 @@ struct ShelfPaperView: View {
                             // 里面不能再叠 .ultraThinMaterial（两层 glassEffect 会互采、
                             // 糊成一团），所以用「单层中性半透明填充」——读起来是透明玻璃，
                             // 而不是主题色块。
-                            .background {
-                                Capsule().fill(
-                                    Color.primary.opacity(scheme == .dark ? 0.12 : 0.05)
-                                )
-                            }
-                            .overlay(Capsule().strokeBorder(PaperPalette.hairline(scheme), lineWidth: 0.5))
+                            .glassButtonChrome(in: Capsule(), scheme: scheme, onCard: true)
                         }
                         .buttonStyle(.plain)
                     }
@@ -599,7 +594,8 @@ struct ShelfPaperView: View {
         // 由「全局玻璃」总闸控制；关掉后连同整条分类栏一起回退为不透明底色，
         // 不再绕过开关写死 .ultraThinMaterial（iOS 17 兜底）。横向 ScrollView 保留。
         .clearGlassSurface(in: Capsule())
-        .overlay(Capsule().strokeBorder(PaperPalette.hairline(scheme).opacity(0.55), lineWidth: 0.6))
+        // 描边只给同色高光：主题 hairline 在木纹/背景图上会显出一圈异色。
+        .overlay(Capsule().strokeBorder(Color.white.opacity(scheme == .dark ? 0.10 : 0.34), lineWidth: 0.6))
         .padding(.top, 18)
     }
 
@@ -1182,12 +1178,14 @@ private extension View {
     /// and 光晕 in 外观主题 › 界面效果 never reached them, and iOS 26's `glassEffect` —
     /// the material the system's own toolbars are made of — was never used on the page
     /// that has the most chrome on it.
+    /// 统一走「按钮玻璃底」：不发光、不描主题色边 ——
+    /// floatingSurface 会叠光晕，光晕开着时按钮边缘会浮出一圈主题色，就是「异色边」。
     func glassCapsule(_ scheme: ColorScheme) -> some View {
-        floatingSurface(in: Capsule())
+        glassButtonChrome(in: Capsule(), scheme: scheme)
     }
 
     func glassCircle(_ scheme: ColorScheme) -> some View {
-        floatingSurface(in: Circle())
+        glassButtonChrome(in: Circle(), scheme: scheme)
     }
 }
 
@@ -1279,6 +1277,19 @@ struct StageShelfView: View {
     /// 大封面居中对齐用的滚动坐标空间。
     private static let stageSpace = "stageShelf"
 
+    /// 点了一下、正就地展开详情的那本书。展开态下再上滑才升为顶部大图。
+    /// 用 id 而不是整本，避免 store 刷新时拿旧值。
+    @State private var expandedBookID: UUID?
+
+    /// 顶部大图（展台主封面）指向的书：由「展开后上滑」指定；没指定时回落到最近读。
+    @State private var featuredBookID: UUID?
+
+    /// 当前展开详情的书（若它已被筛选/删除则为 nil，视图自动收起）。
+    private var expandedBook: ReadingBook? {
+        guard let id = expandedBookID else { return nil }
+        return filteredBooks.first { $0.id == id }
+    }
+
     private var filteredBooks: [ReadingBook] {
         let base = books.filter { currentFilter.accepts($0) }
             .sorted(by: currentSort.areInIncreasingOrder)
@@ -1289,9 +1300,12 @@ struct StageShelfView: View {
         }
     }
 
-    /// 展台主角：固定为最近读的那本，没有则第一本；不随下方书列点击/滑动改变。
+    /// 展台主角：优先「展开后上滑指定」的那本，其次最近读，最后第一本。
     private var feature: ReadingBook? {
         let f = filteredBooks
+        if let picked = featuredBookID, let hit = f.first(where: { $0.id == picked }) {
+            return hit
+        }
         return f.first { $0.lastOpenedDate != nil } ?? f.first
     }
 
@@ -1498,14 +1512,7 @@ struct StageShelfView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
-        .background {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(PaperPalette.card(scheme).opacity(0.65))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(PaperPalette.hairline(scheme).opacity(0.5), lineWidth: 0.6)
-        }
+        .glassButtonChrome(in: RoundedRectangle(cornerRadius: 20, style: .continuous), scheme: scheme)
     }
 
     // MARK: 大封面主角
@@ -1941,8 +1948,12 @@ struct StageShelfView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: -8) {   // 书叠着挂，互相遮挡（对齐截图）
                     ForEach(filteredBooks) { book in
+                        let isExpanded = expandedBookID == book.id
                         VStack(spacing: 5) {
                             hangingBook(book)
+                                // 展开态稍微抬起，跟下面那条详情连成一组
+                                .offset(y: isExpanded ? -6 : 0)
+                                .shadow(color: .black.opacity(isExpanded ? 0.26 : 0), radius: 12, y: 6)
                             Text(book.title)
                                 .font(.system(size: 10))
                                 .foregroundStyle(ShelfInk.soft(scheme))
@@ -1950,8 +1961,21 @@ struct StageShelfView: View {
                                 .frame(width: 88)
                         }
                         .contentShape(Rectangle())
-                        .onTapGesture { activate(book) }
+                        // 点一下展开详情；已展开时再点打开书。
+                        .onTapGesture { tapStageSpine(book) }
                         .contextMenu { bookMenuItems(book) }
+                        // 已展开的那一本才认上滑：升为顶部大图。
+                        .overlay {
+                            if isExpanded {
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    // 已展开时这一格负责「再点打开书 / 上滑升为大图」
+                                    .onTapGesture { activate(book) }
+                                    // 用 simultaneous 而不是独占 gesture：从这本书起手左右滑时，
+                                    // 整排书照样能滚，不会被这一个上滑手势吃掉。
+                                    .simultaneousGesture(promoteGesture(book))
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal, 4)
@@ -1975,7 +1999,16 @@ struct StageShelfView: View {
                     .offset(y: 12)   // 对齐夹子金属条（y=10..14）
                     .shadow(color: .black.opacity(0.22), radius: 1, y: 1)
             }
+            // 挂绳这一整排同样始终可左右滑，手势归这一排自己。
+            .scrollBounceBehavior(.always, axes: .horizontal)
+
+            // 展开态的详情条
+            if let book = expandedBook {
+                expandedDetailBar(book)
+                    .padding(.top, 6)
+            }
         }
+        .animation(.snappy(duration: 0.26), value: expandedBookID)
     }
 
     /// 把数组按 n 个一组切分，供挂绳多行布局用。
@@ -1990,28 +2023,52 @@ struct StageShelfView: View {
         return result
     }
 
-    // MARK: 展台下方书脊（视频真实：立体书脊斜靠在玻璃搁板上，整排左右横滑，点击直接打开书）
+    // MARK: 展台下方书脊（立体书脊斜靠玻璃搁板：整排左右横滑，点一下就地展开详情，展开后再上滑升为顶部大图）
 
     private var hangingRow: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .bottom, spacing: 16) {
                     ForEach(Array(otherBooks.enumerated()), id: \.offset) { idx, book in
+                        let isExpanded = expandedBookID == book.id
                         ZStack(alignment: .bottom) {
                             // 复用立体书脊组件，微微倾斜斜靠，像真实排在书架上的书
                             spine(for: book, tilt: stageSpineTilt(idx))
+                                .opacity(isExpanded ? 0 : 1)
                             selectBadge(book)
+                            // 点击后就地翻成正面封面，停在这一格（不飞走）
+                            if isExpanded {
+                                expandedCover(book, width: 108, height: 148)
+                                    .zIndex(2)
+                            }
                         }
-                        .frame(height: 148, alignment: .bottom)
+                        // 宽度按书脊固定：展开的封面比书脊宽，只许它向外盖住相邻书，不许挤动整排
+                        .frame(width: 46, height: 148, alignment: .bottom)
+                        .zIndex(isExpanded ? 3 : 0)
                         .contentShape(Rectangle())
-                        // 轻点：直接打开书籍（管理模式为勾选）。整排只做左右横滑。
+                        // 点一下：就地展开详情；已展开时再点：打开这本书。
                         .onTapGesture { tapStageSpine(book) }
                         .contextMenu { bookMenuItems(book) }
+                        // 只有「已展开」的那一本认上滑：升为顶部大图。其余书不挂任何拖拽手势。
+                        .overlay {
+                            if isExpanded {
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    // 已展开时这一格负责「再点打开书 / 上滑升为大图」
+                                    .onTapGesture { activate(book) }
+                                    // 用 simultaneous 而不是独占 gesture：从这本书起手左右滑时，
+                                    // 整排书照样能滚，不会被这一个上滑手势吃掉。
+                                    .simultaneousGesture(promoteGesture(book))
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal, 4)
                 .padding(.bottom, 6)
             }
+            // 这一排书始终可左右滑：书多时滑着看，只有一两本或已滑到头时
+            // 也让这一排自己消化横向手势（always bounce），不交给整页竖向滚动。
+            .scrollBounceBehavior(.always, axes: .horizontal)
 
             // 玻璃搁板：主题色 + 毛玻璃 + 顶部高光，书脊压在上面
             Rectangle()
@@ -2033,7 +2090,13 @@ struct StageShelfView: View {
                         .frame(height: 1)
                 }
                 .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.14), radius: 6, y: 3)
+
+            // 展开态的详情条：点一下书就滑出来，收起时高度归零。
+            if let book = expandedBook {
+                expandedDetailBar(book)
+            }
         }
+        .animation(.snappy(duration: 0.26), value: expandedBookID)
     }
 
     /// 书脊轻微倾斜：0 / 左倾 / 右倾 循环，模拟视频里自然斜靠的排布。
@@ -2045,13 +2108,97 @@ struct StageShelfView: View {
         }
     }
 
-    /// 点下方书脊：管理模式勾选；普通模式直接打开这本书（有声书优先）。
+    /// 展开态的正面封面：就地立在这一格（不飞走、不换大图）。
+    private func expandedCover(_ book: ReadingBook, width: CGFloat, height: CGFloat) -> some View {
+        stageCover(book, width: width, height: height)
+            .shadow(color: .black.opacity(0.34), radius: 16, y: 8)
+            .allowsHitTesting(false)      // 点击/上滑都交给外面那一格
+            .transition(.scale(scale: 0.88, anchor: .bottom).combined(with: .opacity))
+            .accessibilityHidden(true)
+    }
+
+    /// 只有「已展开」的那一本认这个上滑：把它升为顶部大图。
+    /// 只认明确的竖向上滑，横向位移更大时直接放弃，避免和整排横滑抢。
+    private func promoteGesture(_ book: ReadingBook) -> some Gesture {
+        DragGesture(minimumDistance: 24, coordinateSpace: .local)
+            .onEnded { value in
+                let up = -value.translation.height
+                guard up > 48, up > abs(value.translation.width) else { return }
+                withAnimation(.snappy(duration: 0.3)) {
+                    featuredBookID = book.id
+                    expandedBookID = nil
+                }
+            }
+    }
+
+    /// 展开态详情条：书名 / 作者 / 进度 + 阅读 / 更多。
+    private func expandedDetailBar(_ book: ReadingBook) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(book.title)
+                    .font(PaperFont.serif(15))
+                    .foregroundStyle(ShelfInk.strong(scheme))
+                    .lineLimit(1)
+                Text(book.author.isEmpty ? "—" : book.author)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ShelfInk.soft(scheme))
+                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(PaperPalette.hairline(scheme).opacity(0.5))
+                            Capsule().fill(PaperPalette.ink(scheme))
+                                .frame(width: g.size.width * CGFloat(min(max(book.currentPosition, 0), 1)))
+                        }
+                    }
+                    .frame(height: 4)
+                    Text(book.currentPosition > 0 ? "\(Int(book.currentPosition * 100))%" : localized("未读"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(ShelfInk.muted(scheme))
+                        .frame(width: 36, alignment: .trailing)
+                }
+            }
+            Spacer(minLength: 4)
+            Button {
+                if !onOpenAudiobook(book) { onOpenBook(book) }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "book")
+                    Text(localized("阅读"))
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ShelfInk.strong(scheme))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .glassCapsule(scheme)
+            }
+            .buttonStyle(.plain)
+            Menu { bookMenuItems(book) } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(ShelfInk.soft(scheme))
+                    .frame(width: 34, height: 34)
+                    .glassCapsule(scheme)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 8)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    /// 点书：管理模式勾选；普通模式第一次点 → 就地展开详情，已展开的那本再点 → 打开书。
+    /// 整排书本身不挂任何拖拽手势，横滑完全交给 ScrollView。
     private func tapStageSpine(_ book: ReadingBook) {
         if isManaging {
             if selection.contains(book.id) { selection.remove(book.id) }
             else { selection.insert(book.id) }
-        } else {
+            return
+        }
+        if expandedBookID == book.id {
             activate(book)
+        } else {
+            withAnimation(.snappy(duration: 0.26)) { expandedBookID = book.id }
         }
     }
 

@@ -62,7 +62,13 @@ struct ReadingHomeView: View {
     @State private var restingBookID: UUID?
 
     private static let carouselSpace = "homeCarousel"
-    private static let goalMinutes = 15
+    /// 每日阅读目标（分钟）：默认 30 分钟，用户可在「调整目标」里改，存进 UserDefaults。
+    /// 之前是 private static let 15，写死的，所以界面上那个「调整目标 ···」点了没反应。
+    @AppStorage("yd_daily_goal_minutes") private var goalMinutes: Int = 30
+    /// 调整目标面板是否显示。
+    @State private var showsGoalEditor = false
+    /// 面板里正在挑的值（点「完成」才写回 goalMinutes，取消不生效）。
+    @State private var draftGoalMinutes: Int = 30
 
     private var carouselBooks: [ReadingBook] {
         // 展示全部书籍，不再截断——否则加了 16 本只显示 12 本。
@@ -161,6 +167,7 @@ struct ReadingHomeView: View {
         .sheet(isPresented: $showsStats) {
             NavigationStack { ReadingStatsView() }
         }
+        .sheet(isPresented: $showsGoalEditor) { goalEditorSheet }
         .alert(localized("从书架删除"), isPresented: $showsDeleteConfirm) {
             Button(localized("删除"), role: .destructive) {
                 if let book = pendingDeleteBook {
@@ -267,8 +274,7 @@ struct ReadingHomeView: View {
                 .foregroundStyle(PaperPalette.textPrimary(scheme))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .clearGlassSurface(in: Capsule(), fill: PaperPalette.card(scheme))
-                .overlay(Capsule().strokeBorder(PaperPalette.hairline(scheme).opacity(0.5), lineWidth: 0.6))
+                .glassButtonChrome(in: Capsule(), scheme: scheme)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("home_page_menu")
@@ -287,8 +293,7 @@ struct ReadingHomeView: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(PaperPalette.textPrimary(scheme))
                     .frame(width: 36, height: 36)
-                    .clearGlassSurface(in: Circle(), fill: PaperPalette.card(scheme))
-                    .overlay(Circle().strokeBorder(PaperPalette.hairline(scheme).opacity(0.5), lineWidth: 0.6))
+                    .glassButtonChrome(in: Circle(), scheme: scheme)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("home_more_menu")
@@ -442,17 +447,21 @@ struct ReadingHomeView: View {
 
     private var todayRingCard: some View {
         VStack(spacing: 12) {
-            sectionHeader(localized("阅读目标"), showsChevron: true)
+            Button { openGoalEditor() } label: {
+                sectionHeader(localized("阅读目标"), showsChevron: true, trailing: localized("调整目标　···"))
+            }
+            .buttonStyle(.plain)
             HStack(spacing: 18) {
-                smallRing(progress: min(CGFloat(todaySeconds) / CGFloat(Self.goalMinutes * 60), 1), size: 74, line: 8)
+                smallRing(progress: min(CGFloat(todaySeconds) / CGFloat(goalMinutes * 60), 1), size: 74, line: 8)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(clockString(todaySeconds))
                         .font(.system(size: 28, weight: .bold)).monospacedDigit()
+                        .lineLimit(1).minimumScaleFactor(0.55)
                         .foregroundStyle(PaperPalette.textPrimary(scheme))
-                    Text(String(format: localized("目标 %d 分钟"), Self.goalMinutes))
+                    Text(goalLabel)
                         .font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
                     HStack(spacing: 14) {
-                        Label(String(format: localized("阅读 %d 分钟"), todaySeconds / 60), systemImage: "book.closed")
+                        Label(String(format: localized("阅读 %@"), durationText(todaySeconds / 60)), systemImage: "book.closed")
                         Label(localized("听书 0 分钟"), systemImage: "headphones")
                     }
                     .font(.system(size: 11)).foregroundStyle(PaperPalette.textSecondary(scheme))
@@ -671,13 +680,17 @@ struct ReadingHomeView: View {
 
     private var goalCard: some View {
         VStack(spacing: 14) {
-            sectionHeader(localized("阅读目标"), showsChevron: true)
+            // 标题行整条可点：以前只有一个画出来的 chevron，点了没反应。
+            Button { openGoalEditor() } label: {
+                sectionHeader(localized("阅读目标"), showsChevron: true, trailing: localized("调整目标　···"))
+            }
+            .buttonStyle(.plain)
             goalRing
             Button { openCenteredOrShelf() } label: {
                 Text(localized("继续阅读 · 读本书"))
-                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(DSColor.textOnAccent)
+                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(PaperPalette.textPrimary(scheme))
                     .frame(maxWidth: .infinity).padding(.vertical, 13)
-                    .background(Capsule().fill(PaperPalette.ink(scheme)))
+                    .glassButtonChrome(in: Capsule(), scheme: scheme)
             }
             .buttonStyle(.plain)
         }
@@ -691,7 +704,7 @@ struct ReadingHomeView: View {
     }
 
     private var goalRing: some View {
-        let progress = min(CGFloat(todaySeconds) / CGFloat(Self.goalMinutes * 60), 1)
+        let progress = min(CGFloat(todaySeconds) / CGFloat(goalMinutes * 60), 1)
         return ZStack {
             Circle().stroke(PaperPalette.hairline(scheme).opacity(0.45), lineWidth: 12)
             Circle().trim(from: 0, to: progress)
@@ -699,17 +712,40 @@ struct ReadingHomeView: View {
                 .rotationEffect(.degrees(-90))
             VStack(spacing: 3) {
                 Text(localized("今日阅读")).font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
-                Text(clockString(todaySeconds)).font(.system(size: 30, weight: .bold)).monospacedDigit()
+                Text(clockString(todaySeconds)).font(.system(size: 30, weight: .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.55)
                     .foregroundStyle(PaperPalette.textPrimary(scheme))
-                Text(String(format: localized("目标 %d 分钟"), Self.goalMinutes))
+                Text(goalLabel)
                     .font(.system(size: 10.5)).foregroundStyle(PaperPalette.textTertiary(scheme))
             }
         }
         .frame(width: 168, height: 168)
     }
 
+    /// 今日阅读计时：不足 1 小时显示「5:20」；
+    /// 满 1 小时改为「1 小时 5 分 20 秒」，一眼看清读了几小时几分几秒。
     private func clockString(_ seconds: Int) -> String {
-        String(format: "%d:%02d", seconds / 60, seconds % 60)
+        let s = max(0, seconds)
+        if s < 3600 { return String(format: "%d:%02d", s / 60, s % 60) }
+        return String(format: localized("%d 小时 %d 分钟 %d 秒"), s / 3600, (s % 3600) / 60, s % 60)
+    }
+
+    /// 纯时长文案（分钟粒度）：不足 1 小时「30 分钟」，满 1 小时「1 小时 30 分钟」。
+    private func durationText(_ minutes: Int) -> String {
+        let m = max(0, minutes)
+        if m < 60 { return String(format: localized("%d 分钟"), m) }
+        let h = m / 60, mm = m % 60
+        return mm == 0
+            ? String(format: localized("%d 小时"), h)
+            : String(format: localized("%d 小时 %d 分钟"), h, mm)
+    }
+
+    /// 目标文案：带「目标」前缀。
+    private var goalLabel: String { String(format: localized("目标 %@"), durationText(goalMinutes)) }
+
+    /// 打开「调整目标」面板：把当前值带进去当初始选中项。
+    private func openGoalEditor() {
+        draftGoalMinutes = goalMinutes
+        showsGoalEditor = true
     }
 
     // MARK: - ② 经典（classic）：继续阅读大卡片 + 横排书 + 阅读目标
@@ -742,12 +778,17 @@ struct ReadingHomeView: View {
     /// 下半屏（第一张图）：阅读目标 › + 今日阅读 + 连续阅读 18 周 + 今年已读（手账/经典共用）
     private var readingGoalStatsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text(localized("阅读目标")).font(.system(size: 15, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
-                Spacer()
-                Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(PaperPalette.textTertiary(scheme))
+            Button { openGoalEditor() } label: {
+                HStack {
+                    Text(localized("阅读目标")).font(.system(size: 15, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
+                    Spacer()
+                    Text(localized("调整目标　···")).font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                    Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                }
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 4)
+            .buttonStyle(.plain)
             journalRingCard
             journalStreak18Card
             yearCard
@@ -792,7 +833,7 @@ struct ReadingHomeView: View {
 
     /// 经典·阅读目标半圆弧大卡（对标参考图第二屏）
     private var classicGoalArcCard: some View {
-        let progress = min(CGFloat(todaySeconds) / CGFloat(Self.goalMinutes * 60), 1)
+        let progress = min(CGFloat(todaySeconds) / CGFloat(goalMinutes * 60), 1)
         return VStack(spacing: 0) {
             Text(localized("阅读目标")).font(.system(size: 19, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
             Text(localized("日知其所亡，月无忘其所能，可谓好学也已矣。"))
@@ -805,10 +846,15 @@ struct ReadingHomeView: View {
                     .stroke(PaperPalette.hairline(scheme).opacity(0.55), style: StrokeStyle(lineWidth: 13, lineCap: .round))
                 VStack(spacing: 2) {
                     Text(localized("今日阅读进度")).font(.system(size: 14, weight: .semibold)).foregroundStyle(PaperPalette.textPrimary(scheme))
-                    Text(clockString(todaySeconds)).font(.system(size: 46, weight: .bold)).monospacedDigit()
+                    Text(clockString(todaySeconds)).font(.system(size: 46, weight: .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.55)
                         .foregroundStyle(PaperPalette.textPrimary(scheme))
-                    Text(String(format: localized("（目标 %d 分钟）›"), Self.goalMinutes))
-                        .font(.system(size: 12)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                    Button { openGoalEditor() } label: {
+                        Text(String(format: localized("（%@）›"), goalLabel))
+                            .font(.system(size: 12)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                            .padding(.vertical, 3).padding(.horizontal, 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(.top, 34)
                 // 弧左端黑点
@@ -821,13 +867,13 @@ struct ReadingHomeView: View {
 
             Button { openCenteredOrShelf() } label: {
                 VStack(spacing: 3) {
-                    Text(localized("继续阅读")).font(.system(size: 15, weight: .bold)).foregroundStyle(DSColor.textOnAccent)
+                    Text(localized("继续阅读")).font(.system(size: 15, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
                     if let book = centeredBook {
-                        Text(book.title).font(.system(size: 10.5)).foregroundStyle(Color.white.opacity(0.68)).lineLimit(1)
+                        Text(book.title).font(.system(size: 10.5)).foregroundStyle(PaperPalette.textTertiary(scheme)).lineLimit(1)
                     }
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 12)
-                .background(Capsule().fill(PaperPalette.ink(scheme)))
+                .glassButtonChrome(in: Capsule(), scheme: scheme)
             }
             .buttonStyle(.plain)
             .padding(.top, 2)
@@ -892,9 +938,9 @@ struct ReadingHomeView: View {
                         Image(systemName: "book.closed")
                         Text(localized("继续阅读"))
                     }
-                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(DSColor.textOnAccent)
+                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(PaperPalette.textPrimary(scheme))
                     .frame(maxWidth: .infinity).padding(.vertical, 13)
-                    .background(Capsule().fill(PaperPalette.ink(scheme)))
+                    .glassButtonChrome(in: Capsule(), scheme: scheme)
                 }
                 .buttonStyle(.plain)
                 Button { listen(book) } label: {
@@ -970,12 +1016,20 @@ struct ReadingHomeView: View {
 
     // 手账专属：今日阅读圆环卡（对标视频：0% 圆环 + 0:00 + 目标15分钟 + 阅读/听书分钟）
     private var journalRingCard: some View {
-        let progress = min(CGFloat(todaySeconds) / CGFloat(Self.goalMinutes * 60), 1)
+        let progress = min(CGFloat(todaySeconds) / CGFloat(goalMinutes * 60), 1)
         return VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text(localized("今日阅读")).font(.system(size: 14, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
                 Spacer()
-                Text(localized("调整目标　···")).font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                Button { openGoalEditor() } label: {
+                    Text(localized("调整目标　···"))
+                        .font(.system(size: 11))
+                        .foregroundStyle(PaperPalette.textTertiary(scheme))
+                        // 加大可点区域，别让人戳半天戳不到
+                        .padding(.vertical, 4).padding(.horizontal, 2)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
             HStack(spacing: 18) {
                 ZStack {
@@ -987,10 +1041,10 @@ struct ReadingHomeView: View {
                 }
                 .frame(width: 88, height: 88)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(clockString(todaySeconds)).font(.system(size: 32, weight: .bold)).monospacedDigit().foregroundStyle(PaperPalette.textPrimary(scheme))
-                    Text(String(format: localized("目标 %d 分钟"), Self.goalMinutes)).font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                    Text(clockString(todaySeconds)).font(.system(size: 32, weight: .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.55).foregroundStyle(PaperPalette.textPrimary(scheme))
+                    Text(goalLabel).font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
                     HStack(spacing: 14) {
-                        Label(String(format: localized("阅读 %d 分钟"), todaySeconds / 60), systemImage: "book.closed")
+                        Label(String(format: localized("阅读 %@"), durationText(todaySeconds / 60)), systemImage: "book.closed")
                         Label(localized("听书 0 分钟"), systemImage: "headphones")
                     }
                     .font(.system(size: 10.5)).foregroundStyle(PaperPalette.textSecondary(scheme))
@@ -1048,14 +1102,14 @@ struct ReadingHomeView: View {
         VStack(alignment: .leading, spacing: 14) {
             sectionHeader(localized("今日阅读"))
             HStack(alignment: .firstTextBaseline) {
-                Text("\(todaySeconds / 60)").font(.system(size: 52, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
-                Text(localized("分钟")).font(.system(size: 16)).foregroundStyle(PaperPalette.textSecondary(scheme))
+                Text(clockString(todaySeconds)).font(.system(size: 44, weight: .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.55)
+                    .foregroundStyle(PaperPalette.textPrimary(scheme))
                 Spacer()
-                Text(String(format: localized("目标 %d 分钟"), Self.goalMinutes))
+                Text(goalLabel)
                     .font(.system(size: 12)).foregroundStyle(PaperPalette.textTertiary(scheme))
             }
             GeometryReader { g in
-                let p = min(CGFloat(todaySeconds) / CGFloat(Self.goalMinutes * 60), 1)
+                let p = min(CGFloat(todaySeconds) / CGFloat(goalMinutes * 60), 1)
                 ZStack(alignment: .leading) {
                     Capsule().fill(PaperPalette.hairline(scheme).opacity(0.45))
                     Capsule().fill(PaperPalette.ink(scheme)).frame(width: g.size.width * p)
@@ -1063,7 +1117,7 @@ struct ReadingHomeView: View {
             }
             .frame(height: 7)
             HStack(spacing: 20) {
-                Label(String(format: localized("阅读 %d 分钟"), todaySeconds / 60), systemImage: "book.closed")
+                Label(String(format: localized("阅读 %@"), durationText(todaySeconds / 60)), systemImage: "book.closed")
                 Label(localized("听书 0 分钟"), systemImage: "headphones")
             }
             .font(.system(size: 11.5)).foregroundStyle(PaperPalette.textSecondary(scheme))
@@ -1117,26 +1171,31 @@ struct ReadingHomeView: View {
             Text(localized("今日阅读进度")).font(.system(size: 12, weight: .medium)).foregroundStyle(PaperPalette.textSecondary(scheme))
             ZStack {
                 Circle().stroke(PaperPalette.hairline(scheme).opacity(0.4), lineWidth: 12)
-                Circle().trim(from: 0, to: min(CGFloat(todaySeconds) / CGFloat(Self.goalMinutes * 60), 1))
+                Circle().trim(from: 0, to: min(CGFloat(todaySeconds) / CGFloat(goalMinutes * 60), 1))
                     .stroke(PaperPalette.ink(scheme), style: StrokeStyle(lineWidth: 12, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 VStack(spacing: 2) {
-                    Text(clockString(todaySeconds)).font(.system(size: 38, weight: .bold)).monospacedDigit()
+                    Text(clockString(todaySeconds)).font(.system(size: 38, weight: .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.55)
                         .foregroundStyle(PaperPalette.textPrimary(scheme))
-                    Text(String(format: localized("（目标 %d 分钟）"), Self.goalMinutes))
-                        .font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                    Button { openGoalEditor() } label: {
+                        Text(String(format: localized("（%@）"), goalLabel))
+                            .font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                            .padding(.vertical, 3).padding(.horizontal, 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .frame(width: 190, height: 190)
             Button { openCenteredOrShelf() } label: {
                 VStack(spacing: 3) {
-                    Text(localized("继续阅读")).font(.system(size: 14, weight: .semibold)).foregroundStyle(DSColor.textOnAccent)
+                    Text(localized("继续阅读")).font(.system(size: 14, weight: .semibold)).foregroundStyle(PaperPalette.textPrimary(scheme))
                     if let book = centeredBook {
-                        Text(book.title).font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.75)).lineLimit(1)
+                        Text(book.title).font(.system(size: 10)).foregroundStyle(PaperPalette.textTertiary(scheme)).lineLimit(1)
                     }
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 13)
-                .background(Capsule().fill(PaperPalette.ink(scheme)))
+                .glassButtonChrome(in: Capsule(), scheme: scheme)
             }
             .buttonStyle(.plain)
             HStack(spacing: 8) {
@@ -1217,19 +1276,25 @@ struct ReadingHomeView: View {
             HStack {
                 Text(localized("阅读目标")).font(.system(size: 13, weight: .semibold)).foregroundStyle(PaperPalette.textSecondary(scheme))
                 Spacer()
-                Text(localized("设定")).font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                Button { openGoalEditor() } label: {
+                    Text(localized("调整目标　···")).font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                        .padding(.vertical, 4).padding(.horizontal, 2)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
             HStack(alignment: .firstTextBaseline) {
-                Text("\(todaySeconds / 60)").font(.system(size: 34, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
-                Text(localized("分钟 / 今日")).font(.system(size: 12)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                Text(clockString(todaySeconds)).font(.system(size: 30, weight: .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.55)
+                    .foregroundStyle(PaperPalette.textPrimary(scheme))
+                Text(localized("/ 今日")).font(.system(size: 12)).foregroundStyle(PaperPalette.textTertiary(scheme))
                 Spacer()
-                Text("\(Int(min(CGFloat(todaySeconds) / CGFloat(Self.goalMinutes * 60), 1) * 100))%")
+                Text("\(Int(min(CGFloat(todaySeconds) / CGFloat(goalMinutes * 60), 1) * 100))%")
                     .font(.system(size: 24, weight: .bold)).foregroundStyle(PaperPalette.ink(scheme))
-                Text(String(format: localized("目标 %d 分钟"), Self.goalMinutes))
+                Text(goalLabel)
                     .font(.system(size: 10.5)).foregroundStyle(PaperPalette.textTertiary(scheme))
             }
             GeometryReader { g in
-                let p = min(CGFloat(todaySeconds) / CGFloat(Self.goalMinutes * 60), 1)
+                let p = min(CGFloat(todaySeconds) / CGFloat(goalMinutes * 60), 1)
                 ZStack(alignment: .leading) {
                     Capsule().fill(PaperPalette.hairline(scheme).opacity(0.45))
                     Capsule().fill(PaperPalette.ink(scheme)).frame(width: g.size.width * p)
@@ -1320,14 +1385,20 @@ struct ReadingHomeView: View {
         VStack(spacing: 12) {
             HStack {
                 sectionHeader(localized("阅览日志"))
-                Text(localized("设定")).font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                Button { openGoalEditor() } label: {
+                    Text(localized("调整目标　···")).font(.system(size: 11)).foregroundStyle(PaperPalette.textTertiary(scheme))
+                        .padding(.vertical, 4).padding(.horizontal, 2)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
             HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text("\(todaySeconds / 60)").font(.system(size: 34, weight: .bold)).foregroundStyle(PaperPalette.textPrimary(scheme))
-                Text("/ \(Self.goalMinutes) \(localized("分钟"))").font(.system(size: 14)).foregroundStyle(PaperPalette.textSecondary(scheme))
+                Text(clockString(todaySeconds)).font(.system(size: 30, weight: .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.55)
+                    .foregroundStyle(PaperPalette.textPrimary(scheme))
+                Text("/ \(durationText(goalMinutes))").font(.system(size: 14)).foregroundStyle(PaperPalette.textSecondary(scheme))
             }
             GeometryReader { g in
-                let p = min(CGFloat(todaySeconds) / CGFloat(Self.goalMinutes * 60), 1)
+                let p = min(CGFloat(todaySeconds) / CGFloat(goalMinutes * 60), 1)
                 ZStack(alignment: .leading) {
                     Capsule().fill(PaperPalette.hairline(scheme).opacity(0.45))
                     Capsule().fill(PaperPalette.ink(scheme)).frame(width: g.size.width * p)
@@ -1337,6 +1408,82 @@ struct ReadingHomeView: View {
         }
         .padding(18)
         .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 20, style: .continuous), fill: PaperPalette.card(scheme))
+    }
+
+
+    // MARK: - 调整阅读目标
+
+    /// 「调整目标」面板：滚轮按 5 分钟一档（5 分钟 ~ 10 小时），上面一排常用值快点。
+    /// 点「完成」才写回 @AppStorage，取消不生效；满 60 分钟自动按「X 小时 Y 分钟」显示。
+    private var goalEditorSheet: some View {
+        NavigationStack {
+            VStack(spacing: 10) {
+                Text(localized("每天想读多久？"))
+                    .font(.system(size: 13))
+                    .foregroundStyle(PaperPalette.textSecondary(scheme))
+                    .padding(.top, 4)
+
+                Picker(localized("每日目标"), selection: $draftGoalMinutes) {
+                    ForEach(Array(stride(from: 5, through: 600, by: 5)), id: \.self) { m in
+                        Text(durationText(m)).tag(m)
+                    }
+                }
+                .pickerStyle(.wheel)
+                .labelsHidden()
+                .frame(maxHeight: 160)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach([15, 30, 45, 60, 90, 120], id: \.self) { m in
+                            Button {
+                                withAnimation(.snappy(duration: 0.2)) { draftGoalMinutes = m }
+                            } label: {
+                                Text(durationText(m))
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(draftGoalMinutes == m ? DSColor.textOnAccent : PaperPalette.textSecondary(scheme))
+                                    .padding(.horizontal, 12).padding(.vertical, 7)
+                                    .background(
+                                        Capsule().fill(draftGoalMinutes == m
+                                                       ? PaperPalette.ink(scheme)
+                                                       : PaperPalette.iconTile(scheme))
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+                .padding(.bottom, 6)
+            }
+            .background(PaperBackground(scope: .global).ignoresSafeArea())
+            .navigationTitle(localized("调整阅读目标"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(localized("取消")) { showsGoalEditor = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(localized("完成")) {
+                        goalMinutes = draftGoalMinutes
+                        showsGoalEditor = false
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationDetents([.height(400)])
+        .presentationDragIndicator(.visible)
+        .onAppear {
+            draftGoalMinutes = goalMinutes
+            // 滚轮落在当前值上，而不是每次都从 5 分钟开始
+            clampDraftToWheel()
+        }
+    }
+
+    /// 把已有目标对齐到 5 分钟档位（用户以前存过 15、30 这类值不会跑偏）。
+    private func clampDraftToWheel() {
+        let clamped = min(600, max(5, goalMinutes))
+        draftGoalMinutes = (clamped + 2) / 5 * 5
     }
 
     // MARK: - Stats helpers

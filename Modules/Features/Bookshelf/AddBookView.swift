@@ -251,8 +251,8 @@ struct URLImportTab: View {
                     } label: {
                         Label(localized("抓取页面"), systemImage: "arrow.down.circle")
                             .frame(maxWidth: .infinity).padding()
-                            .background(DSColor.accent).foregroundStyle(DSColor.textOnAccent)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .foregroundStyle(DSColor.accent)
+                            .glassButtonChrome(in: RoundedRectangle(cornerRadius: 12, style: .continuous), tint: DSColor.accent)
                     }
                     .disabled(urlInput.trimmingCharacters(in: .whitespaces).isEmpty || isLoading)
                 } else {

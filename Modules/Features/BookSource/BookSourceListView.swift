@@ -852,9 +852,9 @@ struct BookSourceListView: View {
                 addFlow.begin(.local)
             } label: {
                 Label(localized("汇入来源配置 JSON"), systemImage: "square.and.arrow.down")
-                    .font(DSFont.headline).foregroundStyle(DSColor.textOnAccent)
+                    .font(DSFont.headline).foregroundStyle(DSColor.accent)
                     .padding(.horizontal, 28).padding(.vertical, 13)
-                    .background(DSColor.accent).clipShape(Capsule())
+                    .glassButtonChrome(in: Capsule(), tint: DSColor.accent)
             }
             Spacer()
         }

@@ -74,11 +74,10 @@ struct SourceDisclaimerView: View {
         } label: {
             Text(localized("继续"))
                 .font(DSFont.headline)
-                .foregroundStyle(DSColor.textOnAccent)
+                .foregroundStyle(DSColor.accent)
                 .frame(maxWidth: .infinity)
                 .frame(height: 52)
-                .background(DSColor.accent)
-                .clipShape(Capsule())
+                .glassButtonChrome(in: Capsule(), tint: DSColor.accent)
         }
         .buttonStyle(.plain)
         .padding(.horizontal, DSSpacing.xl)

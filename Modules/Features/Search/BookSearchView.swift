@@ -393,8 +393,8 @@ struct BookSearchView: View {
                                   model: unifiedSearch)
             }
         }
-        .background(PageBackgroundView(scope: .search).ignoresSafeArea())
-        .pageBackgroundToolbar(for: .search)
+        .background(SearchPageBackground().ignoresSafeArea())
+        .pageBackgroundToolbar(for: .search, fallbacks: [.settings])
         .modifier(SearchPageTitle(isTabRoot: isTabRoot))
         // Declared here, outside the lazy result containers, so the navigation
         // stack can always see the active destination.
