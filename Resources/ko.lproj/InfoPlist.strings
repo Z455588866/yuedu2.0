@@ -25,3 +25,7 @@
 "Comic book archive" = "만화 압축 파일";
 "FLAC audio" = "FLAC 오디오";
 "MPEG-4 audiobook" = "MPEG-4 오디오북";
+
+/* 字体文件类型名（Info.plist 的 CFBundleTypeName / UTTypeDescription），2026-11-22 补 */
+"Font files" = "글꼴 파일";
+"Reader Font File" = "리더 글꼴 파일";
