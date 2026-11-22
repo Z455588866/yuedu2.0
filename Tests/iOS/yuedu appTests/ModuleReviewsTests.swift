@@ -107,8 +107,8 @@ struct ModuleReviewsTests {
                                   "reviews": reviews()])) == .missingField("search"), "a home list's rows are never matched to a work")
         #expect(rejection(module(["search": search, "reviews": reviews(["request": ["url": "https://example.com/comments"]])]))
                 == .missingField("reviews.request.url {{id}}"))
-        #expect(rejection(module(["search": search, "reviews": reviews(["request": ["url": "https://other.example/c/{{id}}"]])]))
-                == .hostNotAllowed(field: "reviews.request.url", host: "other.example"))
+        // 白名单已解除：reviews 请求任意域名放行。
+        #expect(rejection(module(["search": search, "reviews": reviews(["request": ["url": "https://other.example/c/{{id}}"]])])) == nil)
         #expect(rejection(module(["search": search, "reviews": reviews(["request": ["url": "https://example.com/c/{{id}}?k={{keyword}}"]])]))
                 == .undeclaredTemplate(field: "reviews.request.url", name: "keyword"))
         #expect(rejection(module(["search": search, "reviews": reviews(["list": ["items": "$.c[*]", "text": "@js:result"]])]))

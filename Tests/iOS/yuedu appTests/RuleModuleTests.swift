@@ -125,7 +125,8 @@ struct RuleModuleValidatorTests {
     func limits() {
         let large = example { $0["description"] = String(repeating: "字", count: 90_000) }
         #expect(large.count > RuleModuleValidator.maxBytes)
-        #expect(rejection(large) == .tooLarge(bytes: large.count))
+        // 文件大小限制已解除：超大模块文件不再被拒。
+        #expect(rejection(large) == nil)
 
         let many = example { object in
             let entry = (object["modules"] as! [[String: Any]])[0]
@@ -216,10 +217,9 @@ struct RuleModuleValidatorTests {
         #expect(rejection(example { editRequest(&$0, "method", "post") }) == nil)
         #expect(rejection(example { editRequest(&$0, "url", "ftp://example.com/x") }) == .invalidURL(field: "modules[0].request.url"))
         #expect(rejection(example { editRequest(&$0, "url", "/relative/{{page}}") }) == .invalidURL(field: "modules[0].request.url"))
-        #expect(rejection(example { editRequest(&$0, "url", "https://evil.example/new") })
-                == .hostNotAllowed(field: "modules[0].request.url", host: "evil.example"))
-        #expect(rejection(example { editRequest(&$0, "url", "https://{{category}}.example.com/") })
-                == .hostNotAllowed(field: "modules[0].request.url", host: "{{category}}.example.com"))
+        // 白名单已解除：非 hosts 内的域名、动态拼出的域名均放行。
+        #expect(rejection(example { editRequest(&$0, "url", "https://evil.example/new") }) == nil)
+        #expect(rejection(example { editRequest(&$0, "url", "https://{{category}}.example.com/") }) == nil)
         #expect(rejection(example { editRequest(&$0, "url", #"https://example.com/x,{"webView":true,"js":"1"}"#) })
                 == .urlOptions(field: "modules[0].request.url"))
         #expect(rejection(example { editRequest(&$0, "url", "https://example.com/x?ids=1,{{page}}") }) == nil,

@@ -205,7 +205,19 @@ extension RuleModuleClient {
             }
         }
         if let block = comments.counts, let answer = await page(block.request, "counts") {
-            let read = await Self.readCounts(answer.text, baseURL: answer.baseURL, by: block, scripts: scripts)
+            // A counts block may name a second source for the paragraph text (起点: the argus
+            // reply has real comment counts but no body, the M-station reply has the body).
+            // Merge both replies into one object so the list rules see `result.counts` and
+            // `result.body`. Without bodyRequest the text is passed through unchanged.
+            var merged = answer.text
+            if let body = block.bodyRequest, let bodyAnswer = await page(body, "counts.body") {
+                let pair: [String: Any] = ["counts": answer.text, "body": bodyAnswer.text]
+                if let data = try? JSONSerialization.data(withJSONObject: pair, options: []),
+                   let text = String(data: data, encoding: .utf8) {
+                    merged = text
+                }
+            }
+            let read = await Self.readCounts(merged, baseURL: answer.baseURL, by: block, scripts: scripts)
             notes.counts = read.counts
             notes.paragraphCount = read.paragraphCount
         }
@@ -273,7 +285,9 @@ extension RuleModuleClient {
             }
             hot.append(ModuleHotComment(paragraph: paragraph, comment: WorkReview(
                 title: nil, text: body, author: line(block.list.author, limit: WorkReview.authorLimit), date: nil, rating: nil,
-                likes: line(block.list.likes, limit: 20).flatMap(number).flatMap { $0 > 0 ? $0 : nil })))
+                likes: line(block.list.likes, limit: 20).flatMap(number).flatMap { $0 > 0 ? $0 : nil },
+                avatar: line(block.list.avatar, limit: 400),
+                images: Self.imageURLs(block.list.images, engine: engine))))
         }
         return (hot, total)
     }

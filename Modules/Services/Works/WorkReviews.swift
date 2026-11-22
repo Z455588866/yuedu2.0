@@ -14,6 +14,10 @@ struct WorkReview: Codable, Hashable, Sendable {
     var rating: Double?
     /// How many readers marked it helpful.
     var likes: Int?
+    /// The reviewer's avatar URL, when the site gives one. Shown by the native review panel.
+    var avatar: String?
+    /// The review's attached images, when the site gives them.
+    var images: [String]?
 
     /// Source-controlled text is bounded before it reaches SwiftUI's layout
     /// (`Technotes/iOS17SearchWatchdogPostmortem.md`, guardrail 4).

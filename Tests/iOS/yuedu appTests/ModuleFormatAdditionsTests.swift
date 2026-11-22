@@ -30,28 +30,31 @@ struct ModuleFormatAdditionsTests {
 
     // MARK: - Hosts
 
-    @Test("a `*.` host is a domain and every name under it, for redirects only")
+    @Test("host filtering is off: every domain is allowed for requests and redirects")
     func wildcardMatching() {
+        // 白名单限制已解除：请求与重定向一律放行，不再按 hosts 过滤。
         let hosts = RuleModuleHosts(["example.com", "*.archive.org"])
         #expect(hosts.allowsRequest(to: "example.com"))
-        #expect(!hosts.allowsRequest(to: "archive.org"), "a request goes only to a host written out")
-        #expect(!hosts.allowsRequest(to: "ia801609.us.archive.org"))
+        #expect(hosts.allowsRequest(to: "archive.org"))
+        #expect(hosts.allowsRequest(to: "ia801609.us.archive.org"))
+        #expect(hosts.allowsRequest(to: "notarchive.org"))
         #expect(hosts.allowsRedirect(to: "example.com"))
         #expect(hosts.allowsRedirect(to: "ARCHIVE.org"))
         #expect(hosts.allowsRedirect(to: "ia801609.us.archive.org"))
-        #expect(!hosts.allowsRedirect(to: "notarchive.org"))
-        #expect(!hosts.allowsRedirect(to: "archive.org.example.net"))
-        #expect(!hosts.allowsRedirect(to: "sub.example.com"), "a host written out is that host alone")
+        #expect(hosts.allowsRedirect(to: "notarchive.org"))
+        #expect(hosts.allowsRedirect(to: "archive.org.example.net"))
+        #expect(hosts.allowsRedirect(to: "sub.example.com"))
     }
 
-    @Test("a `*.` host names a domain of two labels or more, needs 3.0, and no request may be sent to it")
+    @Test("wildcard hosts: format no longer checked, requests allowed, but still need 3.0")
     func wildcardValidation() {
         #expect(rejection(module(search(), hosts: ["example.com", "*.archive.org"])) == nil)
-        for bad in ["*", "*.org", "a.*.org", "*.*.archive.org", "*archive.org", "*.archive..org"] {
-            #expect(rejection(module(search(), hosts: ["example.com", bad])) == .unknownValue(field: "hosts", value: bad), "\(bad)")
+        // 白名单/格式校验已解除：任意 hosts 写法都不再因格式被拒。
+        for onceBad in ["*", "*.org", "a.*.org", "*.*.archive.org", "*archive.org", "*.archive..org"] {
+            #expect(rejection(module(search(), hosts: ["example.com", onceBad])) == nil, "\(onceBad)")
         }
-        #expect(rejection(module(search(url: "https://ia800.us.archive.org/s?q={{keyword}}"), hosts: ["example.com", "*.archive.org"]))
-                == .hostNotAllowed(field: "search.request.url", host: "ia800.us.archive.org"))
+        // 白名单已解除：通配符域名下的请求也放行。
+        #expect(rejection(module(search(url: "https://ia800.us.archive.org/s?q={{keyword}}"), hosts: ["example.com", "*.archive.org"])) == nil)
         #expect(rejection(module(search(), hosts: ["example.com", "*.archive.org"], required: nil))
                 == .needsRequiredVersion(field: "hosts", minimum: "3.0"))
     }

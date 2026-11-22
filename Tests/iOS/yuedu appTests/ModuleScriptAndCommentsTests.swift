@@ -157,8 +157,8 @@ struct ModuleScriptAndCommentsTests {
                                   "comments": comments()])) == .missingField("search"))
         #expect(rejection(module(["search": search, "comments": comments(["request": ["url": "https://example.com/c?p={{page}}"], "sorts": NSNull()])]))
                 == .missingField("comments.chapter.request.url {{chapterId}}"))
-        #expect(rejection(module(["search": search, "comments": comments(["request": ["url": "https://other.example/c/{{chapterId}}?sort={{sort}}"]])]))
-                == .hostNotAllowed(field: "comments.chapter.request.url", host: "other.example"))
+        // 白名单已解除：comments 请求任意域名放行。
+        #expect(rejection(module(["search": search, "comments": comments(["request": ["url": "https://other.example/c/{{chapterId}}?sort={{sort}}"]])])) == nil)
         #expect(rejection(module(["search": search, "comments": comments(["sorts": NSNull()])]))
                 == .missingField("comments.chapter.sorts"), "{{sort}} with no order to send")
         #expect(rejection(module(["search": search, "comments": comments(["list": ["items": "$.list[*]", "text": " "]])]))
@@ -357,6 +357,55 @@ struct ModuleScriptAndCommentsTests {
         var elsewhere = notesBlock()
         elsewhere["authorSay"] = ["request": ["url": "https://example.com/say"], "text": "$.say"]
         #expect(rejection(module(["search": search, "comments": elsewhere])) == .missingField("comments.authorSay.request.url {{chapterId}}"))
+    }
+
+    @Test("段评 counts may name a second body source; it is validated like the first and needs `paragraph`")
+    func countsBodyRequestValidated() throws {
+        var block = notesBlock()
+        var counts = block["counts"] as! [String: Any]
+        counts["bodyRequest"] = ["url": "https://example.com/c/{{chapterId}}/body"]
+        block["counts"] = counts
+        #expect(rejection(module(["search": search, "comments": block])) == nil,
+                "a bodyRequest is accepted")
+        // Like the primary request, the second one must still name the chapter it reads.
+        var noChapter = counts
+        noChapter["bodyRequest"] = ["url": "https://example.com/c/all/body"]
+        block["counts"] = noChapter
+        #expect(rejection(module(["search": search, "comments": block]))
+                == .missingField("comments.counts.bodyRequest.request.url {{chapterId}}"))
+    }
+
+    @Test("段评 counts merge the counts reply and the body reply: real counts, text-matched paragraphs")
+    func countsBodyRequestMerged() async throws {
+        var block = notesBlock()
+        // The primary reply holds real counts but no paragraph text; the body reply holds text.
+        // The items script reads both from the merged object App passes to the rule engine.
+        let items = #"@js:(function(){var m=typeof result==='string'?JSON.parse(result):result;var c=m&&m.counts;c=typeof c==='string'?JSON.parse(c):c;var b=m&&m.body;b=typeof b==='string'?JSON.parse(b):b;var texts=(b&&b.paragraphs)||[];var L=(c&&c.counts)||[];var out=[];for(var i=0;i<L.length;i++){var r=L[i]||{};var n=parseInt(r.n,10);if(isNaN(n)||n<=0)continue;out.push({count:String(n),index:String(i+1),id:String(i+1),quote:texts[i]||''});}return JSON.stringify(out);})()"#
+        let total = #"@js:(function(){var m=typeof result==='string'?JSON.parse(result):result;var b=m&&m.body;b=typeof b==='string'?JSON.parse(b):b;return String(((b&&b.paragraphs)||[]).length);})()"#
+        var counts: [String: Any] = [
+            "request": ["url": "https://example.com/c/{{chapterId}}/counts"],
+            "paragraphCount": total,
+            "list": ["items": items, "count": "$.count", "index": "$.index", "id": "$.id", "quote": "$.quote"],
+        ]
+        counts["bodyRequest"] = ["url": "https://example.com/c/{{chapterId}}/body"]
+        block["counts"] = counts
+
+        let f = try await fixture(["search": search, "comments": block], id: "c.bodyreq")
+        defer { f.cleanUp() }
+        ModuleStub.install([
+            "example.com/s": .json(#"{"books":[{"title":"长夜","author":"某作者","href":"/b/7","id":7}]}"#),
+            "example.com/b/7/chapters": .json(Self.remoteChapters),
+            "example.com/c/a3/counts": .json(#"{"counts":[{"n":12},{"n":0},{"n":7}]}"#),
+            "example.com/c/a3/body": .json(#"{"paragraphs":["风起了","没有评论的段","他推开门走进长夜"]}"#),
+        ])
+        let thread = try #require(await ChapterComments.thread(for: query("第三章 风起"), library: f.library, order: f.order, client: f.client))
+        let notes = await ChapterComments.notes(in: thread, client: f.client)
+        // n=0 的段没有气泡；真实 n=12 / n=7 保留；quote 取正文，用于本地书文本匹配。
+        #expect(notes.counts == [
+            ModuleParagraphCount(paragraph: .init(quote: "风起了", index: 1, id: "1"), count: 12),
+            ModuleParagraphCount(paragraph: .init(quote: "他推开门走进长夜", index: 3, id: "3"), count: 7),
+        ])
+        #expect(notes.paragraphCount == 3)
     }
 
     @Test("a chapter's 段评 counts, 热评 and 作者说 are read by the chapter's id; a part that fails leaves the others")

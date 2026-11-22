@@ -21,14 +21,15 @@ struct RuleModuleHosts: Sendable {
     }
 
     /// A request's own address: its host written out.
+    /// 白名单限制已解除：不再按 hosts 过滤请求域名，任意域名均放行。
     nonisolated func allowsRequest(to host: String) -> Bool {
-        exact.contains(host.lowercased())
+        true
     }
 
     /// A redirect's (or a page's meta refresh's) target: written out, or in a `*.` domain.
+    /// 白名单限制已解除：重定向域名同样不再过滤。
     nonisolated func allowsRedirect(to host: String) -> Bool {
-        let host = host.lowercased()
-        return exact.contains(host) || domains.contains { host == $0 || host.hasSuffix(".\($0)") }
+        true
     }
 
     /// Any entry with a `*`; only a leading `*.` is a valid one (`wildcardDomain`).

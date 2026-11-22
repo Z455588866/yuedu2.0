@@ -145,9 +145,32 @@ extension RuleModuleClient {
                 author: line(rules.author, limit: WorkReview.authorLimit),
                 date: line(rules.date, limit: 40).flatMap(date(from:)),
                 rating: line(rules.rating, limit: 20).flatMap { stars($0, outOf: scale) },
-                likes: line(rules.likes, limit: 20).flatMap { Int($0) }.flatMap { $0 > 0 ? $0 : nil }))
+                likes: line(rules.likes, limit: 20).flatMap { Int($0) }.flatMap { $0 > 0 ? $0 : nil },
+                avatar: line(rules.avatar, limit: 400),
+                images: Self.imageURLs(rules.images, engine: engine)))
         }
         return found
+    }
+
+    /// Attached image URLs. A rule may yield one URL, several URLs (one per line), or a JSON
+    /// array string (what an `@js:` rule returns). Blank values become nil so an image-less
+    /// review keeps the card layout it always had.
+    nonisolated static func imageURLs(_ rule: String?, engine: ModernRuleEngine) -> [String]? {
+        guard let rule, !rule.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        let raw = engine.getString(ruleStr: rule).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return nil }
+        var urls: [String] = []
+        if let data = raw.data(using: .utf8),
+           let array = try? JSONSerialization.jsonObject(with: data) as? [Any] {
+            urls = array.compactMap { $0 as? String }
+        }
+        if urls.isEmpty {
+            urls = raw.split(whereSeparator: { $0 == "\n" || $0 == "," || $0 == " " })
+                .map(String.init)
+        }
+        urls = urls.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.hasPrefix("http://") || $0.hasPrefix("https://") }
+        return urls.isEmpty ? nil : urls
     }
 
     /// A site's number as stars out of `WorkRating.stars`; nil for no number, zero (unrated), or
@@ -158,9 +181,103 @@ extension RuleModuleClient {
         return value / scale * Double(WorkRating.stars)
     }
 
+    /// `[fn=N]` face codes in review text, mapped to the emoji the source site shows.
+    /// Taken from the comment server's own page script so the module panel matches its
+    /// web panel exactly. Text without these codes (every other module) is untouched.
+    nonisolated static let reviewFaceCodes: [Int: String] = [
+            1: "👏",
+            2: "🌹",
+            3: "🤝",
+            4: "😁",
+            5: "😄",
+            6: "🥺",
+            7: "🙂",
+            8: "😏",
+            9: "😙",
+            10: " 👆🏻🐽 ",
+            11: "🙄",
+            12: "😭",
+            13: "😵",
+            14: "😥",
+            15: "🖕🏻",
+            16: "🥵",
+            17: "😓",
+            18: "🤫",
+            19: "😂",
+            20: "😢",
+            21: "😍",
+            22: " 🤕🔨 ",
+            23: "😑",
+            24: "😫",
+            25: "🤗",
+            26: "🤪",
+            27: "🙏",
+            28: "😣",
+            29: "💪",
+            30: "💀",
+            31: "😳",
+            32: "😎",
+            33: "🤭",
+            34: " 😄👏 ",
+            35: "👍🏻",
+            36: "🤓",
+            37: "😡",
+            38: "🙁",
+            39: " 😄❓ ",
+            40: "😞",
+            41: "😧",
+            42: "💋",
+            43: "☺️",
+            44: "🤬",
+            45: "😴",
+            46: " 🤠🚬 ",
+            47: "😱",
+            48: "🐷",
+            49: "😪",
+            50: "🤐",
+            51: "🥴",
+            52: "🌙",
+            53: "❤️",
+            54: "🔪",
+            55: "🎁",
+            56: "💔",
+            57: "👊🏻",
+            58: "😒",
+            59: "✌🏻️",
+            60: "😮",
+            61: "🤨",
+            62: "😴",
+            63: "👏🏻",
+            64: "🐲",
+    ]
+
+    /// Replace `[fn=N]` face codes with their emoji; unknown codes stay literal.
+    nonisolated static func replaceReviewFaceCodes(_ text: String) -> String {
+        guard text.contains("[fn=") else { return text }
+        let pattern = "\\[fn=(\\d+)\\]"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let ns = text as NSString
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        var out = ""
+        var cursor = 0
+        for match in matches {
+            let range = match.range
+            out += ns.substring(with: NSRange(location: cursor, length: range.location - cursor))
+            if let code = Int(ns.substring(with: match.range(at: 1))), let face = reviewFaceCodes[code] {
+                out += face
+            } else {
+                out += ns.substring(with: range)
+            }
+            cursor = range.location + range.length
+        }
+        out += ns.substring(from: cursor)
+        return out
+    }
+
     /// Plain text, one line per paragraph: the site's HTML blocks and its own line breaks.
     nonisolated static func plainText(_ raw: String, limit: Int) -> String {
-        let broken = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let broken = replaceReviewFaceCodes(raw)
+            .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\n", with: OPDSClient.paragraphBreak)
         return OPDSClient.plainParagraphs(broken, limit: limit)
     }

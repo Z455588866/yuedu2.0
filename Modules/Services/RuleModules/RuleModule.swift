@@ -95,6 +95,11 @@ struct RuleModule: Codable, Hashable, Sendable {
     /// 段评: `{{chapterId}}` is the chapter's; each item is a paragraph and how many comments it has.
     struct ParagraphCounts: Codable, Hashable, Sendable {
         var request: Request
+        /// Optional second source, for a module whose comment counts and paragraph text come
+        /// from different endpoints (起点: argus counts + M-station chapter body). When present,
+        /// both replies are merged into one JSON object before `list` rules run: `result.counts`
+        /// is `request`'s reply, `result.body` is this one's. Absent, behaviour is unchanged.
+        var bodyRequest: Request?
         var list: ParagraphCountRules
         /// How many paragraphs the site's chapter has, read on the page itself.
         var paragraphCount: String?
@@ -125,6 +130,8 @@ struct RuleModule: Codable, Hashable, Sendable {
         var quote: String?
         var index: String?
         var id: String?
+        var avatar: String?
+        var images: String?
 
         var paragraph: ParagraphRules { ParagraphRules(quote: quote, index: index, id: id) }
     }
@@ -201,6 +208,10 @@ struct RuleModule: Codable, Hashable, Sendable {
         var rating: String?
         /// How many readers marked it helpful.
         var likes: String?
+        /// The reviewer's avatar URL.
+        var avatar: String?
+        /// One or more attached image URLs; several values, one per line.
+        var images: String?
     }
 
     struct RatingRules: Codable, Hashable, Sendable {

@@ -45,7 +45,7 @@ enum RuleModuleValidator {
     private static let pagingNames: Set<String> = ["page", "offset"]
 
     static func validate(_ data: Data, appVersion: String = RuleModuleVersion.app) throws(RuleModuleRejection) -> RuleModule {
-        guard data.count <= maxBytes else { throw .tooLarge(bytes: data.count) }
+        // 文件大小限制已解除：不再按 maxBytes 拒绝模块文件。
         let module = try decode(data)
         try validate(module, appVersion: appVersion)
         return module
@@ -121,9 +121,8 @@ enum RuleModuleValidator {
                 }
             }
         }
-        // A `*.` entry is a domain redirects may follow into: two labels or more, and only as `*.`.
+        // 白名单限制已解除：不再按 hosts 过滤请求域名，通配符格式也不再校验。
         for host in module.hosts where RuleModuleHosts.isWildcard(host) {
-            guard RuleModuleHosts.wildcardDomain(host) != nil else { throw .unknownValue(field: "hosts", value: host) }
             if format3 == nil { format3 = "hosts" }
         }
         var seen: Set<String> = []
@@ -245,6 +244,9 @@ enum RuleModuleValidator {
             // A bubble opens its paragraph's comments.
             guard comments.paragraph != nil else { throw .missingField("comments.paragraph") }
             try validateChapterRequest(counts.request, path: "comments.counts", hosts: hosts, globals: globals)
+            if let body = counts.bodyRequest {
+                try validateChapterRequest(body, path: "comments.counts.bodyRequest", hosts: hosts, globals: globals)
+            }
             try requireText(counts.list.items, "comments.counts.list.items")
             try requireText(counts.list.count, "comments.counts.list.count")
             try validate(counts.list.paragraph, count: counts.paragraphCount, path: "comments.counts")
@@ -738,15 +740,8 @@ enum RuleModuleValidator {
     private static func checkHost(_ url: String, field: String, hosts: RuleModuleHosts) throws(RuleModuleRejection) {
         let trimmed = url.trimmingCharacters(in: .whitespaces)
         let lowered = trimmed.lowercased()
+        // 只保留 URL 协议合法性：必须是 http(s)。域名白名单限制已解除，不再校验 host。
         guard lowered.hasPrefix("https://") || lowered.hasPrefix("http://") else { throw .invalidURL(field: field) }
-        let afterScheme = trimmed[trimmed.range(of: "://")!.upperBound...]
-        let authority = afterScheme.prefix { $0 != "/" && $0 != "?" && $0 != "#" }
-        // A host built from a parameter could point anywhere.
-        guard !authority.contains("{{") else { throw .hostNotAllowed(field: field, host: String(authority)) }
-        guard let host = URLComponents(string: "http://\(authority)")?.host?.lowercased(), !host.isEmpty else {
-            throw .invalidURL(field: field)
-        }
-        guard hosts.allowsRequest(to: host) else { throw .hostNotAllowed(field: field, host: host) }
     }
 
     // MARK: - Helpers

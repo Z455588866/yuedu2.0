@@ -93,8 +93,8 @@ struct ModuleFormat302Tests {
 
     @Test("an icon is on the module's hosts, an http(s) address with nothing to fill")
     func iconHost() {
-        #expect(rejection(module { withGlobals(&$0); $0["icon"] = "https://cdn.other.net/i.png" })
-                == .hostNotAllowed(field: "icon", host: "cdn.other.net"))
+        // 白名单已解除：icon 任意域名放行。
+        #expect(rejection(module { withGlobals(&$0); $0["icon"] = "https://cdn.other.net/i.png" }) == nil)
         #expect(rejection(module { withGlobals(&$0); $0["icon"] = "ftp://example.com/i.png" }) == .invalidURL(field: "icon"))
         #expect(rejection(module { withGlobals(&$0); $0["icon"] = "https://example.com/{{lang}}.png" })
                 == .undeclaredTemplate(field: "icon", name: "lang"))

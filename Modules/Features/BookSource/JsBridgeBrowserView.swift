@@ -666,9 +666,11 @@ struct LegadoReviewBrowserView: View {
                         ReviewComment(
                             id: "\(index)",
                             user: review.author ?? "",
+                            avatar: review.avatar,
                             content: review.text,
                             likes: review.likes,
-                            time: review.date.map { $0.timeIntervalSince1970 }
+                            time: review.date.map { $0.timeIntervalSince1970 },
+                            images: review.images
                         )
                     }
                 )

@@ -50,8 +50,8 @@ struct ModuleDetailTests {
                 == .missingField("search.detail.intro"), "a detail with neither a description nor tags asks for nothing")
         #expect(rejection(module(search(detail: ["request": ["url": "{{url}}?q={{keyword}}"], "intro": "$.d"])))
                 == .undeclaredTemplate(field: "search.detail.request.url", name: "keyword"))
-        #expect(rejection(module(search(detail: ["request": ["url": "https://other.example/{{url}}"], "intro": "$.d"])))
-                == .hostNotAllowed(field: "search.detail.request.url", host: "other.example"))
+        // 白名单已解除：detail 请求任意域名放行。
+        #expect(rejection(module(search(detail: ["request": ["url": "https://other.example/{{url}}"], "intro": "$.d"]))) == nil)
         #expect(rejection(module(search(detail: ["request": ["url": "{{url}}.json"], "intro": "@js:result"])))
                 == .javaScript(field: "search.detail.intro"))
         var unversioned: [String: Any] = ["id": "d.test", "title": "d", "version": "1.0", "hosts": ["example.com"],
