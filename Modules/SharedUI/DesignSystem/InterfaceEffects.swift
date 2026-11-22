@@ -573,6 +573,65 @@ extension View {
     ) -> some View {
         modifier(GlassButtonChromeModifier(shape: shape, schemeOverride: scheme, onCard: onCard, tint: tint))
     }
+
+    /// 顶部栏按钮：铺**和探索页工具栏同一块**玻璃（`glassEffect(.regular)`，
+    /// 旧系统 `regularMaterial`），透明度由系统材质决定，不再手绘白雾 ——
+    /// 手绘的雾压在纸面上就是一整块白，和探索页对不上。
+    ///
+    /// 只给系统不垫玻璃的位置用（首页、书架的纸面页眉）。走系统工具栏的页面
+    /// （探索、书架的分组页）不要用它：那里系统自己垫玻璃，再叠一层会互采糊掉。
+    /// - Parameter scheme: 不传就取当前环境的深浅色。
+    func barButtonGlass<SurfaceShape: InsettableShape>(
+        in shape: SurfaceShape,
+        scheme: ColorScheme? = nil
+    ) -> some View {
+        modifier(BarButtonGlassModifier(shape: shape, schemeOverride: scheme))
+    }
+}
+
+private struct BarButtonGlassModifier<SurfaceShape: InsettableShape>: ViewModifier {
+    let shape: SurfaceShape
+    let schemeOverride: ColorScheme?
+
+    @Bindable private var settings = GlobalSettings.shared
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var environmentScheme
+
+    private var scheme: ColorScheme { schemeOverride ?? environmentScheme }
+
+    /// 跟 `glassButtonChrome` 同一个总闸：关毛玻璃或系统要求降低透明度时不画玻璃。
+    private var usesGlass: Bool {
+        settings.interfaceFrostedGlass && !reduceTransparency
+    }
+
+    /// 兜底填充：和 glassButtonChrome 的 plainFill 同值，保持同一层的观感。
+    private var plainFill: Color {
+        Color.white.opacity(scheme == .dark ? 0.10 : 0.50)
+    }
+
+    func body(content: Content) -> some View {
+        if usesGlass {
+            #if compiler(>=6.2)
+            if #available(iOS 26.0, *) {
+                content
+                    .contentShape(shape)
+                    .glassEffect(.regular.interactive(), in: shape)
+            } else {
+                content
+                    .contentShape(shape)
+                    .background(.regularMaterial, in: shape)
+            }
+            #else
+            content
+                .contentShape(shape)
+                .background(.regularMaterial, in: shape)
+            #endif
+        } else {
+            content
+                .contentShape(shape)
+                .background(plainFill, in: shape)
+        }
+    }
 }
 
 private struct GlassButtonChromeModifier<SurfaceShape: InsettableShape>: ViewModifier {

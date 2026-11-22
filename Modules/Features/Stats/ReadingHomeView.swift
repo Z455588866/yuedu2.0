@@ -274,7 +274,7 @@ struct ReadingHomeView: View {
                 .foregroundStyle(PaperPalette.textPrimary(scheme))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .glassButtonChrome(in: Capsule(), scheme: scheme)
+                .barButtonGlass(in: Capsule(), scheme: scheme)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("home_page_menu")
@@ -293,7 +293,7 @@ struct ReadingHomeView: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(PaperPalette.textPrimary(scheme))
                     .frame(width: 36, height: 36)
-                    .glassButtonChrome(in: Circle(), scheme: scheme)
+                    .barButtonGlass(in: Circle(), scheme: scheme)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("home_more_menu")

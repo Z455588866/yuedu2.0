@@ -369,7 +369,7 @@ struct ShelfPaperView: View {
                         .foregroundStyle(ShelfInk.strong(scheme))
                         .padding(.horizontal, 16)
                         .padding(.vertical, 9)
-                        .glassCapsule(scheme)
+                        .barGlassCapsule(scheme)
                 }
                 .buttonStyle(.plain)
             } else {
@@ -402,7 +402,7 @@ struct ShelfPaperView: View {
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(ShelfInk.strong(scheme))
                         .frame(width: 38, height: 38)
-                        .glassCircle(scheme)
+                        .barGlassCircle(scheme)
                 }
                 .accessibilityLabel(localized("书架选项"))
             }
@@ -1186,6 +1186,15 @@ private extension View {
 
     func glassCircle(_ scheme: ColorScheme) -> some View {
         glassButtonChrome(in: Circle(), scheme: scheme)
+    }
+
+    /// 顶部栏用：和探索页工具栏同一块玻璃（透明度跟系统材质走）。
+    func barGlassCapsule(_ scheme: ColorScheme) -> some View {
+        barButtonGlass(in: Capsule(), scheme: scheme)
+    }
+
+    func barGlassCircle(_ scheme: ColorScheme) -> some View {
+        barButtonGlass(in: Circle(), scheme: scheme)
     }
 }
 
