@@ -840,7 +840,7 @@ struct ReadingHomeView: View {
                 .font(.system(size: 11.5)).foregroundStyle(PaperPalette.textTertiary(scheme))
                 .padding(.top, 6)
 
-            // 半圆弧：从左到右的上半圆，左端一个黑点
+            // 半圆弧：从左到右的上半圆，只画弧本身
             ZStack(alignment: .top) {
                 ArcShape()
                     .stroke(PaperPalette.hairline(scheme).opacity(0.55), style: StrokeStyle(lineWidth: 13, lineCap: .round))
@@ -857,10 +857,6 @@ struct ReadingHomeView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(.top, 34)
-                // 弧左端黑点
-                Circle().fill(Color(red: 0.09, green: 0.09, blue: 0.09))
-                    .frame(width: 15, height: 15)
-                    .offset(x: -136, y: 62)
             }
             .frame(height: 150)
             .padding(.top, 4)
@@ -979,6 +975,9 @@ struct ReadingHomeView: View {
         .padding(12)
         .frame(width: 264)
         .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 20, style: .continuous), fill: PaperPalette.card(scheme))
+        // 整张卡都能点开书，不必先点进详情；右侧耳机仍走听书。
+        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .onTapGesture { openBook(book) }
     }
 
     // MARK: - ③ 手账（journal）：统计流
@@ -1160,6 +1159,9 @@ struct ReadingHomeView: View {
         .padding(12)
         .frame(maxWidth: .infinity)
         .interfaceCardSurface(in: RoundedRectangle(cornerRadius: 20, style: .continuous), fill: PaperPalette.card(scheme))
+        // 顶部这条继续阅读同样整卡可点，直接接着读；右侧「…」仍是原来的菜单入口。
+        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .onTapGesture { openBook(book) }
         .padding(.horizontal, 4)
     }
 
