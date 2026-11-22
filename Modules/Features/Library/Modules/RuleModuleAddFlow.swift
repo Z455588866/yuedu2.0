@@ -127,7 +127,7 @@ private struct RuleModuleAddFlowModifier: ViewModifier {
             .sheet(isPresented: $flow.showsSheet) {
                 RuleModuleImportSheet(model: flow.model, title: localized("新增模组"), asksForAddress: flow.asksForAddress)
             }
-            .fileImporter(isPresented: $flow.showsFileImporter, allowedContentTypes: RuleModuleAddFlow.contentTypes) {
+            .copiedFileImporter(isPresented: $flow.showsFileImporter, allowedContentTypes: RuleModuleAddFlow.contentTypes) {
                 flow.picked($0)
             }
             .moduleImportPaywall(isPresented: $flow.showsPaywall)
