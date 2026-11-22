@@ -35,6 +35,8 @@ enum HomeSaveIssue: String, Sendable {
 ///   (`HomeDefaultsStoreMigration`).
 /// - 预设's official modules' lists follow the language, as the home reads it
 ///   (`HomeDefaultsLanguageSwap`).
+/// - Since 2026-11-22 the home starts empty: nothing is shown until the reader adds it with
+///   新增栏目 (`defaultsEmpty20261122` empties an untouched 预设 once).
 /// - 为你推荐, deleted 2026-10-27, is taken off every 首页配置 that still has it
 ///   (`removeDeletedForYou`).
 @MainActor
@@ -123,19 +125,24 @@ final class HomePageStore: ObservableObject {
             let restocked = applyStoreDefaultsOnce(to: &home, context: context)
             // After it: a 预设 it just made is today's page already, which this does not recognise.
             let genres = applyGenresDefaultsOnce(to: &home, context: context)
-            if followLanguage(in: &home, context: context) || restocked || genres {
+            let emptied = applyEmptyDefaultsOnce(to: &home)
+            if followLanguage(in: &home, context: context) || restocked || genres || emptied {
                 self.home = home
                 write()
             }
             return HomePage(sections: home.sections(of: home.selectedID))
         }
-        let defaultPage = HomePageDefaults.page(for: context)
+        // The reader chooses every section: a fresh install opens on an empty home with
+        // 编辑首页 / 新增栏目 ready in the bar. The historical defaults stay in
+        // `HomePageDefaults.page` for migrations and tests, but are no longer shown by default.
+        let defaultPage = HomePage(sections: [])
         // They have the 2026-10-25 layouts and the 2026-11-14 page already; a reader who changes
         // them keeps theirs.
         if appliesDefaultsRhythmOnce, !isReadOnly {
             defaults.set(true, forKey: Self.defaultsRhythmKey)
             defaults.set(true, forKey: Self.defaultsStoreKey)
             defaults.set(true, forKey: Self.defaultsGenresKey)
+            defaults.set(true, forKey: Self.defaultsEmptyKey)
         }
         var made = HomeConfigurations(sections: defaultPage.sections)
         made.defaultsLanguages = languages
@@ -182,7 +189,9 @@ final class HomePageStore: ObservableObject {
                              defaults context: HomePageDefaults.Context) {
         let sections = switch template {
         case .blank: [HomeSection]()
-        case .defaults: HomePageDefaults.page(for: context).sections
+        // 预设配置 used to copy the app's defaults; now both templates start empty, and the
+        // reader adds the sections they want. `context` stays in the signature for callers.
+        case .defaults: [HomeSection]()
         }
         change { home in
             let id = home.create(named: name, sections: sections)
@@ -422,6 +431,32 @@ final class HomePageStore: ObservableObject {
             "before": "\(before)", "sections": "\(home.sections.count)", "mode": context.mode.rawValue,
             "language": context.languages.joined(separator: ","),
         ])
+        return true
+    }
+
+    // MARK: - The empty home (2026-11-22)
+
+    /// Set once 预设 has been looked at for the empty home. Installs that already ran the
+    /// earlier defaults migrations have their keys set, so this needs its own.
+    static let defaultsEmptyKey = "home.defaultsEmpty20261122"
+
+    /// An 预设 the reader never touched is the app's old default page; empty it once so the
+    /// reader picks their own sections. A page they edited, added to or deleted from is theirs
+    /// and is left alone. Not on a read-only file. Returns whether 预设 changed.
+    private func applyEmptyDefaultsOnce(to home: inout HomeConfigurations) -> Bool {
+        guard appliesDefaultsRhythmOnce, !isReadOnly, !defaults.bool(forKey: Self.defaultsEmptyKey) else { return false }
+        defaults.set(true, forKey: Self.defaultsEmptyKey)
+        guard !home.defaultsDeleted,
+              HomeDefaultsGenresMigration.recognises(home.sections)
+                || HomeDefaultsStoreMigration.recognises(home.sections) else {
+            AppLogger.cache("⟐ 预设 keeps its sections: the reader changed them", context: [
+                "sections": "\(home.sections.count)", "defaultsDeleted": "\(home.defaultsDeleted)",
+            ])
+            return false
+        }
+        let before = home.sections.count
+        home.sections = []
+        AppLogger.cache("⟐ 预设 starts empty; the reader adds its sections", context: ["before": "\(before)"])
         return true
     }
 
