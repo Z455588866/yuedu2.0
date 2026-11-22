@@ -59,7 +59,7 @@ struct BookSourceCheckOptionsView: View {
                         .foregroundStyle(DSColor.accent)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, DSSpacing.md)
-                        .glassButtonChrome(in: Capsule(), tint: DSColor.accent)
+                        .barButtonGlass(in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .disabled(sourceCount == 0)

@@ -1181,11 +1181,11 @@ private extension View {
     /// 统一走「按钮玻璃底」：不发光、不描主题色边 ——
     /// floatingSurface 会叠光晕，光晕开着时按钮边缘会浮出一圈主题色，就是「异色边」。
     func glassCapsule(_ scheme: ColorScheme) -> some View {
-        glassButtonChrome(in: Capsule(), scheme: scheme)
+        barButtonGlass(in: Capsule(), scheme: scheme)
     }
 
     func glassCircle(_ scheme: ColorScheme) -> some View {
-        glassButtonChrome(in: Circle(), scheme: scheme)
+        barButtonGlass(in: Circle(), scheme: scheme)
     }
 
     /// 顶部栏用：和探索页工具栏同一块玻璃（透明度跟系统材质走）。

@@ -1277,7 +1277,7 @@ struct WebTOCSheet: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                         .foregroundStyle(DSColor.accent)
-                        .glassButtonChrome(in: RoundedRectangle(cornerRadius: 14, style: .continuous), tint: DSColor.accent)
+                        .barButtonGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)

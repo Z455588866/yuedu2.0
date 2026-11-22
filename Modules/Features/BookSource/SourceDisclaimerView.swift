@@ -77,7 +77,7 @@ struct SourceDisclaimerView: View {
                 .foregroundStyle(DSColor.accent)
                 .frame(maxWidth: .infinity)
                 .frame(height: 52)
-                .glassButtonChrome(in: Capsule(), tint: DSColor.accent)
+                .barButtonGlass(in: Capsule())
         }
         .buttonStyle(.plain)
         .padding(.horizontal, DSSpacing.xl)

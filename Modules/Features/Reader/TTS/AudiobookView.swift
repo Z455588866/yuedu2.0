@@ -384,7 +384,7 @@ struct AudiobookReaderView: View {
                 .lineLimit(1)
                 .padding(.horizontal, DSLayout.audiobookPlayerPillHorizontalPadding)
                 .frame(height: DSLayout.audiobookPlayerPillHeight)
-                .background(Capsule().fill(DSColor.audiobookPlayerChip))
+                .barButtonGlass(in: Capsule())
                 .frame(minHeight: DSLayout.minimumTapTarget)
                 .contentShape(Rectangle())
         }
@@ -431,7 +431,7 @@ struct AudiobookReaderView: View {
             .font(DSFont.fixed(size: DSLayout.audiobookPlayerPillFontSize, weight: .bold))
             .foregroundStyle(DSColor.audiobookPlayerPrimary)
             .frame(width: DSLayout.audiobookPlayerMoreButtonSide, height: DSLayout.audiobookPlayerMoreButtonSide)
-            .background(Circle().fill(DSColor.audiobookPlayerChip))
+            .barButtonGlass(in: Circle())
             .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
             .contentShape(Rectangle())
     }

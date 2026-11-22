@@ -854,7 +854,7 @@ struct BookSourceListView: View {
                 Label(localized("汇入来源配置 JSON"), systemImage: "square.and.arrow.down")
                     .font(DSFont.headline).foregroundStyle(DSColor.accent)
                     .padding(.horizontal, 28).padding(.vertical, 13)
-                    .glassButtonChrome(in: Capsule(), tint: DSColor.accent)
+                    .barButtonGlass(in: Capsule())
             }
             Spacer()
         }

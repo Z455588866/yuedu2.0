@@ -86,7 +86,7 @@ struct UserDetailView: View {
                                     .foregroundStyle(DSColor.accent)
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 12)
-                                    .glassButtonChrome(in: RoundedRectangle(cornerRadius: 12, style: .continuous), tint: DSColor.accent)
+                                    .barButtonGlass(in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
                             .padding(.top, 8)
                         }

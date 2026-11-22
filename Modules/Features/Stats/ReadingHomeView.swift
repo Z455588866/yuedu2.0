@@ -547,7 +547,7 @@ struct ReadingHomeView: View {
                 Text(localized("新建阅读计划"))
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(PaperPalette.textSecondary(scheme))
                     .frame(maxWidth: .infinity).padding(.vertical, 12)
-                    .background(Capsule().fill(PaperPalette.iconTile(scheme)))
+                    .barButtonGlass(in: Capsule(), scheme: scheme)
             }
             .buttonStyle(.plain)
         }
@@ -690,7 +690,7 @@ struct ReadingHomeView: View {
                 Text(localized("继续阅读 · 读本书"))
                     .font(.system(size: 14, weight: .semibold)).foregroundStyle(PaperPalette.textPrimary(scheme))
                     .frame(maxWidth: .infinity).padding(.vertical, 13)
-                    .glassButtonChrome(in: Capsule(), scheme: scheme)
+                    .barButtonGlass(in: Capsule(), scheme: scheme)
             }
             .buttonStyle(.plain)
         }
@@ -869,7 +869,7 @@ struct ReadingHomeView: View {
                     }
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 12)
-                .glassButtonChrome(in: Capsule(), scheme: scheme)
+                .barButtonGlass(in: Capsule(), scheme: scheme)
             }
             .buttonStyle(.plain)
             .padding(.top, 2)
@@ -936,7 +936,7 @@ struct ReadingHomeView: View {
                     }
                     .font(.system(size: 14, weight: .semibold)).foregroundStyle(PaperPalette.textPrimary(scheme))
                     .frame(maxWidth: .infinity).padding(.vertical, 13)
-                    .glassButtonChrome(in: Capsule(), scheme: scheme)
+                    .barButtonGlass(in: Capsule(), scheme: scheme)
                 }
                 .buttonStyle(.plain)
                 Button { listen(book) } label: {
@@ -946,7 +946,7 @@ struct ReadingHomeView: View {
                     }
                     .font(.system(size: 14, weight: .semibold)).foregroundStyle(PaperPalette.textPrimary(scheme))
                     .frame(maxWidth: .infinity).padding(.vertical, 13)
-                    .background(Capsule().fill(PaperPalette.iconTile(scheme)))
+                    .barButtonGlass(in: Capsule(), scheme: scheme)
                 }
                 .buttonStyle(.plain)
             }
@@ -968,7 +968,7 @@ struct ReadingHomeView: View {
             Button { listen(book) } label: {
                 Image(systemName: "headphones").font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(PaperPalette.textSecondary(scheme))
-                    .frame(width: 34, height: 34).background(Circle().fill(PaperPalette.iconTile(scheme)))
+                    .frame(width: 34, height: 34).barButtonGlass(in: Circle(), scheme: scheme)
             }
             .buttonStyle(.plain)
         }
@@ -1197,7 +1197,7 @@ struct ReadingHomeView: View {
                     }
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 13)
-                .glassButtonChrome(in: Capsule(), scheme: scheme)
+                .barButtonGlass(in: Capsule(), scheme: scheme)
             }
             .buttonStyle(.plain)
             HStack(spacing: 8) {
@@ -1480,7 +1480,7 @@ struct ReadingHomeView: View {
         .padding(.bottom, 6)
     }
 
-    /// 单个快捷值。选中态只是一层淡强调色玻璃，不是实心色块。
+    /// 单个快捷值。统一用顶部同款透明玻璃，选中态靠文字主题色区分，不是实心色块。
     private func goalQuickPick(_ minutes: Int) -> some View {
         let selected = draftGoalMinutes == minutes
         let textColor = selected ? DSColor.accent : PaperPalette.textSecondary(scheme)
@@ -1493,11 +1493,7 @@ struct ReadingHomeView: View {
                 .foregroundStyle(textColor)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
-                .glassButtonChrome(
-                    in: Capsule(),
-                    scheme: scheme,
-                    tint: selected ? DSColor.accent : nil
-                )
+                .barButtonGlass(in: Capsule(), scheme: scheme)
         }
         .buttonStyle(.plain)
     }

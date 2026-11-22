@@ -1902,7 +1902,7 @@ struct EmptyLibraryView: View {
                 Label(localized("添加书籍"), systemImage: "plus")
                     .font(DSFont.headline).foregroundStyle(DSColor.accent)
                     .padding(.horizontal, DSSpacing.xxl).padding(.vertical, 14)
-                    .glassButtonChrome(in: Capsule(), tint: DSColor.accent)
+                    .barButtonGlass(in: Capsule())
             }
             NavigationLink {
                 SearchView()
