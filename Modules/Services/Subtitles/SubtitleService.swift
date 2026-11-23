@@ -113,7 +113,7 @@ enum SubtitleService {
         // Drop a trailing resolution/source/language tag chunk after a dot or bracket.
         var title = base
         let separators = CharacterSet(charactersIn: "【[（(")
-        if let cut = title.firstIndex(where: { separators.contains($0) }) {
+        if let cut = title.firstIndex(where: { $0.unicodeScalars.contains { separators.contains($0) } }) {
             let head = String(title[..<cut]).trimmingCharacters(in: .whitespaces)
             if head.count >= 2 { title = head }
         }

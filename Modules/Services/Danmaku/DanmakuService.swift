@@ -156,7 +156,7 @@ enum DanmakuService {
             s = String(s[..<ext])
         }
         let separators = CharacterSet(charactersIn: "【[（(／/")
-        if let cut = s.firstIndex(where: { separators.contains($0) }) {
+        if let cut = s.firstIndex(where: { $0.unicodeScalars.contains { separators.contains($0) } }) {
             let head = String(s[..<cut]).trimmingCharacters(in: .whitespaces)
             if head.count >= 2 { s = head }
         }
