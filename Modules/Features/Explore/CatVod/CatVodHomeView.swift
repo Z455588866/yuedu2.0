@@ -215,7 +215,7 @@ struct CatVodHomeView: View {
         guard let bundle = currentBundleURL, let site = selectedSite else { return }
         do {
             let playback = try await CatVodService.shared.player(bundleURL: bundle, site: site, episode: episode)
-            guard let url = URL(string: playback.url) else { return }
+            guard let urlString = playback.url, let url = URL(string: urlString) else { return }
             await MainActor.run {
                 let headers = playback.header ?? [:]
                 CatVodPlayerPresenter.present(url: url, headers: headers,

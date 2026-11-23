@@ -121,9 +121,9 @@ final class CatVodService {
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200...299).contains(status) else {
-            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
-                ?? String(data: data, encoding: .utf8)?.prefix(120) ?? ""
-            throw CatVodError.http(status, String(message))
+            let serverMessage = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
+            let rawMessage = String(data: data, encoding: .utf8).map { String($0.prefix(120)) } ?? ""
+            throw CatVodError.http(status, serverMessage ?? rawMessage)
         }
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw CatVodError.emptyResponse
