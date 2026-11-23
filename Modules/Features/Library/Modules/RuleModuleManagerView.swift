@@ -24,6 +24,11 @@ struct RuleModuleManagerView: View {
     @Environment(\.ruleModuleAddFlow) private var addFlow
     @AppStorage(ReaderChapterCommentDecorator.enabledKey) private var showsModuleComments = true
     @ObservedObject private var subscriptions = SubscriptionStore.shared
+    /// Danmaku sources live as their own category on 模组; the store is @Observable.
+    @State private var danmakuStore = DanmakuSourceStore.shared
+    /// Imported subtitle files and online subtitle sources, another category on 模组.
+    @State private var subtitleStore = SubtitleStore.shared
+    @State private var onlineSubtitleStore = OnlineSubtitleSourceStore.shared
     /// Once per visit: back from a repository's page, the indexes are not read again.
     @State private var hasLoaded = false
     @State private var pendingUnsubscription: RuleModuleRepositoryModel.Repository?
@@ -79,6 +84,30 @@ struct RuleModuleManagerView: View {
             }
             .interfaceSectionSurface()
 
+            // 弹幕源：模组页里的独立分类，与模组来源分开，承载导入与开关。
+            Section {
+                NavigationLink {
+                    DanmakuSourceSettingsView()
+                } label: {
+                    RuleModuleOriginRow(title: localized("弹幕源"), systemImage: "bubble.left.and.bubble.right.fill",
+                                        subtitle: localized("导入后播放视频自动匹配弹幕"), origin: localized("汇入"),
+                                        count: danmakuStore.sources.isEmpty ? nil : danmakuStore.sources.count)
+                }
+                .accessibilityIdentifier("modules.danmaku.sources")
+
+                NavigationLink {
+                    SubtitleSourceSettingsView()
+                } label: {
+                    RuleModuleOriginRow(title: localized("字幕"), systemImage: "captions.bubble.fill",
+                                        subtitle: localized("导入在线字幕源或字幕文件，播放自动匹配"), origin: localized("汇入"),
+                                        count: subtitleCount == 0 ? nil : subtitleCount)
+                }
+                .accessibilityIdentifier("modules.subtitles")
+            } footer: {
+                Text(localized("弹幕源为弹弹play兼容接口；字幕源为 thesubtitledb 兼容接口，也可导入本地 .srt/.vtt 文件。都在播放视频时按片名自动匹配。")).dsSectionFooter()
+            }
+            .interfaceSectionSurface()
+
             // Shown once a module has comments to draw: without one the switch does nothing.
             if library.modules.contains(where: { $0.module.comments != nil }) {
                 Section {
@@ -112,6 +141,11 @@ struct RuleModuleManagerView: View {
             await library.loadIfNeeded()
             await repositories.load()
         }
+    }
+
+    /// Online sources plus local subtitle files, shown as one count on the 字幕 row.
+    private var subtitleCount: Int {
+        onlineSubtitleStore.sources.count + subtitleStore.entries.count
     }
 
     private func subtitle(of repository: RuleModuleRepositoryModel.Repository) -> String {

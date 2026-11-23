@@ -30,6 +30,13 @@ struct VideoPlayerView: View {
     /// Bumped by every interaction; the controls hide a while after the last one.
     @State private var interaction = 0
     @State private var showsEpisodes = false
+    /// Danmaku state: source, toggle, loaded track. Driven by the playing video's title.
+    @State private var danmaku = DanmakuController()
+    @State private var danmakuSources = DanmakuSourceStore.shared
+    /// Subtitle state: toggle, active local entry or online source. Driven by the video's title.
+    @State private var subtitle = SubtitleController()
+    @State private var subtitleStore = SubtitleStore.shared
+    @State private var onlineSubtitleSources = OnlineSubtitleSourceStore.shared
     /// The time under the finger while the timeline is dragged.
     @State private var scrubTime: Double?
     /// A drag on the picture in progress.
@@ -46,6 +53,17 @@ struct VideoPlayerView: View {
                     .ignoresSafeArea()
                     .accessibilityHidden(true)
                 gestureSurface(controller)
+                // Danmaku sits above the picture and gestures but below the control chrome. It
+                // never takes touches, so seek/long-press/tap gestures keep working underneath.
+                if danmaku.enabled, let track = danmaku.track {
+                    DanmakuOverlay(player: controller.player, track: track, opacity: danmaku.opacity)
+                        .ignoresSafeArea()
+                }
+                // Subtitles sit just above the danmaku, still below the control chrome.
+                if subtitle.enabled, let entry = subtitle.activeEntry {
+                    SubtitleOverlay(player: controller.player, entry: entry, opacity: 1)
+                        .ignoresSafeArea()
+                }
                 if showsControls {
                     controls(controller)
                         .transition(.opacity)
@@ -71,6 +89,27 @@ struct VideoPlayerView: View {
             self.controller = controller
             turn(to: .landscape)
             controller.start()
+            attachDanmaku(controller)
+            attachSubtitle(controller)
+        }
+        // Re-match when the episode changes (auto-advance, or picking from the episode sheet).
+        .onChange(of: controller?.chapterIndex) { _, _ in
+            guard let controller else { return }
+            attachDanmaku(controller)
+            attachSubtitle(controller)
+        }
+        .onChange(of: controller?.phase) { _, phase in
+            if phase == nil {
+                danmaku.stop()
+                subtitle.stop()
+            }
+        }
+        // Pick up subtitles or online sources imported while the player was open.
+        .onChange(of: subtitleStore.entries) { _, _ in
+            subtitle.libraryDidChange()
+        }
+        .onChange(of: onlineSubtitleSources.sources) { _, _ in
+            subtitle.libraryDidChange()
         }
         .onChange(of: controller?.pictureSize) { _, size in
             guard let size else { return }
@@ -121,6 +160,18 @@ struct VideoPlayerView: View {
         case .link(let stream, let title):
             VideoPlaybackController(link: stream, title: title)
         }
+    }
+
+    /// Feeds the danmaku matcher the current video's name and episode number.
+    private func attachDanmaku(_ controller: VideoPlaybackController) {
+        let number = DanmakuEpisodeNumber.from(controller.episodeTitle)
+        danmaku.attach(title: controller.book.title, episodeNumber: number)
+    }
+
+    /// Feeds the subtitle matcher the same title and episode number (as an Int).
+    private func attachSubtitle(_ controller: VideoPlaybackController) {
+        let number = DanmakuEpisodeNumber.from(controller.episodeTitle).flatMap(Int.init)
+        subtitle.attach(title: controller.book.title, episodeNumber: number)
     }
 
     /// Whether the player turns its window: an iPhone's only. An iPad's window is the size the
@@ -259,6 +310,26 @@ struct VideoPlayerView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
+            DanmakuControls(
+                enabled: Binding(get: { danmaku.enabled }, set: { danmaku.setEnabled($0) }),
+                selectedSourceID: Binding(
+                    get: { danmaku.selectedSourceID },
+                    set: { danmaku.selectedSourceID = $0; danmaku.reload() }
+                ),
+                sources: danmakuSources.enabledSources,
+                status: danmaku.status
+            )
+            SubtitleControls(
+                enabled: Binding(get: { subtitle.enabled }, set: { subtitle.setEnabled($0) }),
+                selectedEntryID: Binding(
+                    get: { subtitle.selectedEntryID },
+                    set: { subtitle.selectedEntryID = $0 }
+                ),
+                entries: subtitleStore.enabledEntries,
+                sources: onlineSubtitleSources.enabledSources,
+                status: subtitle.status,
+                onSelect: { subtitle.resolve() }
+            )
             speedMenu(controller)
             // The system's button names itself to VoiceOver.
             AirPlayButton()
