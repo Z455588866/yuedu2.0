@@ -9,12 +9,25 @@ struct SubtitleOverlay: View {
     let clock: PlaybackClock
     let entry: SubtitleEntry
     let opacity: Double
+    /// Blank the video's burned-in subtitle area so our external track replaces it instead of
+    /// showing two lines stacked (common in short dramas that bake Chinese/English subs in).
+    let coverBuiltin: Bool
 
     var body: some View {
         let now = clock.time
         return GeometryReader { geo in
             let visible = cues(at: now)
+            let inset = bottomInset(geo.size.height)
             ZStack(alignment: .bottom) {
+                // An opaque strip across the bottom covers the burn-in subtitle behind it. It is
+                // tall enough to clear the two burn-in lines and the inset our own text sits at.
+                // Drawn whenever coverBuiltin is on, even between cues, so the burn-in never
+                // flickers back through while a gap plays.
+                if coverBuiltin {
+                    Rectangle()
+                        .fill(Color.black)
+                        .frame(width: geo.size.width, height: coverHeight(inset))
+                }
                 if !visible.isEmpty {
                     VStack(spacing: 2) {
                         ForEach(visible, id: \.start) { cue in
@@ -28,8 +41,10 @@ struct SubtitleOverlay: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
-                    .padding(.bottom, bottomInset(geo.size.height))
+                    // Opaque backing so even with coverBuiltin off the text stays legible.
+                    .background(Color.black.opacity(coverBuiltin ? 1 : 0.55),
+                                in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.bottom, inset)
                     .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
@@ -38,6 +53,12 @@ struct SubtitleOverlay: View {
             .opacity(opacity)
         }
         .allowsHitTesting(false)
+    }
+
+    /// Height of the black strip that hides the burn-in: from the screen bottom up past where our
+    /// own text sits, plus room for the two burn-in lines it replaces.
+    private func coverHeight(_ inset: Double) -> Double {
+        inset + 96
     }
 
     /// Cues whose window contains `now`. Subtitles are sorted by time; normally one is active,
@@ -69,6 +90,7 @@ struct SubtitleControls: View {
     let sources: [OnlineSubtitleSource]
     let status: String
     let matched: Bool
+    @Binding var coverBuiltin: Bool
     let onSelect: () -> Void
     let onRetry: () -> Void
 
@@ -90,6 +112,9 @@ struct SubtitleControls: View {
                     Text(status).font(.caption).foregroundStyle(.secondary)
                 }
                 Divider()
+                Toggle(isOn: $coverBuiltin) {
+                    Label(localized("遮盖原字幕"), systemImage: "rectangle.bottomthird.inset.filled")
+                }
                 Picker(localized("字幕"), selection: $selectedEntryID) {
                     Text(localized("自动匹配")).tag("")
                     if !sources.isEmpty {

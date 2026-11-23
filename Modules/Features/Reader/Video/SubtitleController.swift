@@ -13,11 +13,19 @@ final class SubtitleController {
         static let enabled = "yd_subtitle_enabled"
         /// "" = auto-match, "src:<id>" = pinned online source, otherwise a local entry id.
         static let selection = "yd_subtitle_entry"
+        /// Whether to blank the video's burn-in/built-in subtitle area before drawing ours.
+        static let coverBuiltin = "yd_subtitle_cover_builtin"
     }
     private static let sourcePrefix = "src:"
 
     var enabled: Bool {
         didSet { defaults.set(enabled, forKey: Keys.enabled) }
+    }
+    /// Draw an opaque bar over the video's own (burned-in) subtitle so our external track replaces
+    /// it instead of stacking two lines. Defaults to on; users can switch it off for videos with
+    /// no built-in subtitles.
+    var coverBuiltin: Bool {
+        didSet { defaults.set(coverBuiltin, forKey: Keys.coverBuiltin) }
     }
     /// The user's pick. Empty means "auto-match"; a `src:` value pins an online source; any other
     /// value pins one imported local entry. Reuses the old key so existing preferences survive.
@@ -39,6 +47,13 @@ final class SubtitleController {
         self.defaults = defaults
         self.enabled = defaults.bool(forKey: Keys.enabled)
         self.selectedEntryID = defaults.string(forKey: Keys.selection) ?? ""
+        // Default on: most short dramas carry a burn-in subtitle that the external track should
+        // replace. `object(forKey:)` distinguishes "never set" from an explicit false.
+        if defaults.object(forKey: Keys.coverBuiltin) == nil {
+            self.coverBuiltin = true
+        } else {
+            self.coverBuiltin = defaults.bool(forKey: Keys.coverBuiltin)
+        }
     }
 
     /// Starts matching for a video. The title may arrive before chapters are ready, so the caller

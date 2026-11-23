@@ -65,7 +65,8 @@ struct VideoPlayerView: View {
                 }
                 // Subtitles sit just above the danmaku, still below the control chrome.
                 if subtitle.enabled, let entry = subtitle.activeEntry {
-                    SubtitleOverlay(clock: clock, entry: entry, opacity: 1)
+                    SubtitleOverlay(clock: clock, entry: entry, opacity: 1,
+                                    coverBuiltin: subtitle.coverBuiltin)
                         .ignoresSafeArea()
                 }
                 if showsControls {
@@ -340,6 +341,10 @@ struct VideoPlayerView: View {
                 sources: onlineSubtitleSources.enabledSources,
                 status: subtitle.status,
                 matched: subtitle.activeEntry != nil,
+                coverBuiltin: Binding(
+                    get: { subtitle.coverBuiltin },
+                    set: { subtitle.coverBuiltin = $0 }
+                ),
                 onSelect: { subtitle.resolve() },
                 onRetry: { subtitle.resolve() }
             )
