@@ -20,7 +20,7 @@ export async function startMobileGateway(bridge, dependencies = {}) {
     // engine starts once and is reused, because a cold start means download,
     // compile and server boot for every switch. The heap cap per worker keeps the
     // app inside the jetsam budget; idle only retires a session after half an hour.
-    catVodMaxSessions: 5, catVodIdleMs: 30 * 60 * 1000,
+    catVodMaxSessions: 4, catVodIdleMs: 30 * 60 * 1000,
     // The runner enforces short per-action budgets (browse 25s, detail/search
     // 30s, play 90s). This is only the outer backstop for a wedged child
     // process, so it just has to clear the longest one: 150s meant a stuck

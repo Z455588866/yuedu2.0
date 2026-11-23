@@ -351,7 +351,7 @@ struct CatVodHomeView: View {
     /// inside the jetsam budget, so this is deliberately not a fan-out.
     private func warmUpOtherSources() {
         let current = selectedSourceID
-        let targets = Array(sources.filter { $0.id != current }.map(\.url).prefix(4))
+        let targets = Array(sources.filter { $0.id != current }.map(\.url).prefix(2))
         guard !targets.isEmpty else { return }
         Task(priority: .utility) {
             await withTaskGroup(of: Void.self) { group in
@@ -694,6 +694,13 @@ struct CatVodHomeView: View {
             if fallback {
                 await MainActor.run { keyword = item.name }
                 await search()
+                // 结果替换的是主列表，得说清为什么：不然会以为刚点的那部剧
+                // 自己变成了另一堆封面。
+                await MainActor.run {
+                    if !list.media.isEmpty {
+                        message = String(format: localized("「%@」在当前源没有条目，以下是全网搜索结果"), item.name)
+                    }
+                }
             }
         }
     }
