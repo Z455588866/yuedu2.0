@@ -6,7 +6,7 @@ import UIKit
 struct CatVodHomeRoute: Hashable {}
 
 /// The "猫元" page: picks an imported interface + one of its sites, then browses categories,
-/// search and detail, reusing the app's full-screen player for playback.
+/// search and detail in a poster grid, reusing the app's full-screen player for playback.
 struct CatVodHomeView: View {
     @State private var store = CatVodSourceStore.shared
     @State private var selectedSourceID: String?
@@ -19,8 +19,24 @@ struct CatVodHomeView: View {
     @State private var message: String?
     @State private var detailItem: CatVodMedia?
     @State private var detailGroups: [CatVodGroup] = []
+    /// Chosen filter values for the current category, keyed by filter key.
+    @State private var filterChoices: [String: String] = [:]
+    /// Reverse episode order within every group (影匣's 倒序 switch).
+    @State private var episodesReversed = false
+    @State private var searchHistory: [String] = []
 
     private var sources: [CatVodSource] { store.enabledSources }
+
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: 104), spacing: 12)]
+    }
+
+    private static let searchHistoryKey = "yd_catvod_search_history"
+
+    private var currentFilters: [CatVodFilter] {
+        guard let category = currentCategory else { return [] }
+        return list.filters[category.id] ?? []
+    }
 
     var body: some View {
         Group {
@@ -33,10 +49,11 @@ struct CatVodHomeView: View {
         .navigationTitle(localized("猫元"))
         .navigationBarTitleDisplayMode(.inline)
         .themedAppSurface(for: .explore)
-        .task { if selectedSourceID == nil { selectedSourceID = sources.first?.id } }
-        .sheet(item: $detailItem) { item in
-            detailSheet(item)
+        .task {
+            loadSearchHistory()
+            if selectedSourceID == nil { selectedSourceID = sources.first?.id }
         }
+        .sheet(item: $detailItem) { item in detailSheet(item) }
     }
 
     private var emptyState: some View {
@@ -54,92 +71,195 @@ struct CatVodHomeView: View {
         .padding()
     }
 
-    private var content: some View {
-        List {
-            Section {
-                Picker(localized("接口"), selection: Binding(
-                    get: { selectedSourceID ?? sources.first?.id ?? "" },
-                    set: { selectedSourceID = $0 }
+    // MARK: - Picker header
+
+    private var sourcePicker: some View {
+        HStack(spacing: 10) {
+            Picker(localized("接口"), selection: Binding(
+                get: { selectedSourceID ?? sources.first?.id ?? "" },
+                set: { selectedSourceID = $0 }
+            )) {
+                ForEach(sources) { source in Text(source.name).tag(source.id) }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity)
+
+            if sites.count > 1 {
+                Picker(localized("站点"), selection: Binding(
+                    get: { selectedSite?.key ?? sites.first?.key ?? "" },
+                    set: { key in selectedSite = sites.first { $0.key == key } }
                 )) {
-                    ForEach(sources) { source in
-                        Text(source.name).tag(source.id)
+                    ForEach(sites) { site in Text(site.name).tag(site.key) }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .onChange(of: selectedSourceID) { _, _ in Task { await loadCatalogAndHome() } }
+        .onChange(of: selectedSite?.key) { _, _ in Task { await loadHome() } }
+    }
+
+    private var searchBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                TextField(localized("搜索片名"), text: $keyword)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { Task { await search() } }
+                Button { Task { await search() } } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            if !searchHistory.isEmpty && keyword.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(DSFont.caption2)
+                            .foregroundStyle(DSColor.textSecondary)
+                        ForEach(searchHistory, id: \.self) { term in
+                            Button {
+                                keyword = term
+                                Task { await search() }
+                            } label: {
+                                Text(term)
+                                    .font(DSFont.caption2)
+                                    .foregroundStyle(DSColor.textPrimary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(DSColor.surfaceTertiary, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
-                .onChange(of: selectedSourceID) { _, _ in Task { await loadCatalogAndHome() } }
+            }
+        }
+    }
 
-                if sites.count > 1 {
-                    Picker(localized("站点"), selection: Binding(
-                        get: { selectedSite?.key ?? sites.first?.key ?? "" },
-                        set: { key in selectedSite = sites.first { $0.key == key } }
-                    )) {
-                        ForEach(sites) { site in Text(site.name).tag(site.key) }
+    private var categoryBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                categoryChip(title: localized("推荐"), selected: currentCategory == nil) {
+                    currentCategory = nil
+                    Task { await loadHome() }
+                }
+                ForEach(list.categories) { category in
+                    categoryChip(title: category.name, selected: currentCategory?.id == category.id) {
+                        currentCategory = category
+                        filterChoices = [:]
+                        Task { await loadCategory(category) }
                     }
-                    .onChange(of: selectedSite?.key) { _, _ in Task { await loadHome() } }
                 }
             }
+            .padding(.horizontal)
+        }
+    }
 
-            Section {
-                HStack {
-                    TextField(localized("搜索片名"), text: $keyword)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { Task { await search() } }
-                    Button { Task { await search() } } label: {
-                        Image(systemName: "magnifyingglass")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-
-            if isLoading {
-                Section { HStack { Spacer(); ProgressView(); Spacer() } }
-            }
-
-            if !list.categories.isEmpty && currentCategory == nil {
-                Section {
+    /// Filter chip row shown under the category bar when the current category
+    /// declares filters. Selecting a value reloads the category with `extend`.
+    private var filterBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(currentFilters) { filter in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(filter.name)
+                        .font(DSFont.caption2.weight(.semibold))
+                        .foregroundStyle(DSColor.textSecondary)
+                        .frame(width: 44, alignment: .leading)
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
-                            ForEach(list.categories) { category in
+                            ForEach(filter.options) { option in
+                                let selected = (filterChoices[filter.key] ?? "") == option.value
                                 Button {
-                                    currentCategory = category
-                                    Task { await loadCategory(category) }
+                                    var choices = filterChoices
+                                    if option.value.isEmpty { choices[filter.key] = nil }
+                                    else { choices[filter.key] = option.value }
+                                    filterChoices = choices
+                                    if let category = currentCategory {
+                                        Task { await loadCategory(category) }
+                                    }
                                 } label: {
-                                    Text(category.name).font(DSFont.caption.weight(.semibold))
+                                    Text(option.name)
+                                        .font(DSFont.caption2)
+                                        .foregroundStyle(selected ? Color.white : DSColor.textPrimary)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 5)
+                                        .background(selected ? Color.accentColor : DSColor.surfaceTertiary,
+                                                    in: Capsule())
                                 }
-                                .buttonStyle(.bordered)
+                                .buttonStyle(.plain)
                             }
                         }
                     }
-                } header: { Text(localized("分类")) }
-            }
-
-            if let category = currentCategory {
-                Section {
-                    Button { currentCategory = nil; Task { await loadHome() } } label: {
-                        Label(String(format: localized("返回推荐（%@）"), category.name),
-                              systemImage: "arrow.left")
-                    }
                 }
-            }
-
-            Section {
-                ForEach(list.media) { item in
-                    Button { Task { await openDetail(item) } } label: {
-                        CatVodMediaRow(item: item)
-                    }
-                    .buttonStyle(.plain)
-                }
-            } header: {
-                Text(currentCategory?.name ?? localized("推荐"))
-            }
-
-            if let message {
-                Section { Text(message).foregroundStyle(DSColor.textSecondary) }
             }
         }
-        .softScrollEdges()
-        .task { await loadCatalogAndHome() }
+        .padding(.horizontal)
+    }
+
+    private func categoryChip(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(DSFont.caption.weight(.semibold))
+                .foregroundStyle(selected ? Color.white : DSColor.textPrimary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(selected ? Color.accentColor : DSColor.surfaceTertiary,
+                            in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Content
+
+    private var content: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                sourcePicker
+                searchBar
+
+                if isLoading && list.media.isEmpty {
+                    HStack { Spacer(); ProgressView(); Spacer() }.padding(.vertical, 40)
+                } else if list.media.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "film.stack")
+                            .font(.system(size: 36))
+                            .foregroundStyle(DSColor.textSecondary)
+                        Text(localized("暂无内容")).font(DSFont.subheadline)
+                        if let message { Text(message).font(DSFont.caption).foregroundStyle(.secondary) }
+                    }
+                    .frame(maxWidth: .infinity).padding(.vertical, 50)
+                } else {
+                    if !list.categories.isEmpty { categoryBar }
+                    if !currentFilters.isEmpty { filterBar }
+
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(list.media) { item in
+                            Button { Task { await openDetail(item) } } label: {
+                                CatVodPosterCard(item: item)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal)
+
+                    if list.page < list.pageCount {
+                        Button { Task { await loadMore() } } label: {
+                            if isLoading { ProgressView() }
+                            else { Text(localized("加载更多")).font(DSFont.subheadline) }
+                        }
+                        .frame(maxWidth: .infinity).padding(.vertical)
+                    }
+                }
+
+                if let message, !list.media.isEmpty {
+                    Text(message).font(DSFont.caption).foregroundStyle(.secondary).padding(.horizontal)
+                }
+            }
+            .padding(.top)
+        }
         .refreshable { await loadHome() }
+        .task { await loadCatalogAndHome() }
     }
 
     // MARK: - Data
@@ -181,8 +301,39 @@ struct CatVodHomeView: View {
         isLoading = true; message = nil
         do {
             let result = try await CatVodService.shared.category(bundleURL: bundle, site: site,
-                                                                categoryID: category.id, page: 1)
+                                                                categoryID: category.id, page: 1,
+                                                                extend: filterChoices)
             await MainActor.run { list = result; isLoading = false }
+        } catch {
+            await MainActor.run { message = error.localizedDescription; isLoading = false }
+        }
+    }
+
+    private func loadMore() async {
+        guard let bundle = currentBundleURL, let site = selectedSite else { return }
+        let next = list.page + 1
+        guard next <= list.pageCount else { return }
+        isLoading = true
+        do {
+            let result: CatVodList
+            if let category = currentCategory {
+                result = try await CatVodService.shared.category(bundleURL: bundle, site: site,
+                                                                 categoryID: category.id, page: next,
+                                                                 extend: filterChoices)
+            } else {
+                result = try await CatVodService.shared.home(bundleURL: bundle, site: site)
+            }
+            await MainActor.run {
+                var merged = list
+                var seen = Set(merged.media.map(\.id))
+                for item in result.media where !seen.contains(item.id) {
+                    merged.media.append(item); seen.insert(item.id)
+                }
+                merged.page = result.page
+                merged.pageCount = result.pageCount
+                list = merged
+                isLoading = false
+            }
         } catch {
             await MainActor.run { message = error.localizedDescription; isLoading = false }
         }
@@ -195,60 +346,162 @@ struct CatVodHomeView: View {
         isLoading = true; message = nil
         do {
             let result = try await CatVodService.shared.search(bundleURL: bundle, site: site, keyword: term)
-            await MainActor.run { list = result; currentCategory = nil; isLoading = false }
+            await MainActor.run {
+                list = result
+                currentCategory = nil
+                isLoading = false
+                saveSearchTerm(term)
+            }
         } catch {
             await MainActor.run { message = error.localizedDescription; isLoading = false }
         }
     }
 
+    private func loadSearchHistory() {
+        searchHistory = (UserDefaults.standard.array(forKey: Self.searchHistoryKey) as? [String]) ?? []
+    }
+
+    private func saveSearchTerm(_ term: String) {
+        var history = searchHistory.filter { $0 != term }
+        history.insert(term, at: 0)
+        searchHistory = Array(history.prefix(12))
+        UserDefaults.standard.set(searchHistory, forKey: Self.searchHistoryKey)
+    }
+
     private func openDetail(_ item: CatVodMedia) async {
         guard let bundle = currentBundleURL, let site = selectedSite else { return }
+        isLoading = true; message = nil
         do {
             let (_, groups) = try await CatVodService.shared.detail(bundleURL: bundle, site: site, id: item.id)
-            await MainActor.run { detailGroups = groups; detailItem = item }
+            await MainActor.run { detailGroups = groups; detailItem = item; isLoading = false }
         } catch {
-            await MainActor.run { message = error.localizedDescription }
+            await MainActor.run { message = error.localizedDescription; isLoading = false }
         }
     }
 
     private func play(_ episode: CatVodEpisode, title: String) async {
         guard let bundle = currentBundleURL, let site = selectedSite else { return }
+        isLoading = true; message = nil
         do {
             let playback = try await CatVodService.shared.player(bundleURL: bundle, site: site, episode: episode)
-            guard let urlString = playback.url, let url = URL(string: urlString) else { return }
+            guard let urlString = playback.url, let url = URL(string: urlString) else {
+                await MainActor.run { message = localized("该片源没有返回可播放地址"); isLoading = false }
+                return
+            }
             await MainActor.run {
                 let headers = playback.header ?? [:]
                 CatVodPlayerPresenter.present(url: url, headers: headers,
                                               title: "\(title) · \(episode.title)")
+                isLoading = false
             }
         } catch {
-            await MainActor.run { message = error.localizedDescription }
+            await MainActor.run { message = error.localizedDescription; isLoading = false }
         }
     }
 
+    // MARK: - Detail sheet
+
     private func detailSheet(_ item: CatVodMedia) -> some View {
         NavigationStack {
-            List {
-                if !item.detail.isEmpty {
-                    Section { Text(item.detail).font(DSFont.caption) }
-                }
-                ForEach(detailGroups) { group in
-                    Section {
-                        ForEach(group.episodes) { episode in
-                            Button { Task { await play(episode, title: item.name) } } label: {
-                                HStack {
-                                    Text(episode.title).foregroundStyle(DSColor.textPrimary)
-                                    Spacer()
-                                    Image(systemName: "play.circle").foregroundStyle(.tint)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // Header: poster + title + metadata + synopsis.
+                    HStack(alignment: .top, spacing: 14) {
+                        AsyncImage(url: URL(string: item.cover)) { phase in
+                            if let image = phase.image {
+                                image.resizable().scaledToFill()
+                            } else {
+                                ZStack {
+                                    DSColor.surfaceTertiary
+                                    Image(systemName: "film").foregroundStyle(DSColor.textSecondary)
                                 }
                             }
-                            .buttonStyle(.plain)
                         }
-                    } header: { Text(group.name) }
+                        .frame(width: 96, height: 136)
+                        .clipped()
+                        .cornerRadius(10)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(item.name)
+                                .font(DSFont.title3.weight(.bold))
+                                .foregroundStyle(DSColor.textPrimary)
+                            if !item.typeName.isEmpty {
+                                Text(item.typeName)
+                                    .font(DSFont.caption)
+                                    .foregroundStyle(DSColor.textSecondary)
+                            }
+                            if !item.year.isEmpty {
+                                Text(item.year)
+                                    .font(DSFont.caption)
+                                    .foregroundStyle(DSColor.textSecondary)
+                            }
+                            if !item.remark.isEmpty {
+                                Text(item.remark)
+                                    .font(DSFont.caption2.weight(.semibold))
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    }
+
+                    if !item.detail.isEmpty {
+                        Text(item.detail)
+                            .font(DSFont.caption)
+                            .foregroundStyle(DSColor.textSecondary)
+                            .lineLimit(4)
+                    }
+
+                    if detailGroups.isEmpty {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 8) {
+                                Image(systemName: "film.stack")
+                                    .font(.system(size: 30))
+                                    .foregroundStyle(DSColor.textSecondary)
+                                Text(localized("没有可播放的剧集"))
+                                    .font(DSFont.caption)
+                                    .foregroundStyle(DSColor.textSecondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 30)
+                    } else {
+                        ForEach(detailGroups) { group in
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack {
+                                    Label(group.name, systemImage: "list.bullet.rectangle")
+                                        .font(DSFont.subheadline.weight(.semibold))
+                                        .foregroundStyle(DSColor.textPrimary)
+                                    Spacer()
+                                    Text(String(format: localized("%d 集"), group.episodes.count))
+                                        .font(DSFont.caption2)
+                                        .foregroundStyle(DSColor.textSecondary)
+                                }
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 10)], spacing: 10) {
+                                    ForEach(episodes(for: group)) { episode in
+                                        Button { Task { await play(episode, title: item.name) } } label: {
+                                            Text(episode.title)
+                                                .font(DSFont.caption)
+                                                .foregroundStyle(DSColor.textPrimary)
+                                                .lineLimit(1)
+                                                .frame(maxWidth: .infinity, minHeight: 34)
+                                                .padding(.horizontal, 6)
+                                                .background(DSColor.surfaceTertiary, in: RoundedRectangle(cornerRadius: 8))
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let message {
+                        Text(message)
+                            .font(DSFont.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                if detailGroups.isEmpty {
-                    Section { Text(localized("没有可播放的剧集")).foregroundStyle(DSColor.textSecondary) }
-                }
+                .padding()
             }
             .navigationTitle(item.name)
             .navigationBarTitleDisplayMode(.inline)
@@ -256,41 +509,56 @@ struct CatVodHomeView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(localized("完成")) { detailItem = nil }
                 }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        episodesReversed.toggle()
+                    } label: {
+                        Label(localized("倒序"), systemImage: "arrow.up.arrow.down")
+                    }
+                }
             }
             .themedAppSurface(for: .explore)
         }
         .presentationDetents([.medium, .large])
     }
+
+    private func episodes(for group: CatVodGroup) -> [CatVodEpisode] {
+        episodesReversed ? Array(group.episodes.reversed()) : group.episodes
+    }
 }
 
-private struct CatVodMediaRow: View {
+/// Poster card with cover, title and remark — closer to tvbox-silicon's grid than
+/// the previous plain text list.
+private struct CatVodPosterCard: View {
     let item: CatVodMedia
+
     var body: some View {
-        HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 6) {
             AsyncImage(url: URL(string: item.cover)) { phase in
                 if let image = phase.image {
                     image.resizable().scaledToFill()
                 } else {
-                    Color.secondary.opacity(0.15)
+                    ZStack {
+                        DSColor.surfaceTertiary
+                        Image(systemName: "film").foregroundStyle(DSColor.textSecondary)
+                    }
                 }
             }
-            .frame(width: 64, height: 88)
+            .frame(width: 104, height: 148)
             .clipped()
-            .cornerRadius(6)
+            .cornerRadius(10)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.name)
-                    .font(DSFont.subheadline.weight(.semibold))
-                    .foregroundStyle(DSColor.textPrimary)
-                    .lineLimit(2)
-                if !item.remark.isEmpty {
-                    Text(item.remark).font(DSFont.caption).foregroundStyle(DSColor.textSecondary)
-                }
-                if !item.typeName.isEmpty {
-                    Text(item.typeName).font(DSFont.caption2).foregroundStyle(DSColor.textSecondary)
-                }
+            Text(item.name)
+                .font(DSFont.caption.weight(.semibold))
+                .foregroundStyle(DSColor.textPrimary)
+                .lineLimit(1)
+            if !item.remark.isEmpty {
+                Text(item.remark)
+                    .font(DSFont.caption2)
+                    .foregroundStyle(DSColor.textSecondary)
+                    .lineLimit(1)
             }
-            Spacer(minLength: 0)
         }
+        .frame(width: 104, alignment: .leading)
     }
 }

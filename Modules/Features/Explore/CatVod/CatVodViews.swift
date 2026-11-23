@@ -10,6 +10,8 @@ struct CatVodSourceSettingsView: View {
     @State private var showsPaste = false
     @State private var pasteText = ""
     @State private var importMessage: String?
+    @State private var renamingSource: CatVodSource?
+    @State private var renameText = ""
 
     var body: some View {
         List {
@@ -53,6 +55,20 @@ struct CatVodSourceSettingsView: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                         }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            renameText = source.name
+                            renamingSource = source
+                        }
+                    }
+                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                        Button {
+                            renameText = source.name
+                            renamingSource = source
+                        } label: {
+                            Label(localized("改名"), systemImage: "pencil")
+                        }
+                        .tint(.orange)
                     }
                 }
                 .onDelete(perform: delete)
@@ -61,6 +77,12 @@ struct CatVodSourceSettingsView: View {
             }
 
             Section {
+                NavigationLink {
+                    CatVodCloudAccountView()
+                } label: {
+                    Label(localized("网盘账号配置"), systemImage: "keychain")
+                }
+
                 Button { showsImporter = true } label: {
                     Label(localized("从文件导入"), systemImage: "square.and.arrow.down")
                 }
@@ -99,6 +121,20 @@ struct CatVodSourceSettingsView: View {
             if let data = try? Data(contentsOf: url) { applyImport(data) }
         }
         .sheet(isPresented: $showsPaste) { pasteSheet }
+        .alert(localized("重命名猫源"), isPresented: Binding(
+            get: { renamingSource != nil },
+            set: { if !$0 { renamingSource = nil } }
+        )) {
+            TextField(localized("名称"), text: $renameText)
+            Button(localized("取消"), role: .cancel) { renamingSource = nil }
+            Button(localized("保存")) {
+                if let source = renamingSource {
+                    let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !name.isEmpty { store.rename(id: source.id, to: name) }
+                }
+                renamingSource = nil
+            }
+        }
     }
 
     private func applyImport(_ data: Data) {

@@ -89,8 +89,21 @@ export function createGateway(config, dependencies = {}) {
         const catalog = validateCatalogRequest(body);
         const artifact = await nodeBundleCache.resolve(catalog.bundle);
         const result = await catVod.catalog(artifact);
+        // Some bundles (e.g. the "配置"/config pseudo-site) declare `api` as an
+        // object or omit it. Downstream requires a string route, so drop those
+        // malformed entries here rather than letting `site.api.replace()` throw
+        // deep in the runner ("r.replace is not a function").
         let sites = Array.isArray(result?.sites)
-          ? result.sites.map((site) => ({ ...site, type: 3, jar: catalog.bundle }))
+          ? result.sites
+              .filter((site) => site && typeof site === "object" && typeof site.api === "string" && site.api.trim() !== "")
+              .map((site) => ({
+                ...site,
+                key: String(site.key ?? ""),
+                name: String(site.name ?? site.key ?? ""),
+                api: site.api,
+                type: 3,
+                jar: catalog.bundle
+              }))
           : [];
         if (!sites.some((site) => isCloudPanSite(site))) {
           sites = [...sites, { ...cloudPanSite, jar: catalog.bundle }];

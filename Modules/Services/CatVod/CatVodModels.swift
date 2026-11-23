@@ -102,6 +102,67 @@ struct CatVodCategory: Identifiable, Hashable, Decodable, Sendable {
     }
 }
 
+/// One filter group for a category, parsed from the `filters` map a CatVod `home`
+/// response returns. Mirrors tvbox-silicon's `CategoryFilter`. Each group has a
+/// `key` (sent back in `extend`) and a list of `{ name, value }` options.
+struct CatVodFilter: Identifiable, Hashable, Sendable {
+    struct Option: Identifiable, Hashable, Sendable {
+        var name: String
+        var value: String
+        var id: String { value }
+    }
+
+    var key: String
+    var name: String
+    var options: [Option]
+
+    var id: String { key }
+
+    /// Parses one filter object. Accepts both `{value:[{n,v}]}` and
+    /// `{value:[{name,value}]}` shapes used by different bundles, and prepends
+    /// an "全部" (all) option bound to the empty value when none exists.
+    static func parse(_ dict: [String: Any]) -> CatVodFilter? {
+        guard let key = dict["key"] as? String, !key.isEmpty else { return nil }
+        let rawOptions = dict["value"] as? [[String: Any]] ?? []
+        var seen = Set<String>()
+        var options: [Option] = []
+        for entry in rawOptions {
+            let value = (entry["v"] as? String) ?? (entry["value"] as? String) ?? ""
+            guard !value.isEmpty, seen.insert(value).inserted else { continue }
+            let rawName = (entry["n"] as? String) ?? (entry["name"] as? String) ?? value
+            options.append(Option(name: rawName.isEmpty ? value : rawName, value: value))
+        }
+        guard !options.isEmpty else { return nil }
+        let name = (dict["name"] as? String).map { $0.isEmpty ? key : $0 } ?? key
+        if !options.contains(where: { $0.value.isEmpty }) {
+            options.insert(Option(name: localized("全部"), value: ""), at: 0)
+        }
+        return CatVodFilter(key: key, name: name, options: options)
+    }
+}
+
+/// Parses the full `filters` payload: category id → filter groups. Some bundles
+/// send it as a JSON string rather than an object, so try both shapes.
+enum CatVodFilterParser {
+    static func parse(_ value: Any?) -> [String: [CatVodFilter]] {
+        var object: [String: Any]?
+        if let dict = value as? [String: Any] {
+            object = dict
+        } else if let text = value as? String, let data = text.data(using: .utf8),
+                  let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            object = dict
+        }
+        guard let object else { return [:] }
+        var result: [String: [CatVodFilter]] = [:]
+        for (categoryID, rawList) in object {
+            guard let list = rawList as? [[String: Any]] else { continue }
+            let filters = list.compactMap(CatVodFilter.parse)
+            if !filters.isEmpty { result[categoryID] = filters }
+        }
+        return result
+    }
+}
+
 /// A playable episode parsed from `vod_play_from` / `vod_play_url`.
 struct CatVodEpisode: Identifiable, Hashable, Sendable {
     var id: String { "\(groupIndex)-\(index)-\(title)" }
@@ -136,6 +197,17 @@ struct CatVodList: Sendable {
     var media: [CatVodMedia]
     var page: Int
     var pageCount: Int
+    /// Filter groups keyed by category id, present on `home` responses.
+    var filters: [String: [CatVodFilter]]
+
+    init(categories: [CatVodCategory], media: [CatVodMedia], page: Int, pageCount: Int,
+         filters: [String: [CatVodFilter]] = [:]) {
+        self.categories = categories
+        self.media = media
+        self.page = page
+        self.pageCount = pageCount
+        self.filters = filters
+    }
 }
 
 /// Splits the pipe/# separated `vod_play_from` and `vod_play_url` fields into groups of episodes.

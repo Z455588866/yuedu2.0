@@ -8,7 +8,11 @@ import { readBoundedText } from "./bounded-response.mjs";
 import { startParentWatchdog } from "./process-lifecycle.mjs";
 
 export function actionRequest(site, action, args) {
-  const base = site.api.replace(/\/$/, "");
+  // A malformed catalog entry can carry a non-string api; never let `.replace`
+  // throw an opaque "r.replace is not a function" deep inside the runner.
+  const rawAPI = typeof site.api === "string" ? site.api : "";
+  if (!rawAPI) throw new Error("站点接口无效（配置站点不支持浏览）");
+  const base = rawAPI.replace(/\/$/, "");
   switch (action) {
     case "home": return { path: `${base}/home`, payload: { filter: args.filter } };
     case "category": return { path: `${base}/category`, payload: { id: args.tid, page: args.page, filter: args.filter, filters: args.extend } };
@@ -224,8 +228,11 @@ export async function runCatVod(bundlePath, options = {}) {
       initialized.delete(site.api);
       // Sites without an init route answer 404 and are ready as they are (the
       // 玩偶/花卷/原盘 family). Treat only other failures as fatal.
-      await inject("post", `${site.api.replace(/\/$/, "")}/init`, { ext: site.ext || "" })
-        .catch((error) => { if (error.status !== 404) throw error; });
+      const initBase = typeof site.api === "string" ? site.api.replace(/\/$/, "") : "";
+      if (initBase) {
+        await inject("post", `${initBase}/init`, { ext: site.ext || "" })
+          .catch((error) => { if (error.status !== 404) throw error; });
+      }
       initialized.set(site.api, initKey);
     }
     const request = actionRequest(site, message.action, message.arguments);

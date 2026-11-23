@@ -12,6 +12,12 @@ NS_ASSUME_NONNULL_BEGIN
           configuration:(NSString *)configuration
 NS_SWIFT_NAME(start(script:assetsDirectory:runtimeDirectory:configuration:));
 
+/// Replaces the live configuration JSON. The trusted engine thread re-reads it
+/// through `bridge.configuration()` before every gateway request, so account
+/// cookies/tokens added after startup take effect without restarting the engine.
++ (void)updateConfiguration:(NSString *)configuration
+NS_SWIFT_NAME(updateConfiguration(_:));
+
 + (nullable NSString *)listeningURL;
 + (nullable NSString *)startupError;
 

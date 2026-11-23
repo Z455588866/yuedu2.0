@@ -38,10 +38,11 @@ final class CatVodService {
         return Self.parseList(object)
     }
 
-    func category(bundleURL: String, site: CatVodSite, categoryID: String, page: Int) async throws -> CatVodList {
+    func category(bundleURL: String, site: CatVodSite, categoryID: String, page: Int,
+                  extend: [String: String] = [:]) async throws -> CatVodList {
         let object = try await invoke(bundleURL: bundleURL, site: site, action: "category",
                                       arguments: ["tid": categoryID, "page": String(page),
-                                                  "filter": false, "extend": [String: Any]()])
+                                                  "filter": false, "extend": extend])
         return Self.parseList(object)
     }
 
@@ -65,8 +66,10 @@ final class CatVodService {
         return (media, CatVodPlaylistParser.groups(from: from, playURL: playURL))
     }
 
-    /// Resolves a spider episode id to a direct stream URL + headers, or fails clearly if the
-    /// source needs an external parser (`parse/jx == 1`).
+    /// Resolves a spider episode id to a stream URL + headers. Mirrors tvbox-silicon's
+    /// `resolvePlayback` routing: direct media plays as-is; `json:`/`parse:` payloads
+    /// and `parse/jx == 1` need an external parser; netdisk shares are resolved by
+    /// the trusted gateway (which holds the account credentials).
     func player(bundleURL: String, site: CatVodSite, episode: CatVodEpisode) async throws -> CatVodPlayback {
         let object = try await invoke(bundleURL: bundleURL, site: site, action: "player",
                                       arguments: [
@@ -74,16 +77,6 @@ final class CatVodService {
                                         "id": episode.playID,
                                         "vipFlags": [String]()
                                       ])
-        let parse = Self.flexibleInt(object["parse"])
-        let jx = Self.flexibleInt(object["jx"])
-        guard parse != 1, jx != 1 else { throw CatVodError.parseUnsupported }
-        let url: String
-        if let s = object["url"] as? String { url = s }
-        else if let arr = object["url"] as? [String] { url = arr.first ?? "" }
-        else { url = "" }
-        guard !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw CatVodError.emptyPlayerURL
-        }
         var headers: [String: String] = [:]
         if let header = object["header"] as? [String: Any] {
             for (k, v) in header {
@@ -91,7 +84,55 @@ final class CatVodService {
                 else { headers[k] = "\(v)" }
             }
         }
-        return CatVodPlayback(parse: parse, url: url, header: headers)
+        let parse = Self.flexibleInt(object["parse"])
+        let jx = Self.flexibleInt(object["jx"])
+        let rawURL = Self.firstURL(object["url"])
+
+        // A spider may hand back an episode id that is itself a direct media URL.
+        // The runner already normalises this, but keep a fallback for gateways that
+        // return `url` empty with `parse=0`.
+        let resolvedURL: String
+        if rawURL.isEmpty {
+            if parse == 0, jx == 0, Self.isDirectMedia(episode.playID) {
+                resolvedURL = episode.playID
+            } else {
+                throw CatVodError.emptyPlayerURL
+            }
+        } else {
+            resolvedURL = rawURL
+        }
+
+        // `parse:` / `json:` payloads and parse flags need a secondary resolver the
+        // app does not ship; fail with a precise, actionable message instead of
+        // handing a non-media string to the player ("不支持的 URL").
+        if parse == 1 || jx == 1 || resolvedURL.hasPrefix("parse:")
+            || resolvedURL.hasPrefix("json:") {
+            throw CatVodError.parseUnsupported
+        }
+        // Magnet / thunder links are not playable in an in-app video player.
+        if resolvedURL.hasPrefix("magnet:") || resolvedURL.hasPrefix("thunder:")
+            || resolvedURL.hasPrefix("ed2k:") {
+            throw CatVodError.unsupportedScheme
+        }
+
+        // Relative URLs are meaningless against the gateway loopback; spider URLs
+        // are always absolute, so a missing scheme means the source is malformed.
+        guard let finalURL = URL(string: resolvedURL), finalURL.scheme != nil else {
+            throw CatVodError.emptyPlayerURL
+        }
+        return CatVodPlayback(parse: parse, url: finalURL.absoluteString, header: headers)
+    }
+
+    private static func firstURL(_ value: Any?) -> String {
+        if let s = value as? String { return s }
+        if let arr = value as? [String] { return arr.first(where: { !$0.isEmpty }) ?? "" }
+        return ""
+    }
+
+    private static func isDirectMedia(_ value: String) -> Bool {
+        let lowered = value.lowercased()
+        return [".mp4", ".m3u8", ".mkv", ".avi", ".mov", ".flv", ".ts", ".mp3", ".m4a"]
+            .contains { lowered.contains($0) }
     }
 
     // MARK: - Low level
@@ -116,6 +157,23 @@ final class CatVodService {
     }
 
     private func post(_ endpoint: URL, body: [String: Any]) async throws -> [String: Any] {
+        // A spider session can be reclaimed while the app is backgrounded or idle.
+        // The gateway rebuilds it on demand, so one automatic retry turns a
+        // transient "CatVod stopped" 502 into a seamless success.
+        do {
+            return try await postOnce(endpoint, body: body)
+        } catch let error as CatVodError {
+            if case .http(let status, let message) = error,
+               status == 502,
+               message.localizedCaseInsensitiveContains("stopped")
+                || message.localizedCaseInsensitiveContains("exited") {
+                return try await postOnce(endpoint, body: body)
+            }
+            throw error
+        }
+    }
+
+    private func postOnce(_ endpoint: URL, body: [String: Any]) async throws -> [String: Any] {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -158,7 +216,8 @@ final class CatVodService {
             }
         }
         return CatVodList(categories: categories, media: media,
-                          page: flexibleInt(object["page"]), pageCount: flexibleInt(object["pagecount"]))
+                          page: flexibleInt(object["page"]), pageCount: flexibleInt(object["pagecount"]),
+                          filters: CatVodFilterParser.parse(object["filters"]))
     }
 
     static func flexibleInt(_ value: Any?) -> Int {
@@ -170,6 +229,7 @@ final class CatVodService {
 }
 
 extension CatVodError {
-    static let parseUnsupported = CatVodError.http(-1, "该片源需要外部解析器，暂不支持")
+    static let parseUnsupported = CatVodError.http(-1, "该线路需要外部解析，换一条线路试试")
     static let emptyPlayerURL = CatVodError.http(-2, "该片源没有返回可播放地址")
+    static let unsupportedScheme = CatVodError.http(-3, "该线路是磁力/电驴链接，App 内无法直接播放")
 }

@@ -15,6 +15,9 @@ final class CatVodGateway {
     /// Read by `CatVodService` to build the `Authorization: Bearer` header.
     let authenticationToken = UUID().uuidString + UUID().uuidString
     private var activeAllowedURLs: Set<String> = []
+    /// Credentials for netdisk sources. Kept here so both the initial launch
+    /// config and live updates after the engine started see the same value.
+    private var cloudConfig: [String: String] = [:]
 
     init(resourcesDirectory: URL? = nil, entryPoint: URL? = nil, cacheDirectory: URL? = nil) {
         let bundle = Bundle.main.bundleURL
@@ -49,19 +52,13 @@ final class CatVodGateway {
                 .appendingPathComponent("Yuedu/CatVod", isDirectory: true)
     }
 
-    /// Starts the engine (once per process) and returns its loopback base URL.
-    /// `bundleURL` is the interface the user imported, added to the download allowlist.
-    func ensureStarted(allowedBundleURL: String? = nil, replacingAllowlist: Bool = false) async throws -> URL {
-        guard FileManager.default.fileExists(atPath: entryPoint.path) else {
-            throw CatVodError.missingResources
-        }
-        let requested = Set(Self.allowedBundleURLs(for: allowedBundleURL))
-        activeAllowedURLs = replacingAllowlist ? requested : activeAllowedURLs.union(requested)
-        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-
+    /// Builds the full configuration JSON the engine reads through its bridge.
+    /// Reused on launch and whenever cloud credentials change, so a live update
+    /// never drops the token, cache path or bundle allowlist.
+    private func configurationJSON() throws -> String {
         let config: [String: Any] = [
             "token": authenticationToken,
-            "cloudConfig": [String: String](),
+            "cloudConfig": cloudConfig,
             "cacheRoot": cacheDirectory.path,
             "nodeBundleAllowedURLs": activeAllowedURLs.sorted(),
             "nodeBundleAllowChecksumRedirects": true
@@ -70,6 +67,35 @@ final class CatVodGateway {
         guard data.count <= 64 * 1024, let json = String(data: data, encoding: .utf8) else {
             throw CatVodError.invalidConfiguration
         }
+        return json
+    }
+
+    /// Pushes updated netdisk credentials into the already-running engine. The
+    /// node side re-reads `bridge.configuration()` before every request, so this
+    /// takes effect immediately without a restart. Safe to call before launch.
+    func applyCloudConfig(_ config: [String: String]) {
+        cloudConfig = config
+        guard let json = try? configurationJSON() else { return }
+        YueduNodeRuntime.updateConfiguration(json)
+    }
+
+    /// Starts the engine (once per process) and returns its loopback base URL.
+    /// `bundleURL` is the interface the user imported, added to the download allowlist.
+    func ensureStarted(allowedBundleURL: String? = nil, replacingAllowlist: Bool = false) async throws -> URL {
+        guard FileManager.default.fileExists(atPath: entryPoint.path) else {
+            throw CatVodError.missingResources
+        }
+        // Restore persisted credentials if they have not been applied this session
+        // (e.g. right after launch before the settings screen was opened).
+        if cloudConfig.isEmpty {
+            let saved = CatVodCloudAccountStore.shared.accounts.gatewayConfig
+            if !saved.isEmpty { cloudConfig = saved }
+        }
+        let requested = Set(Self.allowedBundleURLs(for: allowedBundleURL))
+        activeAllowedURLs = replacingAllowlist ? requested : activeAllowedURLs.union(requested)
+        try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+
+        let json = try configurationJSON()
 
         YueduNodeRuntime.start(script: entryPoint.path,
                                assetsDirectory: resourcesDirectory.path,

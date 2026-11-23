@@ -125,6 +125,12 @@ static napi_value initializeBridge(napi_env env, napi_value exports) {
     }
 }
 
++ (void)updateConfiguration:(NSString *)configuration {
+    @synchronized (self) {
+        configurationJSON = [configuration copy] ?: @"{}";
+    }
+}
+
 + (NSString *)listeningURL { @synchronized (self) { return listeningURL; } }
 + (NSString *)startupError { @synchronized (self) { return startupError; } }
 @end
