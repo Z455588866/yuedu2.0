@@ -52,6 +52,33 @@ final class CatVodService {
         return Self.parseList(object)
     }
 
+    /// 该接口下**所有**可搜索站点并发搜索，合成一份结果。
+    ///
+    /// 之前只搜当前选中的那一个站点，所以同一个源里其它站点的片子在搜索里
+    /// 根本不存在。这里并发打全部站点，慢的那个不再拖住快的——用 `withTaskGroup`
+    /// 是为了让先回来的结果先可用，而不是按站点顺序排队。
+    ///
+    /// 返回 `(站点, 结果)`，调用方必须保留站点信息：点进详情时要打回**命中它的
+    /// 那个站点**，否则用别的站点去查 id 必然查不到。
+    func searchAll(bundleURL: String, sites: [CatVodSite], keyword: String) async -> [(CatVodSite, CatVodList)] {
+        let targets = sites.filter { $0.searchable != false }
+        guard !targets.isEmpty else { return [] }
+        return await withTaskGroup(of: (CatVodSite, CatVodList?).self) { group in
+            for site in targets {
+                group.addTask { [weak self] in
+                    guard let self else { return (site, nil) }
+                    let list = try? await self.search(bundleURL: bundleURL, site: site, keyword: keyword)
+                    return (site, list)
+                }
+            }
+            var collected: [(CatVodSite, CatVodList)] = []
+            for await (site, list) in group {
+                if let list, !list.media.isEmpty { collected.append((site, list)) }
+            }
+            return collected
+        }
+    }
+
     /// Full detail incl. play groups for one media id.
     func detail(bundleURL: String, site: CatVodSite, id: String) async throws -> (CatVodMedia, [CatVodGroup]) {
         let object = try await invoke(bundleURL: bundleURL, site: site, action: "detail",

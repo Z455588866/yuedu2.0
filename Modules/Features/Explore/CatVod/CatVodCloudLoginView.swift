@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import Combine
 
 /// 「一键登录」网盘账号：在 App 内打开网盘**官方网页版**，用户用扫码、短信验证码
 /// 或账号密码照常登录（就是官方页面自己支持的那些方式），点「完成」后自动把

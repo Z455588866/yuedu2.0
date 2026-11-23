@@ -38,6 +38,22 @@ struct CatVodHomeView: View {
     /// Same guard for episode taps — a slow `player` resolve must not let a
     /// dozen taps each present a player the moment they finally answer.
     @State private var isResolvingPlayback = false
+    /// True while the detail sheet is open but its episode list is still loading.
+    /// The sheet is presented on the tap itself (see `openDetail`), so this is
+    /// what the sheet shows instead of an empty "no episodes" state.
+    @State private var isLoadingDetail = false
+    /// Which episode tile is being resolved right now, so that tile shows a
+    /// spinner instead of looking dead for the length of a slow `player` call.
+    @State private var playingEpisodeID: String?
+    /// Episode lists already fetched, keyed by source + media id. Re-opening a
+    /// title the person just looked at becomes instant.
+    @State private var detailCache: [String: [CatVodGroup]] = [:]
+    /// Which site the currently open detail page belongs to. Search results span
+    /// every site in the interface, so a tap must remember the site that actually
+    /// produced that title — otherwise detail/episode requests hit the wrong one.
+    @State private var detailSite: CatVodSite?
+    /// media id → the site it came from, for search results only.
+    @State private var resultSites: [String: CatVodSite] = [:]
 
     private var sources: [CatVodSource] { store.enabledSources }
 
@@ -67,7 +83,10 @@ struct CatVodHomeView: View {
             loadSearchHistory()
             if selectedSourceID == nil { selectedSourceID = sources.first?.id }
         }
-        .sheet(item: $detailItem) { item in detailSheet(item) }
+        .sheet(item: $detailItem, onDismiss: {
+            isLoadingDetail = false
+            playingEpisodeID = nil
+        }) { item in detailSheet(item) }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 NavigationLink {
@@ -128,7 +147,7 @@ struct CatVodHomeView: View {
     private var searchBar: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                TextField(localized("搜索片名"), text: $keyword)
+                TextField(localized("搜索全部站点片名"), text: $keyword)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { Task { await search() } }
                 Button { Task { await search() } } label: {
@@ -263,7 +282,7 @@ struct CatVodHomeView: View {
                         // Position identity: even if a source returns duplicate/empty
                         // vod_id, SwiftUI never crashes on duplicate Identifiable ids.
                         ForEach(Array(list.media.enumerated()), id: \.offset) { _, item in
-                            Button { if !isOpeningDetail { Task { await openDetail(item) } } } label: {
+                            Button { if !isOpeningDetail { Task { await openDetail(item, from: resultSites[item.id]) } } } label: {
                                 CatVodPosterCard(item: item)
                             }
                             .buttonStyle(.plain)
@@ -344,6 +363,7 @@ struct CatVodHomeView: View {
                 guard token == loadToken else { return }
                 list = result
                 if !result.filters.isEmpty { allFilters = result.filters }
+                resultSites = [:]
                 isLoading = false
             }
         } catch {
@@ -370,6 +390,7 @@ struct CatVodHomeView: View {
             await MainActor.run {
                 guard token == loadToken else { return }
                 list = result
+                resultSites = [:]
                 isLoading = false
             }
         } catch {
@@ -423,7 +444,7 @@ struct CatVodHomeView: View {
     }
 
     private func search() async {
-        guard let bundle = currentBundleURL, let site = selectedSite else {
+        guard let bundle = currentBundleURL, !sites.isEmpty else {
             await MainActor.run { isLoading = false }
             return
         }
@@ -431,22 +452,34 @@ struct CatVodHomeView: View {
         guard !term.isEmpty else { return }
         let token = await MainActor.run { loadToken += 1; return loadToken }
         await MainActor.run { isLoading = true; message = nil }
-        do {
-            let result = try await CatVodService.shared.search(bundleURL: bundle, site: site, keyword: term)
-            await MainActor.run {
-                guard token == loadToken else { return }
-                list = result
-                currentCategory = nil
-                isLoading = false
-                saveSearchTerm(term)
-            }
-        } catch {
-            await MainActor.run {
-                if token == loadToken {
-                    message = error.localizedDescription
-                    isLoading = false
+
+        // 搜整个接口下的所有站点，而不是当前选中的那一个。
+        let targets = sites
+        let hits = await CatVodService.shared.searchAll(bundleURL: bundle, sites: targets, keyword: term)
+
+        await MainActor.run {
+            guard token == loadToken else { return }
+            var merged: [CatVodMedia] = []
+            var sitesByID: [String: CatVodSite] = [:]
+            var seenKeys = Set<String>()
+            for (site, result) in hits {
+                for item in result.media {
+                    // 同一部片常同时出现在多个站点，保留第一个，避免同一张封面重复三行。
+                    let key = "\(item.name)|\(item.year)|\(item.remark)"
+                    if seenKeys.contains(key) { continue }
+                    seenKeys.insert(key)
+                    sitesByID[item.id] = site
+                    merged.append(item)
                 }
             }
+            resultSites = sitesByID
+            list = CatVodList(categories: list.categories, media: merged, page: 1, pageCount: 1)
+            currentCategory = nil
+            isLoading = false
+            message = merged.isEmpty
+                ? String(format: localized("在「%@」的所有站点里都没有找到结果"), term)
+                : nil
+            saveSearchTerm(term)
         }
     }
 
@@ -461,30 +494,59 @@ struct CatVodHomeView: View {
         UserDefaults.standard.set(searchHistory, forKey: Self.searchHistoryKey)
     }
 
-    private func openDetail(_ item: CatVodMedia) async {
-        // Claim the in-flight flag on the main actor so a burst of taps can only
-        // start one request; every other tap bails immediately.
+    private func openDetail(_ item: CatVodMedia, from overrideSite: CatVodSite? = nil) async {
+        guard let bundle = currentBundleURL, let site = overrideSite ?? selectedSite else { return }
+        // The interface URL belongs in the key: two different interfaces can carry a
+        // site with the same key, and a cache hit from the other one would show the
+        // wrong episode list.
+        let cacheKey = "\(bundle)|\(site.key)|\(item.id)"
+
+        // Already fetched this one: open instantly instead of hitting the source again.
+        if let cached = detailCache[cacheKey] {
+            await MainActor.run {
+                detailGroups = cached
+                isLoadingDetail = false
+                message = nil
+                detailSite = site
+                detailItem = item
+            }
+            return
+        }
+
+        // Claim the in-flight flag and present the sheet in the SAME main-actor hop.
+        // The important part is ordering: the tap now shows a screen immediately,
+        // instead of leaving the person staring at a dead grid for the length of a
+        // slow remote call — which is what made them tap a dozen times.
         let busy = await MainActor.run { () -> Bool in
             if isOpeningDetail { return true }
             isOpeningDetail = true
+            detailGroups = []
+            isLoadingDetail = true
+            message = nil
+            detailSite = site
+            detailItem = item
             return false
         }
         if busy { return }
-        guard let bundle = currentBundleURL, let site = selectedSite else {
-            await MainActor.run { isOpeningDetail = false }
-            return
-        }
-        await MainActor.run { isLoading = true; message = nil }
+
         do {
             let (_, groups) = try await CatVodService.shared.detail(bundleURL: bundle, site: site, id: item.id)
             await MainActor.run {
-                detailGroups = groups; detailItem = item
-                isLoading = false; isOpeningDetail = false
+                detailCache[cacheKey] = groups
+                // Fill the sheet only if the person has not moved on to another title.
+                if detailItem?.id == item.id {
+                    detailGroups = groups
+                    isLoadingDetail = false
+                }
+                isOpeningDetail = false
             }
         } catch {
             await MainActor.run {
-                message = error.localizedDescription
-                isLoading = false; isOpeningDetail = false
+                if detailItem?.id == item.id {
+                    message = error.localizedDescription
+                    isLoadingDetail = false
+                }
+                isOpeningDetail = false
             }
         }
     }
@@ -493,20 +555,29 @@ struct CatVodHomeView: View {
         let busy = await MainActor.run { () -> Bool in
             if isResolvingPlayback { return true }
             isResolvingPlayback = true
+            // Mark the tapped tile so it can show a spinner. Without this the tile
+            // looks dead for the whole resolve, and the person taps it again.
+            playingEpisodeID = episode.id
+            message = nil
             return false
         }
         if busy { return }
-        guard let bundle = currentBundleURL, let site = selectedSite else {
-            await MainActor.run { isResolvingPlayback = false }
+        // Episode came from whichever site the open detail page belongs to — under
+        // whole-interface search that is not necessarily `selectedSite`.
+        guard let bundle = currentBundleURL, let site = detailSite ?? selectedSite else {
+            await MainActor.run {
+                isResolvingPlayback = false
+                playingEpisodeID = nil
+            }
             return
         }
-        await MainActor.run { isLoading = true; message = nil }
         do {
             let playback = try await CatVodService.shared.player(bundleURL: bundle, site: site, episode: episode)
             guard let urlString = playback.url, let url = URL(string: urlString) else {
                 await MainActor.run {
                     message = localized("该片源没有返回可播放地址")
-                    isLoading = false; isResolvingPlayback = false
+                    isResolvingPlayback = false
+                    playingEpisodeID = nil
                 }
                 return
             }
@@ -514,12 +585,14 @@ struct CatVodHomeView: View {
                 let headers = playback.header ?? [:]
                 CatVodPlayerPresenter.present(url: url, headers: headers,
                                               title: "\(title) · \(episode.title)")
-                isLoading = false; isResolvingPlayback = false
+                isResolvingPlayback = false
+                playingEpisodeID = nil
             }
         } catch {
             await MainActor.run {
                 message = error.localizedDescription
-                isLoading = false; isResolvingPlayback = false
+                isResolvingPlayback = false
+                playingEpisodeID = nil
             }
         }
     }
@@ -576,7 +649,19 @@ struct CatVodHomeView: View {
                             .lineLimit(4)
                     }
 
-                    if detailGroups.isEmpty {
+                    if isLoadingDetail {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 10) {
+                                ProgressView()
+                                Text(localized("正在加载剧集…"))
+                                    .font(DSFont.caption)
+                                    .foregroundStyle(DSColor.textSecondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 30)
+                    } else if detailGroups.isEmpty {
                         HStack {
                             Spacer()
                             VStack(spacing: 8) {
@@ -605,13 +690,20 @@ struct CatVodHomeView: View {
                                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 10)], spacing: 10) {
                                     ForEach(episodes(for: group)) { episode in
                                         Button { if !isResolvingPlayback { Task { await play(episode, title: item.name) } } } label: {
-                                            Text(episode.title)
-                                                .font(DSFont.caption)
-                                                .foregroundStyle(DSColor.textPrimary)
-                                                .lineLimit(1)
-                                                .frame(maxWidth: .infinity, minHeight: 34)
-                                                .padding(.horizontal, 6)
-                                                .background(DSColor.surfaceTertiary, in: RoundedRectangle(cornerRadius: 8))
+                                            ZStack {
+                                                if playingEpisodeID == episode.id {
+                                                    ProgressView()
+                                                        .scaleEffect(0.7)
+                                                } else {
+                                                    Text(episode.title)
+                                                        .font(DSFont.caption)
+                                                        .foregroundStyle(DSColor.textPrimary)
+                                                        .lineLimit(1)
+                                                }
+                                            }
+                                            .frame(maxWidth: .infinity, minHeight: 34)
+                                            .padding(.horizontal, 6)
+                                            .background(DSColor.surfaceTertiary, in: RoundedRectangle(cornerRadius: 8))
                                         }
                                         .buttonStyle(.plain)
                                     }
@@ -632,7 +724,11 @@ struct CatVodHomeView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(localized("完成")) { detailItem = nil }
+                    Button(localized("完成")) {
+                        detailItem = nil
+                        isLoadingDetail = false
+                        playingEpisodeID = nil
+                    }
                 }
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
