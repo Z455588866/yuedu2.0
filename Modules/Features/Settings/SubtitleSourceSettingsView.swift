@@ -3,8 +3,8 @@ import UIKit
 import UniformTypeIdentifiers
 
 /// Manages subtitles for the video player. Two kinds, both user-imported — nothing is built in:
-///   1. Online subtitle sources (thesubtitledb-compatible JSON) — fetched on demand, auto-matched
-///      by series name / episode, exactly like danmaku sources.
+///   1. Online subtitle sources (thesubtitledb / wyzie, imported JSON) — fetched on demand,
+///      auto-matched by series name / episode, exactly like danmaku sources.
 ///   2. Local subtitle files (.srt/.vtt) — parsed on import, series title & episode from file name.
 struct SubtitleSourceSettingsView: View {
     @State private var store = SubtitleStore.shared
@@ -63,9 +63,13 @@ struct SubtitleSourceSettingsView: View {
                                 Text(source.name)
                                     .font(DSFont.subheadline.weight(.semibold))
                                     .foregroundStyle(DSColor.textPrimary)
-                                Text("\(source.baseURL) · \(source.language)")
+                                Text("\(source.apiType.rawValue) · \(source.language)\(source.apiType == .wyzie && !source.apiKey.isEmpty ? " · key ✓" : "")")
                                     .font(DSFont.caption2)
                                     .foregroundStyle(DSColor.textSecondary)
+                                    .lineLimit(1)
+                                Text(source.baseURL)
+                                    .font(DSFont.caption2)
+                                    .foregroundStyle(DSColor.textSecondary.opacity(0.7))
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             }
@@ -75,7 +79,7 @@ struct SubtitleSourceSettingsView: View {
                 } header: {
                     Text(localized("在线字幕源"))
                 } footer: {
-                    Text(localized("在线字幕源为 thesubtitledb 兼容接口，导入格式：JSON 数组，每项含 id、name、baseUrl，可选 language（默认 zh）。"))
+                    Text(localized("支持两种协议：thesubtitledb（免密钥，中文剧集覆盖好）与 wyzie（聚合 OpenSubtitles/SubDL，需在配置里填自己申请的免费 key）。导入 JSON 数组，每项含 id、name、baseUrl、可选 language、apiType（thesubtitledb/wyzie）、apiKey。"))
                 }
             }
 

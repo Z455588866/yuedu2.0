@@ -1,28 +1,44 @@
 import Foundation
 import Observation
 
-/// One online subtitle provider, thesubtitledb-compatible. `baseURL` is the API root, e.g.
-/// `https://api.thesubtitledb.org`; the service appends `/v1/by-title?q=…` and follows the
-/// `download_url` returned in the payload. `language` is the preferred track code (zh/en/…).
-/// Sources are never built in — the list starts empty and is filled only by import.
+/// Which wire protocol a source speaks. Both are real, public, open-source subtitle APIs:
+/// - `thesubtitledb`: title search, keyless, excellent Chinese coverage (api.thesubtitledb.org).
+/// - `wyzie`: IMDB-id search, aggregates OpenSubtitles/SubDL/Subscene, needs a free user key.
+///   The app bridges a Chinese title to an IMDB id through theSubtitleDB, then queries wyzie.
+/// Unknown values fall back to `thesubtitledb` so old configs keep working.
+enum SubtitleApiType: String, Codable, Sendable {
+    case thesubtitledb
+    case wyzie
+}
+
+/// One online subtitle provider. `baseURL` is the API root. `apiType` selects the wire protocol
+/// (defaults to theSubtitleDB for backward compatibility); `apiKey` is only used by providers that
+/// require one (wyzie) and is supplied by the user in the imported config — never built in.
+/// `language` is the preferred track code (zh/en/…). Sources are never built in — imported only.
 struct OnlineSubtitleSource: Codable, Identifiable, Hashable, Sendable {
     var id: String
     var name: String
     var baseURL: String
     var language: String
     var enabled: Bool = true
+    var apiType: SubtitleApiType = .thesubtitledb
+    var apiKey: String = ""
 
     enum CodingKeys: String, CodingKey {
-        case id, name, language, enabled
+        case id, name, language, enabled, apiType
         case baseURL = "baseUrl"
+        case apiKey
     }
 
-    init(id: String, name: String, baseURL: String, language: String = "zh", enabled: Bool = true) {
+    init(id: String, name: String, baseURL: String, language: String = "zh", enabled: Bool = true,
+         apiType: SubtitleApiType = .thesubtitledb, apiKey: String = "") {
         self.id = id
         self.name = name
         self.baseURL = baseURL
         self.language = language
         self.enabled = enabled
+        self.apiType = apiType
+        self.apiKey = apiKey
     }
 
     init(from decoder: Decoder) throws {
@@ -38,9 +54,17 @@ struct OnlineSubtitleSource: Codable, Identifiable, Hashable, Sendable {
         baseURL = url
         language = (try c.decodeIfPresent(String.self, forKey: .language)) ?? "zh"
         enabled = (try c.decodeIfPresent(Bool.self, forKey: .enabled)) ?? true
+        // Accept `apiType`, `type`, or `format`; unknown strings degrade to theSubtitleDB.
+        let rawType = (try c.decodeIfPresent(String.self, forKey: .apiType))
+            ?? (try decoder.container(keyedBy: AliasKeys.self).decodeIfPresent(String.self, forKey: .type))
+            ?? (try decoder.container(keyedBy: AliasKeys.self).decodeIfPresent(String.self, forKey: .format))
+        apiType = rawType.flatMap(SubtitleApiType.init(rawValue:)) ?? .thesubtitledb
+        apiKey = (try c.decodeIfPresent(String.self, forKey: .apiKey))
+            ?? (try decoder.container(keyedBy: AliasKeys.self).decodeIfPresent(String.self, forKey: .key))
+            ?? ""
     }
 
-    private enum AliasKeys: String, CodingKey { case url }
+    private enum AliasKeys: String, CodingKey { case url, type, format, key }
 }
 
 /// Persists the user's online subtitle sources. Nothing is built in — populated only by import
