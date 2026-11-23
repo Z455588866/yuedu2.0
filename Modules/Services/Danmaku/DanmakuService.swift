@@ -227,12 +227,12 @@ enum DanmakuService {
 
 private extension Dictionary where Key == String, Value == Any {
     func string(_ key: String) -> String? {
-        value(for: key) as? String
+        self[key] as? String
     }
     func int(_ key: String) -> Int? {
-        if let n = value(for: key) as? Int { return n }
-        if let n = value(for: key) as? NSNumber { return n.intValue }
-        if let s = value(for: key) as? String { return Int(s) }
+        if let n = self[key] as? Int { return n }
+        if let n = self[key] as? NSNumber { return n.intValue }
+        if let s = self[key] as? String { return Int(s) }
         return nil
     }
 }
