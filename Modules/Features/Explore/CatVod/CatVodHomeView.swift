@@ -791,18 +791,31 @@ struct CatVodHomeView: View {
                         }
                         .padding(.vertical, 30)
                     } else if detailGroups.isEmpty {
-                        HStack {
-                            Spacer()
-                            VStack(spacing: 8) {
-                                Image(systemName: "film.stack")
-                                    .font(.system(size: 30))
-                                    .foregroundStyle(DSColor.textSecondary)
-                                Text(localized("没有可播放的剧集"))
-                                    .font(DSFont.caption)
-                                    .foregroundStyle(DSColor.textSecondary)
+                        VStack(spacing: 8) {
+                            Image(systemName: "film.stack")
+                                .font(.system(size: 30))
+                                .foregroundStyle(DSColor.textSecondary)
+                            Text(localized("没有可播放的剧集"))
+                                .font(DSFont.caption)
+                                .foregroundStyle(DSColor.textSecondary)
+                            // Netdisk/Alist rows often carry a title and a size
+                            // ("6.6GB") but no episode list until an account is
+                            // signed in — that is why this sheet looked empty
+                            // for cloud titles while ordinary ones worked.
+                            Text(localized("这个条目只有简介，没有剧集列表。网盘或 Alist 资源需要先在网盘账号里登录；也可能是源站只给了分享链接、没有可播放地址。"))
+                                .font(DSFont.caption2)
+                                .foregroundStyle(DSColor.textSecondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 24)
+                            NavigationLink {
+                                CatVodCloudAccountView()
+                            } label: {
+                                Text(localized("网盘账号配置")).font(DSFont.caption)
                             }
-                            Spacer()
+                            .buttonStyle(.bordered)
+                            .padding(.top, 2)
                         }
+                        .frame(maxWidth: .infinity)
                         .padding(.vertical, 30)
                     } else {
                         if isLoadingDetail {

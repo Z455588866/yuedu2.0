@@ -414,12 +414,16 @@ export async function runCatVod(bundlePath, options = {}) {
       req.on("error", fail);
       // A bundle whose loopback route never answers must not leave this promise
       // pending forever: that would wedge the per-site queue and show an
-      // permanent spinner. Amounts follow the CatVod players: a search 60s, a
-      // play address 90s (a signed-out netdisk line waits for its own poll), and
-      // everything else the full bundle budget.
-      const fallbackMs = Number(options.injectTimeoutMs) > 0 ? Number(options.injectTimeoutMs) : 150000;
-      const timeoutMs = route.includes("/search") ? Math.min(fallbackMs, 60000)
+      // permanent spinner. Budgets are per action, and deliberately short for
+      // browsing: a source that needs 150s to answer a category is unusable, and
+      // making the person stare at a spinner that long is worse than telling
+      // them it failed and letting them tap 重试. Only playback keeps a long
+      // budget — a signed-out netdisk line waits for its own poll.
+      const fallbackMs = Number(options.injectTimeoutMs) > 0 ? Number(options.injectTimeoutMs) : 30000;
+      const timeoutMs = route.includes("/search") ? Math.min(fallbackMs, 30000)
         : route.includes("/play") ? Math.min(fallbackMs, 90000)
+        : route.includes("/detail") ? Math.min(fallbackMs, 30000)
+        : route.includes("/category") || route.includes("/home") ? Math.min(fallbackMs, 25000)
         : fallbackMs;
       req.setTimeout(timeoutMs, () => {
         fail(new Error(`CatVod request timed out for ${route}`));

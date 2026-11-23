@@ -21,9 +21,11 @@ export async function startMobileGateway(bridge, dependencies = {}) {
     // compile and server boot for every switch. The heap cap per worker keeps the
     // app inside the jetsam budget; idle only retires a session after half an hour.
     catVodMaxSessions: 5, catVodIdleMs: 30 * 60 * 1000,
-    // A cold bundle plus a slow upstream needs the CatVod players' own budget
-    // (search 60s, play 90s, the rest 150s); 40s failed healthy-but-slow sources.
-    workerTimeoutMs: 150000,
+    // The runner enforces short per-action budgets (browse 25s, detail/search
+    // 30s, play 90s). This is only the outer backstop for a wedged child
+    // process, so it just has to clear the longest one: 150s meant a stuck
+    // source kept the UI spinning for two and a half minutes.
+    workerTimeoutMs: 100000,
     // Bundles are immutable once imported; keep the resolved artifact much
     // longer so switching back does not re-download + re-hash a 16MB file.
     artifactCacheTTLms: 10 * 60 * 1000,

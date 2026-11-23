@@ -218,19 +218,19 @@ export function createGateway(config, dependencies = {}) {
         // object or omit it. Downstream requires a string route, so drop those
         // malformed entries here rather than letting `site.api.replace()` throw
         // deep in the runner ("r.replace is not a function").
-        const spiderAPIPattern = /^\/spider\/[^/\s]+\/\d{1,2}$/u;
         let sites = Array.isArray(result?.sites)
           ? result.sites
               .filter((site) => site && typeof site === "object")
               .map((site) => {
                 const key = String(site.key ?? "").trim();
-                const rawAPI = typeof site.api === "string" ? site.api.trim() : "";
-                // Normalize the route to the canonical /spider/<key>/3 form.
-                // Some bundles emit an empty/absolute/odd api; derive it from
-                // key so downstream validation never rejects a usable site.
-                const api = spiderAPIPattern.test(rawAPI) || rawAPI.startsWith("csp_")
-                  ? rawAPI
-                  : (key ? `/spider/${encodeURIComponent(key)}/3` : "");
+                // Keep whatever the bundle declared. Its own router resolves by
+                // that spelling, and the display key often differs from the
+                // spider name — rebuilding the path from `key` is what made
+                // sites answer "站源不存在". Only synthesise a route when the
+                // bundle gave nothing usable.
+                const rawAPI = typeof site.api === "string" ? site.api.trim().replace(/\/+$/u, "") : "";
+                const usableAPI = /^\/spider\/[^/\s]+\/\d{1,2}$/u.test(rawAPI) || rawAPI.startsWith("csp_");
+                const api = usableAPI ? rawAPI : (key ? `/spider/${encodeURIComponent(key)}/3` : "");
                 return {
                   ...site,
                   key,

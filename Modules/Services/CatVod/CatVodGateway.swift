@@ -152,8 +152,38 @@ enum CatVodError: LocalizedError {
         case .invalidConfiguration: return localized("手机内置脚本配置过大或无效")
         case .startupFailed(let message): return message
         case .startupTimedOut: return localized("手机内置脚本引擎启动超时，请重新启动 App")
-        case .http(let code, let message): return String(format: localized("猫源请求失败（%ld）：%@"), code, message)
+        case .http(let code, let message): return Self.describeHTTP(code: code, message: message)
         case .emptyResponse: return localized("猫源返回空数据")
         }
+    }
+
+    /// Upstream trouble reaches the app as a 5xx carrying the source's own
+    /// wording — "站源不存在", "红果上游暂时无法连接". Printed raw next to a
+    /// number, it reads like *our* bug and tells the person nothing they can act
+    /// on. These are source-side failures: name the side, say whether retrying
+    /// is worth it, and keep the original text only when it is genuinely useful.
+    private static func describeHTTP(code: Int, message: String) -> String {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = text.lowercased()
+        if text.contains("站源不存在") || lower.contains("site not found") || lower.contains("no such site") {
+            return localized("这个站点不在当前接口里了。换一个站点，或者更新接口后再试")
+        }
+        if code == 408 || code == 504 || text.contains("timed out") || text.contains("timeout")
+            || text.contains("超时") {
+            return localized("源站响应超时（源自己的问题）。稍后重试，或者换一个站点")
+        }
+        if code >= 500 {
+            if text.contains("无法连接") || text.contains("连接失败") || text.contains("请稍后重试")
+                || lower.contains("econnrefused") || lower.contains("etimedout")
+                || lower.contains("socket hang up") || lower.contains("enotfound")
+                || lower.contains("unavailable") {
+                return localized("源站连不上（源自己的问题，不是 App 坏了）。稍后重试，或者换一个站点")
+            }
+            return String(format: localized("源站返回错误：%@"), text.isEmpty ? localized("未知原因") : text)
+        }
+        if code == 401 || code == 403 {
+            return String(format: localized("源站拒绝访问（%ld），可能需要登录或 Cookie 已失效：%@"), code, text)
+        }
+        return String(format: localized("猫源请求失败（%ld）：%@"), code, text)
     }
 }
