@@ -165,6 +165,20 @@ enum CatVodError: LocalizedError {
     private static func describeHTTP(code: Int, message: String) -> String {
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = text.lowercased()
+        // 网盘类线路：没登录时的提示原本是「请先在 TVBox 设置 → 网盘设置中保存
+        // 夸克 Cookie」——我们的 App 里没有那个菜单，照着找永远找不到。
+        if text.contains("网盘") || text.contains("登录") || text.contains("未配置")
+            || lower.contains("cookie 未") || lower.contains("cookie未") {
+            if text.contains("失效") || text.contains("过期") || text.contains("重新登录") {
+                return localized("网盘登录已失效。去「管理 → 网盘账号」重新网页登录一次，再点这一集")
+            }
+            return localized("这条是网盘资源，还没登录。去「管理 → 网盘账号」用网页登录一次即可播放")
+        }
+        // 少数站点用到了运行时不提供的接口（典型是 fetch），这不是网络问题，
+        // 换线路/换源才有用，原样抛出去只会让人以为是 App 坏了。
+        if lower.hasSuffix("is not defined") || lower.contains("is not a function") {
+            return String(format: localized("这个站点的播放组件依赖当前运行时不提供的接口（%@）。换一条线路，或换一个源"), text)
+        }
         if text.contains("站源不存在") || lower.contains("site not found") || lower.contains("no such site") {
             return localized("这个站点不在当前接口里了。换一个站点，或者更新接口后再试")
         }

@@ -112,18 +112,37 @@ final class CatVodService {
     func searchAll(bundleURL: String, sites: [CatVodSite], keyword: String) async -> [(CatVodSite, CatVodList)] {
         let targets = sites.filter { $0.searchable != false }
         guard !targets.isEmpty else { return [] }
+        // 全源搜索动辄几十上百个站点。一次全放出去会把会话池挤爆（每个会话
+        // 串行、各自 30s 超时），最后是最慢的那个决定整页出现的时间。这里保持
+        // 6 路并发，并在 25s 后带着已有结果返回——先给能给的，比等到超时好。
+        let maximumConcurrent = 6
+        let budget: UInt64 = 25_000_000_000
+        let started = DispatchTime.now().uptimeNanoseconds
         return await withTaskGroup(of: (CatVodSite, CatVodList?).self) { group in
-            for site in targets {
+            var next = 0
+            var collected: [(CatVodSite, CatVodList)] = []
+            let seed = min(maximumConcurrent, targets.count)
+            while next < seed {
+                let site = targets[next]
+                next += 1
                 group.addTask { [weak self] in
                     guard let self else { return (site, nil) }
-                    let list = try? await self.search(bundleURL: bundleURL, site: site, keyword: keyword)
-                    return (site, list)
+                    return (site, try? await self.search(bundleURL: bundleURL, site: site, keyword: keyword))
                 }
             }
-            var collected: [(CatVodSite, CatVodList)] = []
             for await (site, list) in group {
                 if let list, !list.media.isEmpty { collected.append((site, list)) }
+                if DispatchTime.now().uptimeNanoseconds - started > budget { break }
+                if next < targets.count {
+                    let site = targets[next]
+                    next += 1
+                    group.addTask { [weak self] in
+                        guard let self else { return (site, nil) }
+                        return (site, try? await self.search(bundleURL: bundleURL, site: site, keyword: keyword))
+                    }
+                }
             }
+            group.cancelAll()
             return collected
         }
     }
@@ -132,13 +151,49 @@ final class CatVodService {
     func detail(bundleURL: String, site: CatVodSite, id: String) async throws -> (CatVodMedia, [CatVodGroup]) {
         let object = try await invoke(bundleURL: bundleURL, site: site, action: "detail",
                                       arguments: ["ids": [id]])
-        guard let first = (object["list"] as? [[String: Any]])?.first,
+        let items = object["list"] as? [[String: Any]] ?? []
+        guard let first = items.first,
               let data = try? JSONSerialization.data(withJSONObject: first),
               let media = try? decoder.decode(CatVodMedia.self, from: data) else {
             throw CatVodError.emptyResponse
         }
-        let from = first["vod_play_from"] as? String ?? ""
-        let playURL = first["vod_play_url"] as? String ?? ""
+        var from = first["vod_play_from"] as? String ?? ""
+        var playURL = first["vod_play_url"] as? String ?? ""
+
+        // Some bundles answer in two steps: the first detail returns provider
+        // "groups" (七味/盘库/蜗牛 return one entry per 线路) whose ids must be
+        // resolved again before any episode exists. Showing only `list[0]` left
+        // the sheet with "没有可播放的剧集" while the source was perfectly fine.
+        // Resolve up to three of them and merge their play lines.
+        if playURL.isEmpty, items.count > 0 {
+            var visited: Set<String> = [id]
+            var fromParts: [String] = []
+            var urlParts: [String] = []
+            var usedFlags = Set<String>()
+            for item in items.prefix(3) {
+                guard let nextID = item["vod_id"] as? String, !nextID.isEmpty,
+                      !visited.contains(nextID) else { continue }
+                visited.insert(nextID)
+                guard let deeper = try? await invoke(bundleURL: bundleURL, site: site, action: "detail",
+                                                     arguments: ["ids": [nextID]]),
+                      let resolved = (deeper["list"] as? [[String: Any]])?.first,
+                      let deeperURL = resolved["vod_play_url"] as? String, !deeperURL.isEmpty else { continue }
+                let deeperFrom = resolved["vod_play_from"] as? String ?? ""
+                // 两条线路可能同名（"量子线路(1)"），重名会让选集合并到同一条里。
+                var flags = deeperFrom.components(separatedBy: "$$$")
+                for index in flags.indices where usedFlags.contains(flags[index]) {
+                    flags[index] += " ·\(fromParts.count + index + 1)"
+                }
+                usedFlags.formUnion(flags)
+                fromParts.append(flags.joined(separator: "$$$"))
+                urlParts.append(deeperURL)
+            }
+            if !fromParts.isEmpty {
+                from = fromParts.joined(separator: "$$$")
+                playURL = urlParts.joined(separator: "$$$")
+            }
+        }
+
         let groups = CatVodPlaylistParser.groups(from: from, playURL: playURL)
         // Only the two play columns are stored: the episode list is all the detail
         // sheet needs, and keeping `vod_*` text out of the cache avoids persisting

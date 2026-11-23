@@ -628,6 +628,14 @@ struct CatVodHomeView: View {
 
     private func openDetail(_ item: CatVodMedia, from overrideSite: CatVodSite? = nil) async {
         guard let bundle = currentBundleURL, let site = overrideSite ?? selectedSite else { return }
+        // 豆瓣/推荐类站点的条目是「聚合条目」，id 形如 msearch:36847425，它们的
+        // detail 永远返回空——点下去只能看到「没有可播放的剧集」。TVBox 的处理
+        // 方式是把这类条目转成一次全网搜索，这里照做，否则默认落地页整个废物。
+        if item.id.lowercased().hasPrefix("msearch") {
+            await MainActor.run { keyword = item.name }
+            await search()
+            return
+        }
         // The interface URL belongs in the key: two different interfaces can carry a
         // site with the same key, and a cache hit from the other one would show the
         // wrong episode list.
@@ -668,6 +676,11 @@ struct CatVodHomeView: View {
                 isOpeningDetail = false
             }
         } catch {
+            // 源对这一条什么都没返回：不要停在一张空白的详情页上，直接拿片名
+            // 去全网搜一遍。用户点的是「这部剧」，不是「这个源的这一条记录」。
+            var missing = false
+            if let catError = error as? CatVodError, case .emptyResponse = catError { missing = true }
+            let fallback = missing && !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             await MainActor.run {
                 if detailItem?.id == item.id {
                     // Keep the cached episodes visible: a failed refresh is worth a
@@ -676,6 +689,11 @@ struct CatVodHomeView: View {
                     isLoadingDetail = false
                 }
                 isOpeningDetail = false
+                if fallback { detailItem = nil }
+            }
+            if fallback {
+                await MainActor.run { keyword = item.name }
+                await search()
             }
         }
     }

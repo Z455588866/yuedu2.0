@@ -222,6 +222,26 @@ export async function runCatVod(bundlePath, options = {}) {
     playing: { title: "", episodeName: "", flag: "" },
     danmaku: ""
   };
+  // Bundles ask the host for a drive cookie by URL (`getCookie("https://drive.quark.cn")`),
+  // not by the credential key the app stores. Without this mapping every ask
+  // returned "" and the source behaved as if the person never signed in.
+  const CLOUD_COOKIE_HOSTS = [
+    [/quark\.cn/i, "quarkCookie"],
+    [/uc\.cn|ucweb\.com/i, "ucCookie"],
+    [/baidu\.com/i, "baiduCookie"],
+    [/115\.com/i, "pan115Cookie"],
+    [/xunlei/i, "xunleiCookie"]
+  ];
+  function cookieFor(url) {
+    if (!url) return "";
+    if (bridgeState.cookies[url]) return bridgeState.cookies[url];
+    const accounts = options.cloudAccounts || {};
+    for (const [pattern, key] of CLOUD_COOKIE_HOSTS) {
+      const value = String(accounts[key] || "").trim();
+      if (value && pattern.test(url)) return value;
+    }
+    return "";
+  }
   const messagesServer = http.createServer((request, response) => {
     if (request.method !== "POST") { response.writeHead(404); response.end(); return; }
     const chunks = [];
@@ -237,7 +257,7 @@ export async function runCatVod(bundlePath, options = {}) {
       } else if (action === "getUserAgent") {
         answer.userAgent = bridgeState.userAgent;
       } else if (action === "getCookie") {
-        answer.cookie = bridgeState.cookies[String(opt.url || "")] || "";
+        answer.cookie = cookieFor(String(opt.url || ""));
       } else if (action === "setCookie") {
         const url = String(opt.url || "");
         if (url) bridgeState.cookies[url] = String(opt.cookie || "");
@@ -334,9 +354,14 @@ export async function runCatVod(bundlePath, options = {}) {
   // Open config centres expose (tvbox-silicon shares them the same way).
   async function shareAccounts() {
     const accounts = options.cloudAccounts || {};
-    const drives = [["quark", "quarkCookie"], ["uc", "ucCookie"], ["baidu", "baiduCookie"], ["pan115", "pan115Cookie"]];
+    const drives = [
+      ["quark", "quarkCookie"], ["uc", "ucCookie"], ["baidu", "baiduCookie"],
+      ["pan115", "pan115Cookie"], ["aliyun", "token"], ["tianyi", "tianyiToken"],
+      ["123", "pan123Token"], ["guangya", "guangyaToken"], ["xunlei", "xunleiCookie"]
+    ];
     const layouts = [
       { route: (drive) => `/website/api/credential/${drive}/cookie`, body: (value) => ({ value }) },
+      { route: (drive) => `/website/api/credential/${drive}/token`, body: (value) => ({ value }) },
       { route: (drive) => `/website/${drive}/cookie`, body: (value) => ({ cookie: value }) }
     ];
     for (const [drive, key] of drives) {

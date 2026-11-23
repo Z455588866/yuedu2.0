@@ -156,6 +156,9 @@ export class CatVodManager {
     // Netdisk credentials live in the trusted parent and can change while the app
     // runs, so they are read through a callback when a session starts.
     this.cloudAccounts = options.cloudAccounts;
+    this.accountsJSON = JSON.stringify(
+      (typeof options.cloudAccounts === "function" ? options.cloudAccounts() : (options.cloudAccounts || {})) || {}
+    );
     this.sweeper = setInterval(() => this.sweep(), Math.min(this.idleMs, 5_000));
     this.sweeper.unref();
   }
@@ -169,6 +172,11 @@ export class CatVodManager {
   }
 
   async invoke(artifact, site, action, argumentsValue) {
+    // Credentials are seeded into a bundle when its session starts. A session
+    // opened before the person signed in would keep answering "请先保存 Cookie"
+    // for the rest of its 30-minute life, so a change retires the sessions and
+    // lets the next call start with the new accounts.
+    this.#checkAccounts();
     // The parent resolves site.jar; it may contain private bundle credentials.
     // Remote code needs only the provider route and its initialization value.
     const runnerSite = { key: site.key, api: site.api, ext: site.ext || "" };
@@ -186,6 +194,15 @@ export class CatVodManager {
       }
       return result;
     }, argumentsValue.verifyResource === true);
+  }
+
+  #checkAccounts() {
+    const value = typeof this.cloudAccounts === "function" ? this.cloudAccounts() : (this.cloudAccounts || {});
+    const json = JSON.stringify(value || {});
+    if (json === this.accountsJSON) return;
+    this.accountsJSON = json;
+    for (const session of this.sessions.values()) session.close();
+    this.sessions.clear();
   }
 
   async #session(artifact) {

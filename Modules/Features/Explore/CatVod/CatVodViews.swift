@@ -60,6 +60,18 @@ struct CatVodSourceSettingsView: View {
                             renameText = source.name
                             renamingSource = source
                         }
+
+                        // 点名称也能改名，但没人猜得到。给一个看得见的入口。
+                        Button {
+                            renameText = source.name
+                            renamingSource = source
+                        } label: {
+                            Image(systemName: "pencil.circle")
+                                .font(.system(size: 20))
+                                .foregroundStyle(DSColor.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(localized("改名"))
                     }
                     .swipeActions(edge: .leading, allowsFullSwipe: false) {
                         Button {
@@ -101,7 +113,7 @@ struct CatVodSourceSettingsView: View {
                     }
                 }
             } footer: {
-                Text(localized("支持 .js.md5 / .js 接口地址，可整段粘贴带 # 注释的列表；每行一个地址。"))
+                Text(localized("支持 .js.md5 / .js 接口地址，可整段粘贴带 # 注释的列表；每行一个地址。点猫源名称或右侧铅笔可改名。"))
                     .dsSectionFooter()
             }
 
