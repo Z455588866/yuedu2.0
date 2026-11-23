@@ -19,7 +19,7 @@ enum SubtitleService {
         }
         // GB_2312 / GBK is the common encoding for Chinese .srt files.
         let gbk = String.Encoding(rawValue: UInt(CFStringConvertEncodingToNSStringEncoding(
-            CFStringEncoding(CFStringEncodings.GBK_Encoding.rawValue))))
+            CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))))
         if let s = String(data: data, encoding: gbk), !s.isEmpty {
             return stripBOM(s)
         }
