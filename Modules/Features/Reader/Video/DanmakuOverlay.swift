@@ -234,7 +234,10 @@ struct DanmakuOverlay: View {
                                 screenH: Double(size.height))
                 }
             }
-            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            // Fill the available space instead of pinning to `size` read above. `size` is used
+            // only for coordinate math; freezing it into the frame can capture a stale geometry
+            // after Picture in Picture restores. maxWidth/maxHeight always track the real layer.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .allowsHitTesting(false)
             .opacity(opacity)
         }
