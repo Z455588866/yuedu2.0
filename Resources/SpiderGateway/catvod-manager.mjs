@@ -153,6 +153,9 @@ export class CatVodManager {
     this.responseCaches = new WeakMap();
     this.responseCacheOptions = options.responseCacheOptions;
     this.createProcess = options.createProcess;
+    // Netdisk credentials live in the trusted parent and can change while the app
+    // runs, so they are read through a callback when a session starts.
+    this.cloudAccounts = options.cloudAccounts;
     this.sweeper = setInterval(() => this.sweep(), Math.min(this.idleMs, 5_000));
     this.sweeper.unref();
   }
@@ -213,7 +216,8 @@ export class CatVodManager {
     // outbound HTTP, while older supported Node releases do not expose this flag.
     const child = this.createProcess
       ? this.createProcess({ bundlePath: artifact.path, runtimeDir, runnerPath,
-          maxLineBytes: this.maxLineBytes })
+          maxLineBytes: this.maxLineBytes, configPath: artifact.configPath,
+          cloudAccounts: typeof this.cloudAccounts === "function" ? this.cloudAccounts() : (this.cloudAccounts || {}) })
       : spawn(process.execPath, [
       "--max-old-space-size=256",
       ...catVodPermissionArguments(),

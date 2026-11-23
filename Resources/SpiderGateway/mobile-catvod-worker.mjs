@@ -5,7 +5,7 @@ import { parentPort, workerData } from 'node:worker_threads';
 import { runCatVod } from './catvod-runner.mjs';
 import { restrictMobileFileDescriptors } from './mobile-file-descriptors.mjs';
 
-const { bundlePath, runtimeDir, maxLineBytes } = workerData;
+const { bundlePath, runtimeDir, maxLineBytes, configPath, cloudAccounts } = workerData;
 restrictMobileFileDescriptors();
 // Bundles also throw from timers and from their own listeners. Node ends the
 // whole worker when nobody listens, which drops every later call of this
@@ -70,6 +70,8 @@ try {
     input,
     writeLine: line => parentPort.postMessage(line),
     onActivity: reportActivity,
+    configPath,
+    cloudAccounts,
     wrapRequire: original => name => {
       if (name === 'fs' || name === 'node:fs') return scopedFS(fs);
       if (name === 'fs/promises' || name === 'node:fs/promises') return scopedFS(fs.promises);

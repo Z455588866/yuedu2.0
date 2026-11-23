@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import dns from "node:dns/promises";
 import { createReadStream } from "node:fs";
-import { mkdir, open, rename, stat, unlink } from "node:fs/promises";
+import { mkdir, open, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { GatewayError } from "./errors.mjs";
 import { isPrivateAddress } from "./jar-reference.mjs";
@@ -156,7 +156,8 @@ export class NodeBundleCache {
       if (info.isFile() && info.size > 0 && info.size <= this.maxBytes) {
         const digests = await fileDigests(filePath);
         if (!expectedMD5 || digests.md5 === expectedMD5) {
-          return { path: filePath, digest: digests.sha256, sourceURL: bundleURL.toString() };
+          return this.#withConfig({ path: filePath, digest: digests.sha256, sourceURL: bundleURL.toString() },
+            bundleURL, cacheKey, parsed.authorization);
         }
       }
     } catch (error) {
@@ -173,10 +174,55 @@ export class NodeBundleCache {
         throw new GatewayError("BUNDLE_CHECKSUM_MISMATCH", "CatVod bundle checksum does not match", 422);
       }
       await rename(temporaryPath, filePath);
-      return { path: filePath, digest: result.sha256, sourceURL: bundleURL.toString() };
+      return this.#withConfig({ path: filePath, digest: result.sha256, sourceURL: bundleURL.toString() },
+        bundleURL, cacheKey, parsed.authorization);
     } catch (error) {
       await unlink(temporaryPath).catch(() => {});
       throw error;
+    }
+  }
+
+  /// A CatVod bundle keeps its settings beside itself (`index.js` ->
+  /// `index.config.js`). A config-centre bundle started without them lists no
+  /// sites at all — which the app can only read as "every source failed" — so the
+  /// file is fetched once and cached next to the bundle. A bundle without one, or
+  /// one unreachable right now, is not an error: the runner then starts it with
+  /// the empty compatibility shape.
+  async #withConfig(artifact, bundleURL, cacheKey, authorization) {
+    const configURL = new URL(bundleURL);
+    configURL.pathname = configURL.pathname.replace(/\.js$/, ".config.js");
+    if (configURL.pathname === bundleURL.pathname) return artifact;
+    const filePath = path.join(this.cacheDir, `${cacheKey}.config.js`);
+    try {
+      const info = await stat(filePath);
+      if (info.isFile() && info.size > 0) return { ...artifact, configPath: filePath };
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    try {
+      // The settings file is a sibling of an allowlisted bundle, so it inherits
+      // that bundle's trust and never widens the list to a new origin.
+      const allowedProtocol = configURL.protocol === "https:"
+        || (this.allowHTTP && configURL.protocol === "http:");
+      const permitted = allowedProtocol && (
+        this.allowedURLs.includes(configURL.toString())
+        || this.allowedURLs.some((allowed) => {
+          try {
+            const base = new URL(allowed);
+            return base.origin === configURL.origin
+              && base.pathname.replace(/\.js$/, "") === configURL.pathname.replace(/\.config\.js$/, "");
+          } catch {
+            return false;
+          }
+        })
+      );
+      if (!permitted) return artifact;
+      const text = await this.#fetchText(configURL, 4 * 1024 * 1024, authorization);
+      if (!text.trim()) return artifact;
+      await writeFile(filePath, text, { mode: 0o600 });
+      return { ...artifact, configPath: filePath };
+    } catch {
+      return artifact;
     }
   }
 

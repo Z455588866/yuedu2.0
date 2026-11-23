@@ -59,7 +59,10 @@ export function createGateway(config, dependencies = {}) {
   // Third-party CatVod code runs in a separate process that never receives
   // account cookies or refresh tokens. Built-in cloud actions stay here in the
   // trusted parent process.
-  const catVod = dependencies.catVod || new CatVodManager({ ...config, cloudConfig: {} });
+  // Netdisk sources stay empty without a signed-in account, so the drives the
+  // user configured are handed to the bundle that asks for them (the same trust
+  // boundary as running the bundle at all: it already has outbound network).
+  const catVod = dependencies.catVod || new CatVodManager({ ...config });
   const trustedFetch = dependencies.fetchValue || fetch;
   // Trusted parent process only. Expose every provider the app configured so
   // built-in cloud actions (quark/123/aliyun/baidu/115/...) can read them.

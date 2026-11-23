@@ -30,11 +30,11 @@ function workerHeapLimit() {
 
 // `runnerPath` is still accepted for callers that pass it; once the permission
 // model is gone it is no longer needed for an allowlist.
-export function createMobileCatVodProcess({ bundlePath, runtimeDir, maxLineBytes }) {
+export function createMobileCatVodProcess({ bundlePath, runtimeDir, maxLineBytes, configPath, cloudAccounts }) {
   const result = new EventEmitter();
   const control = new PassThrough();
   const worker = new Worker(new URL('./mobile-catvod-worker.mjs', import.meta.url), {
-    workerData: { bundlePath, runtimeDir, maxLineBytes },
+    workerData: { bundlePath, runtimeDir, maxLineBytes, configPath, cloudAccounts },
     env: { NODE_ENV: 'development', UNDICI_NO_WASM_SIMD: '1' },
     argv: [], stdout: true, stderr: true,
     resourceLimits: { maxOldGenerationSizeMb: workerHeapLimit(), stackSizeMb: 4 },

@@ -198,7 +198,54 @@ export async function runCatVod(bundlePath, options = {}) {
   console.info = log;
   console.warn = log;
   console.error = log;
-  globalThis.catDartServerPort = () => 0;
+  // A bundle reaches back to the host by POSTing {action, opt} to
+  // http://127.0.0.1:<catDartServerPort()>/msg — the CatVod Open apps answer a
+  // few of these (toast, cookie, user agent, what is playing, danmaku). A bundle
+  // that gets no answer waits or gives up, so the bridge has to exist: it used
+  // to answer port 0 and every such call failed.
+  const bridgeState = {
+    userAgent: options.userAgent || "",
+    cookies: { ...(options.cookies || {}) },
+    playing: { title: "", episodeName: "", flag: "" },
+    danmaku: ""
+  };
+  const messagesServer = http.createServer((request, response) => {
+    if (request.method !== "POST") { response.writeHead(404); response.end(); return; }
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      let message = {};
+      try { message = JSON.parse(Buffer.concat(chunks).toString("utf8")) || {}; } catch { /* empty message */ }
+      const action = String(message.action || "");
+      const opt = message.opt && typeof message.opt === "object" ? message.opt : {};
+      const answer = { success: true, code: 0 };
+      if (action === "getPlayInfo") {
+        Object.assign(answer, bridgeState.playing);
+      } else if (action === "getUserAgent") {
+        answer.userAgent = bridgeState.userAgent;
+      } else if (action === "getCookie") {
+        answer.cookie = bridgeState.cookies[String(opt.url || "")] || "";
+      } else if (action === "setCookie") {
+        const url = String(opt.url || "");
+        if (url) bridgeState.cookies[url] = String(opt.cookie || "");
+      } else if (action === "danmuPush") {
+        bridgeState.danmaku = String(opt.url || "");
+        try { options.onDanmaku?.(bridgeState.danmaku); } catch { /* reporting must not fail */ }
+      } else if (action === "openWeb" || action === "openInternalWebview") {
+        try { options.onOpenWeb?.(String(opt.url || "")); } catch { /* ignore */ }
+      } else if (action === "toast") {
+        try { options.onToast?.(String(opt.message || opt.text || "")); } catch { /* ignore */ }
+      } else {
+        answer.success = false;
+        answer.code = -1;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(answer));
+    });
+  });
+  await new Promise((resolve) => messagesServer.listen(0, "127.0.0.1", resolve));
+  const messagesPort = messagesServer.address().port;
+  globalThis.catDartServerPort = () => messagesPort;
 
   // Mature loader (proven in tvbox-silicon): require the bundle and call its
   // exported start(). The bundle builds its HTTP app on the server returned by
@@ -241,9 +288,21 @@ export async function runCatVod(bundlePath, options = {}) {
   globalThis.__catvodExports = bundleModule.exports;
   const startBundle = bundleModule.exports?.start ?? globalThis.__catvodExports?.start;
   if (typeof startBundle !== "function") throw new Error("CatVod start export is unavailable");
-  // Account credentials remain in the trusted Gateway parent process. Remote
-  // CatVod bundles receive only an empty compatibility configuration.
-  await startBundle({
+  // A bundle's settings sit beside it (index.js -> index.config.js). Without them
+  // a config-centre bundle starts with no sites at all, which the app can only
+  // read as "every source failed". Fall back to the empty compatibility shape
+  // when the bundle ships none.
+  let bundleConfig = null;
+  if (options.configPath) {
+    try {
+      const loaded = await import(pathToFileURL(options.configPath).href);
+      const value = loaded?.default ?? loaded;
+      if (value && typeof value === "object" && !Array.isArray(value)) bundleConfig = value;
+    } catch (error) {
+      process.stderr.write(`CATVOD_CONFIG ${error?.message || error}\n`);
+    }
+  }
+  await startBundle(bundleConfig && Object.keys(bundleConfig).length > 0 ? bundleConfig : {
     biliCookie: "",
     pans: { list: [] },
     cms: { list: [] },
@@ -256,6 +315,53 @@ export async function runCatVod(bundlePath, options = {}) {
   }
   const port = loopbackServer.address().port;
   const initialized = new Map();
+
+  // Netdisk sources list their files only with a signed-in account. The host owns
+  // the credentials and hands each drive to the bundle at the routes the CatVod
+  // Open config centres expose (tvbox-silicon shares them the same way).
+  async function shareAccounts() {
+    const accounts = options.cloudAccounts || {};
+    const drives = [["quark", "quarkCookie"], ["uc", "ucCookie"], ["baidu", "baiduCookie"], ["pan115", "pan115Cookie"]];
+    const layouts = [
+      { route: (drive) => `/website/api/credential/${drive}/cookie`, body: (value) => ({ value }) },
+      { route: (drive) => `/website/${drive}/cookie`, body: (value) => ({ cookie: value }) }
+    ];
+    for (const [drive, key] of drives) {
+      const value = String(accounts[key] || "").trim();
+      if (!value) continue;
+      for (const layout of layouts) {
+        try {
+          await injectOnce("put", layout.route(drive), layout.body(value));
+          break;
+        } catch {
+          // A bundle may use the other layout, or offer neither.
+        }
+      }
+    }
+  }
+  await shareAccounts().catch(() => {});
+
+  // What plays, so a bundle that asks the host ("getPlayInfo") gets an answer it
+  // can match against its own danmaku list.
+  const rememberedTitles = new Map();
+  function rememberTitles(result) {
+    const list = Array.isArray(result?.list) ? result.list : [];
+    for (const video of list) {
+      const title = String(video?.vod_name ?? "").trim();
+      if (!title) continue;
+      const flags = String(video?.vod_play_from ?? "").split("$$$");
+      String(video?.vod_play_url ?? "").split("$$$").forEach((line, index) => {
+        for (const item of String(line).split("#")) {
+          const cut = item.indexOf("$");
+          const episodeName = cut < 0 ? "" : item.slice(0, cut).trim();
+          const id = cut < 0 ? item : item.slice(cut + 1);
+          if (!id.trim()) continue;
+          rememberedTitles.set(id, { title, episodeName, flag: flags[index] || "" });
+        }
+      });
+    }
+    while (rememberedTitles.size > 2000) rememberedTitles.delete(rememberedTitles.keys().next().value);
+  }
 
   function injectOnce(method, route, payload) {
     return new Promise((resolve, reject) => {
@@ -295,8 +401,13 @@ export async function runCatVod(bundlePath, options = {}) {
       req.on("error", fail);
       // A bundle whose loopback route never answers must not leave this promise
       // pending forever: that would wedge the per-site queue and show an
-      // permanent spinner. Bound every inject with a hard timeout.
-      const timeoutMs = Number(options.injectTimeoutMs) > 0 ? Number(options.injectTimeoutMs) : 20000;
+      // permanent spinner. Amounts follow the CatVod players: a search 60s, a
+      // play address 90s (a signed-out netdisk line waits for its own poll), and
+      // everything else the full bundle budget.
+      const fallbackMs = Number(options.injectTimeoutMs) > 0 ? Number(options.injectTimeoutMs) : 150000;
+      const timeoutMs = route.includes("/search") ? Math.min(fallbackMs, 60000)
+        : route.includes("/play") ? Math.min(fallbackMs, 90000)
+        : fallbackMs;
       req.setTimeout(timeoutMs, () => {
         fail(new Error(`CatVod request timed out for ${route}`));
         req.destroy();
@@ -356,6 +467,15 @@ export async function runCatVod(bundlePath, options = {}) {
       }
       throw error;
     }
+    if (message.action === "detail") rememberTitles(result);
+    if (message.action === "player") {
+      const known = rememberedTitles.get(String(message.arguments?.id ?? ""));
+      bridgeState.playing = {
+        title: known?.title || "",
+        episodeName: known?.episodeName || "",
+        flag: String(message.arguments?.flag || known?.flag || "")
+      };
+    }
     return message.action === "player"
       ? await resolvePlayerResult(site, result, message.arguments.id)
       : result;
@@ -384,6 +504,7 @@ export async function runCatVod(bundlePath, options = {}) {
     if (active.size >= maximumConcurrentRequests) await Promise.race(active);
   }
   await Promise.allSettled(active);
+  messagesServer.close();
   await globalThis.__catvodExports.stop?.();
 }
 

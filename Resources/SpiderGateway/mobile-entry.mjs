@@ -16,19 +16,22 @@ export async function startMobileGateway(bridge, dependencies = {}) {
     nodeBundleCacheDir: path.join(initial.cacheRoot, 'bundles'),
     nodeBundleRuntimeDir: path.join(initial.cacheRoot, 'runtime'),
     nodeBundleAllowHTTP: initial.nodeBundleAllowedURLs.some(url => url.startsWith('http://')),
-    // Keep a couple of warm sessions so switching between imported interfaces
-    // reuses an already-compiled bundle instead of recompiling every time. iOS
-    // runs each bundle in a disposable worker capped at hundreds of MB of heap,
-    // so four live sessions could exceed the device's jetsam budget and get the
-    // whole app killed — two is the safe ceiling.
-    catVodMaxSessions: 2, catVodIdleMs: 90000,
+    // Bundles are kept warm the way the CatVod players keep them: each one's
+    // engine starts once and is reused, because a cold start means download,
+    // compile and server boot for every switch. The heap cap per worker keeps the
+    // app inside the jetsam budget; idle only retires a session after half an hour.
+    catVodMaxSessions: 5, catVodIdleMs: 30 * 60 * 1000,
+    // A cold bundle plus a slow upstream needs the CatVod players' own budget
+    // (search 60s, play 90s, the rest 150s); 40s failed healthy-but-slow sources.
+    workerTimeoutMs: 150000,
     // Bundles are immutable once imported; keep the resolved artifact much
     // longer so switching back does not re-download + re-hash a 16MB file.
     artifactCacheTTLms: 10 * 60 * 1000,
     responseCacheOptions: { ttlMs: 2 * 60 * 1000, maxEntries: 128 }
   });
   const nodeBundleCache = new NodeBundleCache(config);
-  const catVod = new CatVodManager({ ...config, createProcess: createMobileCatVodProcess });
+  const catVod = new CatVodManager({ ...config, createProcess: createMobileCatVodProcess,
+    cloudAccounts: () => config.cloudConfig || {} });
   const gateway = createGateway(config, {
     nodeBundleCache, catVod, ...dependencies,
     beforeRequest() {

@@ -222,10 +222,10 @@ final class CatVodService {
                          forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         // A cold bundle (download + JS compile + server start) plus a slow
-        // overseas upstream can take far longer than the old 30s; 50s covers it
-        // so a working-but-slow source is not reported as "cannot load". The
-        // gateway's own per-call timeout (40s) still bounds a truly dead source.
-        request.timeoutInterval = 50
+        // overseas upstream needs the budget the CatVod players give a source
+        // (150s for catalog/home/category, less for search and play). The old
+        // 30–50s reported healthy-but-slow sources as "cannot load".
+        request.timeoutInterval = 150
 
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
