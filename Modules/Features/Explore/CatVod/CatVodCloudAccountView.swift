@@ -90,10 +90,24 @@ private struct CredentialEditView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var primary = ""
     @State private var secondary = ""
+    @State private var showsWebLogin = false
 
     var body: some View {
         NavigationStack {
             List {
+                if provider.webLoginURL != nil {
+                    Section {
+                        Button {
+                            showsWebLogin = true
+                        } label: {
+                            Label(localized("一键登录获取（推荐）"), systemImage: "person.badge.key")
+                        }
+                    } footer: {
+                        Text(localized("打开网盘官方网页，扫码、短信验证码或账号密码登录后点「完成」，会自动填入凭据，不用手动复制 Cookie。"))
+                            .dsSectionFooter()
+                    }
+                }
+
                 Section {
                     Text(provider.credentialHint)
                         .font(DSFont.caption)
@@ -148,6 +162,14 @@ private struct CredentialEditView: View {
             secondary = existing.secondary
         }
         .presentationDetents([.medium, .large])
+        .sheet(isPresented: $showsWebLogin) {
+            CatVodCloudLoginView(provider: provider) { value, secondaryValue in
+                primary = value
+                if !secondaryValue.isEmpty { secondary = secondaryValue }
+                // 登录拿到就立即落盘并推给网关，少一步手动保存。
+                store.set(provider: provider, primary: value, secondary: secondaryValue)
+            }
+        }
     }
 }
 
