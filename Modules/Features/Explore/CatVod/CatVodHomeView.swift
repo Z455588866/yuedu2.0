@@ -19,6 +19,9 @@ struct CatVodHomeView: View {
     @State private var message: String?
     @State private var detailItem: CatVodMedia?
     @State private var detailGroups: [CatVodGroup] = []
+    /// Filter groups from the last `home` response, keyed by category id. Kept
+    /// separately from `list` because `category` responses do not carry filters.
+    @State private var allFilters: [String: [CatVodFilter]] = [:]
     /// Chosen filter values for the current category, keyed by filter key.
     @State private var filterChoices: [String: String] = [:]
     /// Reverse episode order within every group (影匣's 倒序 switch).
@@ -35,7 +38,7 @@ struct CatVodHomeView: View {
 
     private var currentFilters: [CatVodFilter] {
         guard let category = currentCategory else { return [] }
-        return list.filters[category.id] ?? []
+        return allFilters[category.id] ?? []
     }
 
     var body: some View {
@@ -278,6 +281,8 @@ struct CatVodHomeView: View {
                 sites = loaded
                 selectedSite = loaded.first
                 currentCategory = nil
+                filterChoices = [:]
+                allFilters = [:]
             }
             await loadHome()
         } catch {
@@ -290,7 +295,11 @@ struct CatVodHomeView: View {
         isLoading = true; message = nil
         do {
             let result = try await CatVodService.shared.home(bundleURL: bundle, site: site)
-            await MainActor.run { list = result; isLoading = false }
+            await MainActor.run {
+                list = result
+                if !result.filters.isEmpty { allFilters = result.filters }
+                isLoading = false
+            }
         } catch {
             await MainActor.run { message = error.localizedDescription; isLoading = false }
         }
