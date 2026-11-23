@@ -710,9 +710,40 @@ struct CatVodHomeView: View {
                 }
                 return
             }
+            // Probe before presenting. A dead line used to open a black player
+            // showing the system's 「无法连接服务器。」, which names no cause and
+            // reads like our bug; the probe either explains it or retries once
+            // when only the bundle's proxy session had been retired.
+            var resolved = playback
+            var target = url
+            var verdict = await CatVodStreamProbe.check(url, headers: resolved.header ?? [:])
+            if case .retryable(_) = verdict {
+                if let again = try? await CatVodService.shared.player(bundleURL: bundle, site: site,
+                                                                     episode: episode),
+                   let againURL = again.url.flatMap(URL.init(string:)) {
+                    resolved = again
+                    target = againURL
+                    verdict = await CatVodStreamProbe.check(againURL, headers: again.header ?? [:])
+                }
+            }
+            if case .blocked(let reason) = verdict {
+                await MainActor.run {
+                    message = reason
+                    isResolvingPlayback = false
+                    playingEpisodeID = nil
+                }
+                return
+            }
+            if case .retryable(let reason) = verdict {
+                await MainActor.run {
+                    message = reason
+                    isResolvingPlayback = false
+                    playingEpisodeID = nil
+                }
+                return
+            }
             await MainActor.run {
-                let headers = playback.header ?? [:]
-                CatVodPlayerPresenter.present(url: url, headers: headers,
+                CatVodPlayerPresenter.present(url: target, headers: resolved.header ?? [:],
                                               title: "\(title) · \(episode.title)")
                 isResolvingPlayback = false
                 playingEpisodeID = nil
