@@ -9,6 +9,10 @@ enum CatVodPlayerPresenter {
     static func present(url: URL, headers: [String: String], title: String) {
         guard let topVC = BookSourceFormLoginView.topViewController(),
               let scene = topVC.view.window?.windowScene else { return }
+        // Never stack a second player on top of one that is already presented or
+        // mid-presentation. Repeated episode taps (or a slow resolve that lands
+        // late) must not pile up a dozen full-screen players.
+        if topVC.presentedViewController != nil { return }
         let stream = VideoStream(url: url, headers: headers)
         final class HostBox { weak var host: UIViewController? }
         let box = HostBox()

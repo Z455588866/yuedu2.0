@@ -124,7 +124,19 @@ final class CatVodService {
         guard let finalURL = URL(string: resolvedURL), finalURL.scheme != nil else {
             throw CatVodError.emptyPlayerURL
         }
-        return CatVodPlayback(parse: parse, url: finalURL.absoluteString, header: headers)
+        // Many CDNs answer 403 ("你没有访问所请求的资源的许可") to a bare request.
+        // When the spider handed back no UA/Referer, add the browser defaults a
+        // web player would send so the stream is not gated out by anti-hotlink.
+        var finalHeaders = headers
+        if finalHeaders["User-Agent"] == nil, finalHeaders["user-agent"] == nil {
+            finalHeaders["User-Agent"] =
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        }
+        if finalHeaders["Referer"] == nil, finalHeaders["referer"] == nil,
+           let scheme = finalURL.scheme, let host = finalURL.host {
+            finalHeaders["Referer"] = "\(scheme)://\(host)/"
+        }
+        return CatVodPlayback(parse: parse, url: finalURL.absoluteString, header: finalHeaders)
     }
 
     private static func firstURL(_ value: Any?) -> String {
@@ -209,9 +221,11 @@ final class CatVodService {
         request.setValue("Bearer \(CatVodGateway.shared.authenticationToken)",
                          forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
-        // Bound the wait so a dead source fails fast instead of spinning for 45s.
-        // A cold bundle compile is the slowest legitimate case and stays under this.
-        request.timeoutInterval = 30
+        // A cold bundle (download + JS compile + server start) plus a slow
+        // overseas upstream can take far longer than the old 30s; 50s covers it
+        // so a working-but-slow source is not reported as "cannot load". The
+        // gateway's own per-call timeout (40s) still bounds a truly dead source.
+        request.timeoutInterval = 50
 
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0

@@ -16,10 +16,12 @@ export async function startMobileGateway(bridge, dependencies = {}) {
     nodeBundleCacheDir: path.join(initial.cacheRoot, 'bundles'),
     nodeBundleRuntimeDir: path.join(initial.cacheRoot, 'runtime'),
     nodeBundleAllowHTTP: initial.nodeBundleAllowedURLs.some(url => url.startsWith('http://')),
-    // Keep a few warm sessions: switching between imported interfaces should
-    // reuse an already-compiled bundle instead of recompiling it every time
-    // (the original single-session cap made every switch feel frozen).
-    catVodMaxSessions: 4, catVodIdleMs: 120000,
+    // Keep a couple of warm sessions so switching between imported interfaces
+    // reuses an already-compiled bundle instead of recompiling every time. iOS
+    // runs each bundle in a disposable worker capped at hundreds of MB of heap,
+    // so four live sessions could exceed the device's jetsam budget and get the
+    // whole app killed — two is the safe ceiling.
+    catVodMaxSessions: 2, catVodIdleMs: 90000,
     // Bundles are immutable once imported; keep the resolved artifact much
     // longer so switching back does not re-download + re-hash a 16MB file.
     artifactCacheTTLms: 10 * 60 * 1000,

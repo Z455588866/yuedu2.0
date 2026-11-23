@@ -90,7 +90,7 @@ export function loadConfig(overrides = {}) {
       ?? boolean("CATVOD_BUNDLE_ALLOW_CHECKSUM_REDIRECTS", false),
     nodeBundleAllowPrivateNetwork: boolean("CATVOD_BUNDLE_ALLOW_PRIVATE_NETWORK", false),
     nodeBundleMaxBytes: integer("CATVOD_BUNDLE_MAX_BYTES", 16 * 1024 * 1024),
-    nodeBundleDownloadTimeoutMs: integer("CATVOD_BUNDLE_DOWNLOAD_TIMEOUT_MS", 30_000),
+    nodeBundleDownloadTimeoutMs: integer("CATVOD_BUNDLE_DOWNLOAD_TIMEOUT_MS", 40_000),
     nodeBundleRuntimeDir: path.resolve(process.env.CATVOD_RUNTIME_DIR || "spider-gateway/data/runtime"),
     jarAllowedHosts: (process.env.SPIDER_JAR_ALLOWED_HOSTS || "")
       .split(",")
@@ -102,7 +102,11 @@ export function loadConfig(overrides = {}) {
     requestBodyMaxBytes: integer("SPIDER_REQUEST_MAX_BYTES", 1024 * 1024),
     workerCommand: process.env.SPIDER_WORKER_COMMAND || "",
     workerArgs: jsonArray("SPIDER_WORKER_ARGS"),
-    workerTimeoutMs: integer("SPIDER_WORKER_TIMEOUT_MS", 20_000),
+    // 20s was too tight: a cold CatVod site must download+compile a bundle and
+    // hit an often-overseas upstream before it answers. 40s keeps the fast path
+    // fast while giving slow-but-working sources a fair chance instead of
+    // failing most of them outright.
+    workerTimeoutMs: integer("SPIDER_WORKER_TIMEOUT_MS", 40_000),
     workerIdleMs: integer("SPIDER_WORKER_IDLE_MS", 10 * 60_000),
     workerMaxSessions: integer("SPIDER_WORKER_MAX_SESSIONS", 16),
     workerMaxLineBytes: integer("SPIDER_WORKER_MAX_LINE_BYTES", 8 * 1024 * 1024),

@@ -22,7 +22,7 @@ function workerHeapLimit() {
   try {
     const eighth = Math.round(os.totalmem() / 2 ** 20 / 8);
     if (!Number.isFinite(eighth) || eighth <= 0) return DEFAULT_HEAP_MB;
-    return Math.min(768, Math.max(DEFAULT_HEAP_MB, eighth));
+    return Math.min(512, Math.max(DEFAULT_HEAP_MB, eighth));
   } catch {
     return DEFAULT_HEAP_MB;
   }

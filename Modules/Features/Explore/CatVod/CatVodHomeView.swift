@@ -31,6 +31,13 @@ struct CatVodHomeView: View {
     /// the person already switched away from) are discarded. Prevents the
     /// endless spinner and wrong-list flashes caused by racing requests.
     @State private var loadToken = 0
+    /// Guards a poster tap while its detail request is in flight: without it a
+    /// burst of taps queues a burst of requests, and when they all land they
+    /// stack a dozen detail sheets on top of each other.
+    @State private var isOpeningDetail = false
+    /// Same guard for episode taps — a slow `player` resolve must not let a
+    /// dozen taps each present a player the moment they finally answer.
+    @State private var isResolvingPlayback = false
 
     private var sources: [CatVodSource] { store.enabledSources }
 
@@ -61,6 +68,16 @@ struct CatVodHomeView: View {
             if selectedSourceID == nil { selectedSourceID = sources.first?.id }
         }
         .sheet(item: $detailItem) { item in detailSheet(item) }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                NavigationLink {
+                    CatVodSourceSettingsView()
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .accessibilityLabel(localized("管理猫源"))
+            }
+        }
     }
 
     private var emptyState: some View {
@@ -246,7 +263,7 @@ struct CatVodHomeView: View {
                         // Position identity: even if a source returns duplicate/empty
                         // vod_id, SwiftUI never crashes on duplicate Identifiable ids.
                         ForEach(Array(list.media.enumerated()), id: \.offset) { _, item in
-                            Button { Task { await openDetail(item) } } label: {
+                            Button { if !isOpeningDetail { Task { await openDetail(item) } } } label: {
                                 CatVodPosterCard(item: item)
                             }
                             .buttonStyle(.plain)
@@ -445,33 +462,65 @@ struct CatVodHomeView: View {
     }
 
     private func openDetail(_ item: CatVodMedia) async {
-        guard let bundle = currentBundleURL, let site = selectedSite else { return }
-        isLoading = true; message = nil
+        // Claim the in-flight flag on the main actor so a burst of taps can only
+        // start one request; every other tap bails immediately.
+        let busy = await MainActor.run { () -> Bool in
+            if isOpeningDetail { return true }
+            isOpeningDetail = true
+            return false
+        }
+        if busy { return }
+        guard let bundle = currentBundleURL, let site = selectedSite else {
+            await MainActor.run { isOpeningDetail = false }
+            return
+        }
+        await MainActor.run { isLoading = true; message = nil }
         do {
             let (_, groups) = try await CatVodService.shared.detail(bundleURL: bundle, site: site, id: item.id)
-            await MainActor.run { detailGroups = groups; detailItem = item; isLoading = false }
+            await MainActor.run {
+                detailGroups = groups; detailItem = item
+                isLoading = false; isOpeningDetail = false
+            }
         } catch {
-            await MainActor.run { message = error.localizedDescription; isLoading = false }
+            await MainActor.run {
+                message = error.localizedDescription
+                isLoading = false; isOpeningDetail = false
+            }
         }
     }
 
     private func play(_ episode: CatVodEpisode, title: String) async {
-        guard let bundle = currentBundleURL, let site = selectedSite else { return }
-        isLoading = true; message = nil
+        let busy = await MainActor.run { () -> Bool in
+            if isResolvingPlayback { return true }
+            isResolvingPlayback = true
+            return false
+        }
+        if busy { return }
+        guard let bundle = currentBundleURL, let site = selectedSite else {
+            await MainActor.run { isResolvingPlayback = false }
+            return
+        }
+        await MainActor.run { isLoading = true; message = nil }
         do {
             let playback = try await CatVodService.shared.player(bundleURL: bundle, site: site, episode: episode)
             guard let urlString = playback.url, let url = URL(string: urlString) else {
-                await MainActor.run { message = localized("该片源没有返回可播放地址"); isLoading = false }
+                await MainActor.run {
+                    message = localized("该片源没有返回可播放地址")
+                    isLoading = false; isResolvingPlayback = false
+                }
                 return
             }
             await MainActor.run {
                 let headers = playback.header ?? [:]
                 CatVodPlayerPresenter.present(url: url, headers: headers,
                                               title: "\(title) · \(episode.title)")
-                isLoading = false
+                isLoading = false; isResolvingPlayback = false
             }
         } catch {
-            await MainActor.run { message = error.localizedDescription; isLoading = false }
+            await MainActor.run {
+                message = error.localizedDescription
+                isLoading = false; isResolvingPlayback = false
+            }
         }
     }
 
@@ -555,7 +604,7 @@ struct CatVodHomeView: View {
                                 }
                                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 10)], spacing: 10) {
                                     ForEach(episodes(for: group)) { episode in
-                                        Button { Task { await play(episode, title: item.name) } } label: {
+                                        Button { if !isResolvingPlayback { Task { await play(episode, title: item.name) } } } label: {
                                             Text(episode.title)
                                                 .font(DSFont.caption)
                                                 .foregroundStyle(DSColor.textPrimary)
