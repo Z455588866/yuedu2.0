@@ -26,6 +26,9 @@ struct VideoPlayerView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @State private var controller: VideoPlaybackController?
+    /// Display-rate playback clock shared by the danmaku and subtitle overlays. A periodic time
+    /// observer publishes the player time on the main queue so overlays redraw every frame.
+    @State private var clock = PlaybackClock()
     @State private var showsControls = true
     /// Bumped by every interaction; the controls hide a while after the last one.
     @State private var interaction = 0
@@ -56,13 +59,13 @@ struct VideoPlayerView: View {
                 // Danmaku sits above the picture and gestures but below the control chrome. It
                 // never takes touches, so seek/long-press/tap gestures keep working underneath.
                 if danmaku.enabled, let track = danmaku.track {
-                    DanmakuOverlay(player: controller.player, track: track, opacity: danmaku.opacity,
+                    DanmakuOverlay(clock: clock, track: track, opacity: danmaku.opacity,
                                    area: danmaku.area, fontSize: danmaku.fontSize, speed: danmaku.speed)
                         .ignoresSafeArea()
                 }
                 // Subtitles sit just above the danmaku, still below the control chrome.
                 if subtitle.enabled, let entry = subtitle.activeEntry {
-                    SubtitleOverlay(player: controller.player, entry: entry, opacity: 1)
+                    SubtitleOverlay(clock: clock, entry: entry, opacity: 1)
                         .ignoresSafeArea()
                 }
                 if showsControls {
@@ -90,17 +93,20 @@ struct VideoPlayerView: View {
             self.controller = controller
             turn(to: .landscape)
             controller.start()
+            clock.attach(to: controller.player)
             attachDanmaku(controller)
             attachSubtitle(controller)
         }
         // Re-match when the episode changes (auto-advance, or picking from the episode sheet).
         .onChange(of: controller?.chapterIndex) { _, _ in
             guard let controller else { return }
+            clock.attach(to: controller.player)
             attachDanmaku(controller)
             attachSubtitle(controller)
         }
         .onChange(of: controller?.phase) { _, phase in
             if phase == nil {
+                clock.detach()
                 danmaku.stop()
                 subtitle.stop()
             }
@@ -133,6 +139,7 @@ struct VideoPlayerView: View {
             if enabled { showsControls = true }
         }
         .onDisappear {
+            clock.detach()
             controller?.close()
             if turnsWindow { ReaderOrientationController.shared.restoreDefault(in: window.windowScene) }
         }

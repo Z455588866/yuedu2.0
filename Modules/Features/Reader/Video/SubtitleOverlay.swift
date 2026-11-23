@@ -1,42 +1,41 @@
 import AVFoundation
 import SwiftUI
 
-/// Draws the active subtitle cue at the bottom of the picture. Driven straight from
-/// `AVPlayer.currentTime()` inside a `TimelineView` so text tracks seeks and playback exactly,
-/// rather than the controller's once-a-second `currentTime`. Never intercepts touches.
+/// Draws the active subtitle cue at the bottom of the picture. Driven from the shared
+/// `PlaybackClock` (a display-rate time observer on the main queue) so text tracks playback and
+/// seeks exactly without the freeze a bare `TimelineView` + `player.currentTime()` can hit.
+/// Never intercepts touches.
 struct SubtitleOverlay: View {
-    let player: AVPlayer
+    let clock: PlaybackClock
     let entry: SubtitleEntry
     let opacity: Double
 
     var body: some View {
-        TimelineView(.animation) { _ in
-            GeometryReader { geo in
-                let now = player.currentTime().seconds
-                let visible = cues(at: now)
-                ZStack(alignment: .bottom) {
-                    if !visible.isEmpty {
-                        VStack(spacing: 2) {
-                            ForEach(visible, id: \.start) { cue in
-                                Text(cue.text)
-                                    .font(.system(size: subtitleSize(geo.size.width), weight: .semibold))
-                                    .foregroundColor(.white)
-                                    .multilineTextAlignment(.center)
-                                    .shadow(color: .black.opacity(0.95), radius: 2, x: 0, y: 1)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
+        let now = clock.time
+        return GeometryReader { geo in
+            let visible = cues(at: now)
+            ZStack(alignment: .bottom) {
+                if !visible.isEmpty {
+                    VStack(spacing: 2) {
+                        ForEach(visible, id: \.start) { cue in
+                            Text(cue.text)
+                                .font(.system(size: subtitleSize(geo.size.width), weight: .semibold))
+                                .foregroundColor(.white)
+                                .multilineTextAlignment(.center)
+                                .shadow(color: .black.opacity(0.95), radius: 2, x: 0, y: 1)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
-                        .padding(.bottom, bottomInset(geo.size.height))
-                        .frame(maxWidth: .infinity, alignment: .center)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.bottom, bottomInset(geo.size.height))
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
-                .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
-                .allowsHitTesting(false)
-                .opacity(opacity)
             }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
+            .allowsHitTesting(false)
+            .opacity(opacity)
         }
         .allowsHitTesting(false)
     }

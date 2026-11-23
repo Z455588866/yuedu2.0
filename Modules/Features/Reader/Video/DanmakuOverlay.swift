@@ -1,9 +1,10 @@
 import AVFoundation
+import Observation
 import SwiftUI
 import UIKit
 
 /// A single danmaku currently on screen, with its resolved lane and travel. Kept in one struct so
-/// `TimelineView` can rebuild the visible set cheaply every frame.
+/// the overlay can rebuild the visible set cheaply every frame.
 private struct FlyingDanmaku: Identifiable {
     let id: Int
     let item: DanmakuItem
@@ -12,11 +13,53 @@ private struct FlyingDanmaku: Identifiable {
     let duration: Double  // seconds it stays travelling
 }
 
-/// Drives danmaku straight from `AVPlayer.currentTime()` inside a `TimelineView`, rather than from
-/// the controller's once-a-second `currentTime` — that would make text jump once per second and
-/// freeze on seek. The overlay never intercepts touches; gestures and controls sit above it.
+/// A playback clock that ticks at display rate from an `AVPlayer` periodic time observer.
+///
+/// Reading `player.currentTime()` directly inside `TimelineView(.animation)` is unreliable: the
+/// timeline can keep firing while `currentTime()` stays pinned to one value (Observable objects
+/// mutated from AVPlayer's queue do not always re-render a SwiftUI view). The result is a danmaku
+/// layer frozen on a single frame even though the picture and the progress bar keep moving.
+/// Publishing the time through an `@Observable` object on the main queue guarantees a redraw on
+/// every tick, so scrolling stays smooth and tracks seeks and rate changes.
+@MainActor
+@Observable
+final class PlaybackClock {
+    private(set) var time: Double = 0
+    private var observer: Any?
+    private weak var player: AVPlayer?
+
+    /// Attaches to `player`, tearing down any previous observer. Safe to call on episode change.
+    func attach(to player: AVPlayer) {
+        guard self.player !== player || observer == nil else { return }
+        detach()
+        self.player = player
+        time = player.currentTime().seconds
+        // ~60 Hz: smooth scrolling, still cheap. Fires on .main so the @Observable publish
+        // reliably invalidates the SwiftUI views that read `time`.
+        observer = player.addPeriodicTimeObserver(
+            forInterval: CMTime(value: 1, timescale: 60), queue: .main
+        ) { [weak self] cmt in
+            let seconds = cmt.seconds
+            MainActor.assumeIsolated {
+                guard let self, seconds.isFinite else { return }
+                self.time = seconds
+            }
+        }
+    }
+
+    func detach() {
+        if let observer, let player { player.removeTimeObserver(observer) }
+        observer = nil
+        player = nil
+    }
+}
+
+/// Drives danmaku from a `PlaybackClock` that ticks at display rate. The clock publishes time on
+/// the main queue, so the overlay redraws every frame — unlike a bare `TimelineView` reading
+/// `player.currentTime()`, which can freeze on one snapshot. The overlay never intercepts touches;
+/// gestures and controls sit above it.
 struct DanmakuOverlay: View {
-    let player: AVPlayer
+    let clock: PlaybackClock
     let track: DanmakuTrack
     let opacity: Double
     /// Fraction of the picture height the danmaku may occupy, from the top (0.25 ... 1.0).
@@ -31,21 +74,21 @@ struct DanmakuOverlay: View {
     private let topInset: Double = 46       // stay below the top bar
 
     var body: some View {
-        TimelineView(.animation) { _ in
-            GeometryReader { geo in
-                let now = player.currentTime().seconds
-                let width = geo.size.width
-                let layout = laneLayout(height: geo.size.height)
-                let flying = visible(at: now, width: width, layout: layout)
-                ZStack(alignment: .topLeading) {
-                    ForEach(flying) { fly in
-                        danmakuView(fly, now: now, width: width, layout: layout)
-                    }
+        // Read the observed time at body-evaluation time so every clock tick invalidates this
+        // view; the value is then used inside the geometry closure below.
+        let now = clock.time
+        return GeometryReader { geo in
+            let width = geo.size.width
+            let layout = laneLayout(height: geo.size.height)
+            let flying = visible(at: now, width: width, layout: layout)
+            ZStack(alignment: .topLeading) {
+                ForEach(flying) { fly in
+                    danmakuView(fly, now: now, width: width, layout: layout)
                 }
-                .frame(width: width, height: geo.size.height, alignment: .topLeading)
-                .allowsHitTesting(false)
-                .opacity(opacity)
             }
+            .frame(width: width, height: geo.size.height, alignment: .topLeading)
+            .allowsHitTesting(false)
+            .opacity(opacity)
         }
         .allowsHitTesting(false)
     }
