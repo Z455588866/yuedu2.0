@@ -27,6 +27,10 @@ struct CatVodHomeView: View {
     /// Reverse episode order within every group (影匣's 倒序 switch).
     @State private var episodesReversed = false
     @State private var searchHistory: [String] = []
+    /// Monotonic token: every load bumps it, and stale responses (from a source
+    /// the person already switched away from) are discarded. Prevents the
+    /// endless spinner and wrong-list flashes caused by racing requests.
+    @State private var loadToken = 0
 
     private var sources: [CatVodSource] { store.enabledSources }
 
@@ -90,7 +94,10 @@ struct CatVodHomeView: View {
             if sites.count > 1 {
                 Picker(localized("站点"), selection: Binding(
                     get: { selectedSite?.key ?? sites.first?.key ?? "" },
-                    set: { key in selectedSite = sites.first { $0.key == key } }
+                    set: { key in
+                        selectedSite = sites.first { $0.key == key }
+                        Task { await loadHome() }
+                    }
                 )) {
                     ForEach(sites) { site in Text(site.name).tag(site.key) }
                 }
@@ -99,7 +106,6 @@ struct CatVodHomeView: View {
             }
         }
         .onChange(of: selectedSourceID) { _, _ in Task { await loadCatalogAndHome() } }
-        .onChange(of: selectedSite?.key) { _, _ in Task { await loadHome() } }
     }
 
     private var searchBar: some View {
@@ -147,7 +153,7 @@ struct CatVodHomeView: View {
                     currentCategory = nil
                     Task { await loadHome() }
                 }
-                ForEach(list.categories) { category in
+                ForEach(Array(list.categories.enumerated()), id: \.offset) { _, category in
                     categoryChip(title: category.name, selected: currentCategory?.id == category.id) {
                         currentCategory = category
                         filterChoices = [:]
@@ -163,7 +169,7 @@ struct CatVodHomeView: View {
     /// declares filters. Selecting a value reloads the category with `extend`.
     private var filterBar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(currentFilters) { filter in
+            ForEach(Array(currentFilters.enumerated()), id: \.offset) { _, filter in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(filter.name)
                         .font(DSFont.caption2.weight(.semibold))
@@ -171,7 +177,7 @@ struct CatVodHomeView: View {
                         .frame(width: 44, alignment: .leading)
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
-                            ForEach(filter.options) { option in
+                            ForEach(Array(filter.options.enumerated()), id: \.offset) { _, option in
                                 let selected = (filterChoices[filter.key] ?? "") == option.value
                                 Button {
                                     var choices = filterChoices
@@ -237,7 +243,9 @@ struct CatVodHomeView: View {
                     if !currentFilters.isEmpty { filterBar }
 
                     LazyVGrid(columns: columns, spacing: 16) {
-                        ForEach(list.media) { item in
+                        // Position identity: even if a source returns duplicate/empty
+                        // vod_id, SwiftUI never crashes on duplicate Identifiable ids.
+                        ForEach(Array(list.media.enumerated()), id: \.offset) { _, item in
                             Button { Task { await openDetail(item) } } label: {
                                 CatVodPosterCard(item: item)
                             }
@@ -273,56 +281,99 @@ struct CatVodHomeView: View {
     }
 
     private func loadCatalogAndHome() async {
-        guard let bundle = currentBundleURL else { return }
-        isLoading = true; message = nil
+        guard let bundle = currentBundleURL else {
+            await MainActor.run { isLoading = false }
+            return
+        }
+        let token = await MainActor.run { loadToken += 1; return loadToken }
+        await MainActor.run { isLoading = true; message = nil }
         do {
             let loaded = try await CatVodService.shared.catalog(bundleURL: bundle)
+            let stale = await MainActor.run { token != loadToken }
+            if stale { return }
             await MainActor.run {
                 sites = loaded
                 selectedSite = loaded.first
                 currentCategory = nil
                 filterChoices = [:]
                 allFilters = [:]
+                if loaded.isEmpty {
+                    message = localized("这个接口没有可用的站点，换一个接口试试")
+                    isLoading = false
+                }
             }
+            if loaded.isEmpty { return }
             await loadHome()
         } catch {
-            await MainActor.run { message = error.localizedDescription; isLoading = false }
+            await MainActor.run {
+                if token == loadToken {
+                    message = error.localizedDescription
+                    isLoading = false
+                }
+            }
         }
     }
 
     private func loadHome() async {
-        guard let bundle = currentBundleURL, let site = selectedSite else { return }
-        isLoading = true; message = nil
+        guard let bundle = currentBundleURL, let site = selectedSite else {
+            await MainActor.run { isLoading = false }
+            return
+        }
+        let token = await MainActor.run { loadToken += 1; return loadToken }
+        await MainActor.run { isLoading = true; message = nil }
         do {
             let result = try await CatVodService.shared.home(bundleURL: bundle, site: site)
             await MainActor.run {
+                guard token == loadToken else { return }
                 list = result
                 if !result.filters.isEmpty { allFilters = result.filters }
                 isLoading = false
             }
         } catch {
-            await MainActor.run { message = error.localizedDescription; isLoading = false }
+            await MainActor.run {
+                if token == loadToken {
+                    message = error.localizedDescription
+                    isLoading = false
+                }
+            }
         }
     }
 
     private func loadCategory(_ category: CatVodCategory) async {
-        guard let bundle = currentBundleURL, let site = selectedSite else { return }
-        isLoading = true; message = nil
+        guard let bundle = currentBundleURL, let site = selectedSite else {
+            await MainActor.run { isLoading = false }
+            return
+        }
+        let token = await MainActor.run { loadToken += 1; return loadToken }
+        await MainActor.run { isLoading = true; message = nil }
         do {
             let result = try await CatVodService.shared.category(bundleURL: bundle, site: site,
                                                                 categoryID: category.id, page: 1,
                                                                 extend: filterChoices)
-            await MainActor.run { list = result; isLoading = false }
+            await MainActor.run {
+                guard token == loadToken else { return }
+                list = result
+                isLoading = false
+            }
         } catch {
-            await MainActor.run { message = error.localizedDescription; isLoading = false }
+            await MainActor.run {
+                if token == loadToken {
+                    message = error.localizedDescription
+                    isLoading = false
+                }
+            }
         }
     }
 
     private func loadMore() async {
-        guard let bundle = currentBundleURL, let site = selectedSite else { return }
+        guard let bundle = currentBundleURL, let site = selectedSite else {
+            await MainActor.run { isLoading = false }
+            return
+        }
         let next = list.page + 1
         guard next <= list.pageCount else { return }
-        isLoading = true
+        let token = await MainActor.run { loadToken += 1; return loadToken }
+        await MainActor.run { isLoading = true }
         do {
             let result: CatVodList
             if let category = currentCategory {
@@ -333,6 +384,7 @@ struct CatVodHomeView: View {
                 result = try await CatVodService.shared.home(bundleURL: bundle, site: site)
             }
             await MainActor.run {
+                guard token == loadToken else { return }
                 var merged = list
                 var seen = Set(merged.media.map(\.id))
                 for item in result.media where !seen.contains(item.id) {
@@ -344,25 +396,40 @@ struct CatVodHomeView: View {
                 isLoading = false
             }
         } catch {
-            await MainActor.run { message = error.localizedDescription; isLoading = false }
+            await MainActor.run {
+                if token == loadToken {
+                    message = error.localizedDescription
+                    isLoading = false
+                }
+            }
         }
     }
 
     private func search() async {
-        guard let bundle = currentBundleURL, let site = selectedSite else { return }
+        guard let bundle = currentBundleURL, let site = selectedSite else {
+            await MainActor.run { isLoading = false }
+            return
+        }
         let term = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return }
-        isLoading = true; message = nil
+        let token = await MainActor.run { loadToken += 1; return loadToken }
+        await MainActor.run { isLoading = true; message = nil }
         do {
             let result = try await CatVodService.shared.search(bundleURL: bundle, site: site, keyword: term)
             await MainActor.run {
+                guard token == loadToken else { return }
                 list = result
                 currentCategory = nil
                 isLoading = false
                 saveSearchTerm(term)
             }
         } catch {
-            await MainActor.run { message = error.localizedDescription; isLoading = false }
+            await MainActor.run {
+                if token == loadToken {
+                    message = error.localizedDescription
+                    isLoading = false
+                }
+            }
         }
     }
 

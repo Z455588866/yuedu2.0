@@ -16,7 +16,14 @@ export async function startMobileGateway(bridge, dependencies = {}) {
     nodeBundleCacheDir: path.join(initial.cacheRoot, 'bundles'),
     nodeBundleRuntimeDir: path.join(initial.cacheRoot, 'runtime'),
     nodeBundleAllowHTTP: initial.nodeBundleAllowedURLs.some(url => url.startsWith('http://')),
-    catVodMaxSessions: 1, catVodIdleMs: 15000
+    // Keep a few warm sessions: switching between imported interfaces should
+    // reuse an already-compiled bundle instead of recompiling it every time
+    // (the original single-session cap made every switch feel frozen).
+    catVodMaxSessions: 4, catVodIdleMs: 120000,
+    // Bundles are immutable once imported; keep the resolved artifact much
+    // longer so switching back does not re-download + re-hash a 16MB file.
+    artifactCacheTTLms: 10 * 60 * 1000,
+    responseCacheOptions: { ttlMs: 2 * 60 * 1000, maxEntries: 128 }
   });
   const nodeBundleCache = new NodeBundleCache(config);
   const catVod = new CatVodManager({ ...config, createProcess: createMobileCatVodProcess });

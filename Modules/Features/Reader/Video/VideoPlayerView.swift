@@ -45,6 +45,10 @@ struct VideoPlayerView: View {
     /// A drag on the picture in progress.
     @State private var pan: VideoPan?
     @State private var fillsScreen = false
+    /// Manual quarter-turn correction for sideways-encoded streams (0/1/2/3).
+    @State private var pictureRotation = 0
+    /// The person's explicit window orientation wish; `nil` follows the picture.
+    @State private var orientationOverride: FixedLayoutOrientation?
     @State private var window = ReaderWindowReference()
 
     var body: some View {
@@ -52,6 +56,7 @@ struct VideoPlayerView: View {
             DSColor.videoPlayerBackground.ignoresSafeArea()
             if let controller {
                 VideoPlayerLayerView(player: controller.player, fillsScreen: fillsScreen,
+                                     rotation: pictureRotation,
                                      onLayer: controller.attachPictureInPicture(to:))
                     .ignoresSafeArea()
                     .accessibilityHidden(true)
@@ -89,7 +94,8 @@ struct VideoPlayerView: View {
         .task {
             guard controller == nil, let controller = makeController() else { return }
             self.controller = controller
-            turn(to: .landscape)
+            // Don't force landscape up front: let the picture (or the person's
+            // explicit choice) decide, so a vertical clip opens upright.
             controller.start()
             clock.attach(to: controller.player)
             attachDanmaku(controller)
@@ -118,7 +124,9 @@ struct VideoPlayerView: View {
         }
         .onChange(of: controller?.pictureSize) { _, size in
             guard let size else { return }
-            turn(to: size.height > size.width ? .portrait : .landscape)
+            // A manual 横/竖 choice wins; otherwise follow the reported aspect.
+            if let override = orientationOverride { turn(to: override) }
+            else { turn(to: size.height > size.width ? .portrait : .landscape) }
         }
         // An inactivity timeout, not a wait for state: the controls get out of the picture's
         // way, as every video player's do. VoiceOver keeps them, as it cannot find a hidden one.
@@ -344,6 +352,36 @@ struct VideoPlayerView: View {
                     .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
             }
             .accessibilityLabel(fillsScreen ? localized("完整画面") : localized("填满萤幕"))
+            // Rotate the picture a quarter-turn: fixes sideways-encoded streams.
+            Button {
+                pictureRotation = (pictureRotation + 1) % 4
+                touched()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(DSFont.toolbarIcon)
+                    .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+            }
+            .accessibilityLabel(localized("旋转画面"))
+            // Lock the window to 横屏 or 竖屏 (or tap again to return to auto).
+            Button {
+                let next: FixedLayoutOrientation = {
+                    switch orientationOverride {
+                    case .landscape: return .portrait
+                    case .portrait: return .auto
+                    default: return .landscape
+                    }
+                }()
+                orientationOverride = (next == .auto) ? nil : next
+                if let override = orientationOverride { turn(to: override) }
+                else { turn(to: .auto) }
+                touched()
+            } label: {
+                Image(systemName: orientationOverride == .portrait
+                      ? "rectangle.portrait" : "rectangle.landscape")
+                    .font(DSFont.toolbarIcon)
+                    .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+            }
+            .accessibilityLabel(localized("横屏/竖屏切换"))
             if hasEpisodes(controller) {
                 Button {
                     showsEpisodes = true
@@ -599,6 +637,10 @@ enum VideoPlayerFormat {
 struct VideoPlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
     let fillsScreen: Bool
+    /// Quarter-turns to rotate the picture. 0 = as the stream reports it. A
+    /// stream whose pixels are stored sideways (common with re-encoded vertical
+    /// clips) renders "lying down"; the person rotates it here until upright.
+    let rotation: Int
     /// Hands over the layer once, for Picture in Picture.
     var onLayer: @MainActor (AVPlayerLayer) -> Void = { _ in }
 
@@ -617,7 +659,13 @@ struct VideoPlayerLayerView: UIViewRepresentable {
 
     func updateUIView(_ view: LayerView, context: Context) {
         if view.playerLayer.player !== player { view.playerLayer.player = player }
-        view.playerLayer.videoGravity = fillsScreen ? .resizeAspectFill : .resizeAspect
+        // A quarter-turn is applied to the backing layer's transform, which
+        // UIKit leaves alone (unlike frame/bounds, which it rewrites on layout).
+        // Use aspect-fit while rotated so nothing is cropped; the person can
+        // still tap 填满萤幕 if they prefer edge-to-edge.
+        view.playerLayer.videoGravity = (fillsScreen && rotation % 2 == 0) ? .resizeAspectFill : .resizeAspect
+        let angle = CGFloat(rotation) * .pi / 2
+        view.playerLayer.setAffineTransform(CGAffineTransform(rotationAngle: angle))
     }
 }
 

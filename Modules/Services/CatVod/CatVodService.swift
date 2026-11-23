@@ -209,7 +209,9 @@ final class CatVodService {
         request.setValue("Bearer \(CatVodGateway.shared.authenticationToken)",
                          forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
-        request.timeoutInterval = 45
+        // Bound the wait so a dead source fails fast instead of spinning for 45s.
+        // A cold bundle compile is the slowest legitimate case and stays under this.
+        request.timeoutInterval = 30
 
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -227,17 +229,23 @@ final class CatVodService {
     static func parseList(_ object: [String: Any]) -> CatVodList {
         var categories: [CatVodCategory] = []
         if let classes = object["class"] as? [[String: Any]] {
-            for dict in classes {
+            for (index, dict) in classes.enumerated() {
                 guard let data = try? JSONSerialization.data(withJSONObject: dict),
-                      let category = try? JSONDecoder().decode(CatVodCategory.self, from: data) else { continue }
+                      var category = try? JSONDecoder().decode(CatVodCategory.self, from: data) else { continue }
+                // Some sources omit type_id, which would decode to "" and make every
+                // category share one identity -> SwiftUI ForEach diffing crash.
+                if category.id.isEmpty { category.id = "__cat_\(index)" }
                 categories.append(category)
             }
         }
         var media: [CatVodMedia] = []
         if let list = object["list"] as? [[String: Any]] {
-            for dict in list {
+            for (index, dict) in list.enumerated() {
                 guard let data = try? JSONSerialization.data(withJSONObject: dict),
-                      let item = try? JSONDecoder().decode(CatVodMedia.self, from: data) else { continue }
+                      var item = try? JSONDecoder().decode(CatVodMedia.self, from: data) else { continue }
+                // Missing/duplicate vod_id previously collapsed to "" and crashed
+                // LazyVGrid with duplicate identities. Guarantee a unique id.
+                if item.id.isEmpty { item.id = "__media_\(index)_\(item.name.hashValue)" }
                 media.append(item)
             }
         }

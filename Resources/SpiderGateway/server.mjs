@@ -117,17 +117,29 @@ export function createGateway(config, dependencies = {}) {
         // object or omit it. Downstream requires a string route, so drop those
         // malformed entries here rather than letting `site.api.replace()` throw
         // deep in the runner ("r.replace is not a function").
+        const spiderAPIPattern = /^\/spider\/[\p{L}\p{N}_-]+\/\d{1,2}$/u;
         let sites = Array.isArray(result?.sites)
           ? result.sites
-              .filter((site) => site && typeof site === "object" && typeof site.api === "string" && site.api.trim() !== "")
-              .map((site) => ({
-                ...site,
-                key: String(site.key ?? ""),
-                name: String(site.name ?? site.key ?? ""),
-                api: site.api,
-                type: 3,
-                jar: catalog.bundle
-              }))
+              .filter((site) => site && typeof site === "object")
+              .map((site) => {
+                const key = String(site.key ?? "").trim();
+                const rawAPI = typeof site.api === "string" ? site.api.trim() : "";
+                // Normalize the route to the canonical /spider/<key>/3 form.
+                // Some bundles emit an empty/absolute/odd api; derive it from
+                // key so downstream validation never rejects a usable site.
+                const api = spiderAPIPattern.test(rawAPI) || rawAPI.startsWith("csp_")
+                  ? rawAPI
+                  : (key ? `/spider/${encodeURIComponent(key)}/3` : "");
+                return {
+                  ...site,
+                  key,
+                  name: String(site.name ?? site.key ?? ""),
+                  api,
+                  type: 3,
+                  jar: catalog.bundle
+                };
+              })
+              .filter((site) => site.key !== "" && site.api !== "")
           : [];
         if (!sites.some((site) => isCloudPanSite(site))) {
           sites = [...sites, { ...cloudPanSite, jar: catalog.bundle }];

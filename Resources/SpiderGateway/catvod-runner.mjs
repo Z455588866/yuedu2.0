@@ -279,15 +279,28 @@ export async function runCatVod(bundlePath, options = {}) {
             try { value = JSON.parse(text); }
             catch { return reject(new Error(`CatVod returned invalid JSON for ${route}`)); }
           }
+          if (settled) return;
           if (res.statusCode >= 400) {
             const error = new Error(value?.message || `CatVod returned HTTP ${res.statusCode}`);
             error.status = res.statusCode;
+            settled = true;
             return reject(error);
           }
+          settled = true;
           resolve(value);
         });
       });
-      req.on("error", reject);
+      let settled = false;
+      const fail = (error) => { if (!settled) { settled = true; reject(error); } };
+      req.on("error", fail);
+      // A bundle whose loopback route never answers must not leave this promise
+      // pending forever: that would wedge the per-site queue and show an
+      // permanent spinner. Bound every inject with a hard timeout.
+      const timeoutMs = Number(options.injectTimeoutMs) > 0 ? Number(options.injectTimeoutMs) : 20000;
+      req.setTimeout(timeoutMs, () => {
+        fail(new Error(`CatVod request timed out for ${route}`));
+        req.destroy();
+      });
       if (body !== undefined) req.write(body);
       req.end();
     });

@@ -158,7 +158,11 @@ export class CatVodManager {
   }
 
   async catalog(artifact) {
-    return (await this.#session(artifact)).request({ type: "catalog" });
+    const session = await this.#session(artifact);
+    // #create already fetched catalog to initialize the bundle. Reuse that
+    // result instead of paying a second loopback round-trip on every view.
+    if (session.catalogValue !== undefined) return session.catalogValue;
+    return session.request({ type: "catalog" });
   }
 
   async invoke(artifact, site, action, argumentsValue) {
@@ -237,7 +241,7 @@ export class CatVodManager {
     const session = new CatVodSession(child, { timeoutMs: this.timeoutMs, maxLineBytes: this.maxLineBytes });
     this.startingSessions.add(session);
     try {
-      await session.request({ type: "catalog" });
+      session.catalogValue = await session.request({ type: "catalog" });
       if (this.closed) {
         throw new GatewayError("CATVOD_STOPPED", "CatVod manager is stopped", 503);
       }
