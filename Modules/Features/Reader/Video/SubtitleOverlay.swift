@@ -81,8 +81,10 @@ struct SubtitleOverlay: View {
     }
 }
 
-/// Controls for the subtitle layer: an on/off toggle and a picker over auto-match, imported local
-/// entries, and imported online sources (tagged `src:<id>`). Rendered in the player's top bar.
+/// Controls for the subtitle layer. A native `Menu` crams a toggle, a status label, a picker and
+/// buttons into one compact popover that cannot scroll — with many sources, dragging down just
+/// dismisses it ("下滑自动返回"). Instead this is a button that opens a real, scrollable `sheet`
+/// with a `List`, so every option stays reachable no matter how many there are.
 struct SubtitleControls: View {
     @Binding var enabled: Bool
     @Binding var selectedEntryID: String
@@ -94,57 +96,89 @@ struct SubtitleControls: View {
     let onSelect: () -> Void
     let onRetry: () -> Void
 
+    @State private var showsPanel = false
+
     private static let sourcePrefix = "src:"
 
     var body: some View {
-        Menu {
-            Toggle(isOn: $enabled) {
-                Label(localized("字幕"), systemImage: enabled ? "captions.bubble.fill" : "captions.bubble")
-            }
-            if enabled {
-                Divider()
-                // A clear match indicator so the user knows matching ran, even with no cues
-                // at the current timestamp.
-                Label(matched ? localized("已匹配到字幕") : localized("未匹配到字幕"),
-                      systemImage: matched ? "checkmark.circle.fill" : "xmark.circle")
-                    .foregroundStyle(matched ? Color.green : Color.secondary)
-                if !status.isEmpty {
-                    Text(status).font(.caption).foregroundStyle(.secondary)
-                }
-                Divider()
-                Toggle(isOn: $coverBuiltin) {
-                    Label(localized("遮盖原字幕"), systemImage: "rectangle.bottomthird.inset.filled")
-                }
-                Picker(localized("字幕"), selection: $selectedEntryID) {
-                    Text(localized("自动匹配")).tag("")
-                    if !sources.isEmpty {
-                        Section(localized("在线字幕源")) {
-                            ForEach(sources) { source in
-                                Text(source.name).tag(Self.sourcePrefix + source.id)
-                            }
-                        }
-                    }
-                    if !entries.isEmpty {
-                        Section(localized("本地字幕")) {
-                            ForEach(entries) { entry in
-                                Text(entry.name).tag(entry.id)
-                            }
-                        }
-                    }
-                }
-                .onChange(of: selectedEntryID) { _, _ in onSelect() }
-                Button {
-                    onRetry()
-                } label: {
-                    Label(localized("重新匹配"), systemImage: "arrow.triangle.2.circlepath")
-                }
-            }
-        } label: {
+        Button { showsPanel = true } label: {
             Image(systemName: enabled ? "captions.bubble.fill" : "captions.bubble")
                 .font(DSFont.toolbarIcon)
                 .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
                 .foregroundStyle(enabled ? (matched ? Color.accentColor : Color.orange) : .primary)
         }
         .accessibilityLabel(localized("字幕设置"))
+        .sheet(isPresented: $showsPanel) { panel }
+    }
+
+    private var panel: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Toggle(isOn: $enabled) {
+                        Label(localized("字幕"), systemImage: enabled ? "captions.bubble.fill" : "captions.bubble")
+                    }
+                    Label(matched ? localized("已匹配到字幕") : localized("未匹配到字幕"),
+                          systemImage: matched ? "checkmark.circle.fill" : "xmark.circle")
+                        .foregroundStyle(matched ? Color.green : Color.secondary)
+                    if !status.isEmpty {
+                        Text(status).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Toggle(isOn: $coverBuiltin) {
+                        Label(localized("遮盖原字幕"), systemImage: "rectangle.bottomthird.inset.filled")
+                    }
+                    Button {
+                        onRetry()
+                    } label: {
+                        Label(localized("重新匹配"), systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
+
+                if enabled {
+                    Section(localized("选择字幕")) {
+                        selectRow(title: localized("自动匹配"), tag: "", systemImage: "sparkles")
+                        if !sources.isEmpty {
+                            ForEach(sources) { source in
+                                selectRow(title: source.name,
+                                          tag: Self.sourcePrefix + source.id,
+                                          systemImage: "globe")
+                            }
+                        }
+                        if !entries.isEmpty {
+                            ForEach(entries) { entry in
+                                selectRow(title: entry.name, tag: entry.id, systemImage: "captions.bubble")
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(localized("字幕设置"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(localized("完成")) { showsPanel = false }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    @ViewBuilder
+    private func selectRow(title: String, tag: String, systemImage: String) -> some View {
+        Button {
+            selectedEntryID = tag
+            onSelect()
+        } label: {
+            HStack {
+                Label(title, systemImage: systemImage)
+                Spacer()
+                if selectedEntryID == tag {
+                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(DSColor.textPrimary)
     }
 }

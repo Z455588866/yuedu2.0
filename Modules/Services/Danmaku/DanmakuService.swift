@@ -116,6 +116,8 @@ enum DanmakuService {
                 cid: dict.int("cid") ?? items.count + 1
             ))
         }
+        // The overlay walks items in time order and stops past its window, so guarantee order.
+        items.sort { $0.time < $1.time }
         return DanmakuTrack(items: items, episodeTitle: "", animeTitle: "", sourceName: source.name)
     }
 
