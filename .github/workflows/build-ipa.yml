@@ -1,11 +1,9 @@
 name: Build Unsigned IPA
 
 on:
+  # 仅手动触发：改代码 push 不再自动跑构建（省 GitHub Actions 额度，
+  # 需要构建时在 Actions 页面点 Run workflow，或走 Codemagic API）。
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
 
 jobs:
   build:
