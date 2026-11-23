@@ -19,23 +19,27 @@ struct DanmakuOverlay: View {
     let player: AVPlayer
     let track: DanmakuTrack
     let opacity: Double
+    /// Fraction of the picture height the danmaku may occupy, from the top (0.25 ... 1.0).
+    let area: Double
+    /// Glyph size in points.
+    let fontSize: Double
+    /// Seconds a scrolling comment takes to cross the picture (smaller = faster).
+    let speed: Double
 
-    // Speed / spacing tuned for a full-screen landscape picture.
-    private let travel: Double = 9          // seconds for a scroll danmaku to cross
-    private let laneHeight: Double = 34
-    private let topInset: Double = 54       // stay below the top bar
-    private let maxLanes = 7
+    // Spacing. Lane height and count are derived from `area` and `fontSize` so the controls can
+    // change how much of the screen is covered without recompiling constants.
+    private let topInset: Double = 46       // stay below the top bar
 
     var body: some View {
         TimelineView(.animation) { _ in
             GeometryReader { geo in
                 let now = player.currentTime().seconds
                 let width = geo.size.width
-                let lanes = min(maxLanes, max(1, Int((geo.size.height - topInset - 90) / laneHeight)))
-                let flying = visible(at: now, width: width, lanes: lanes)
+                let layout = laneLayout(height: geo.size.height)
+                let flying = visible(at: now, width: width, layout: layout)
                 ZStack(alignment: .topLeading) {
                     ForEach(flying) { fly in
-                        danmakuView(fly, now: now, width: width, lanes: lanes)
+                        danmakuView(fly, now: now, width: width, layout: layout)
                     }
                 }
                 .frame(width: width, height: geo.size.height, alignment: .topLeading)
@@ -46,65 +50,83 @@ struct DanmakuOverlay: View {
         .allowsHitTesting(false)
     }
 
-    /// Comments whose time window contains `now`. Rolling comments are scheduled deterministically
-    /// from their cid so the same comment always takes the same lane; a small time-based offset
-    /// spreads comments that share a second across lanes to avoid stacking.
-    private func visible(at now: Double, width: Double, lanes: Int) -> [FlyingDanmaku] {
+    private struct LaneLayout {
+        let count: Int
+        let height: Double
+        let bottom: Double      // highest y a lane may occupy
+    }
+
+    private func laneLayout(height screenHeight: Double) -> LaneLayout {
+        let usable = max(0, screenHeight * area - topInset - 24)
+        let row = max(24, fontSize + 14)
+        let count = max(1, min(20, Int(usable / row)))
+        return LaneLayout(count: count, height: row, bottom: topInset + usable)
+    }
+
+    /// Comments whose time window contains `now`. Scrolling comments enter at `item.time` and
+    /// travel for `speed` seconds; the same comment always takes the same lane (stable by cid).
+    /// Top/bottom fixed comments get a couple of dedicated rows. A hard cap keeps the picture
+    /// readable and the frame budget low even for tracks with tens of thousands of comments.
+    private func visible(at now: Double, width: Double, layout: LaneLayout) -> [FlyingDanmaku] {
         guard now.isFinite else { return [] }
-        var result: [FlyingDanmaku] = []
-        // Only a short window matters: scroll danmaku from `travel` seconds ago up to now.
-        let lower = now - travel - 0.5
+        let lower = now - speed - 0.5
+        var scroll: [FlyingDanmaku] = []
+        var fixed: [FlyingDanmaku] = []
+        // One pass over the track; the where-clause skips almost all items cheaply.
         for item in track.items where item.time >= lower && item.time <= now + 0.05 {
-            let lane = abs(item.cid) % lanes
-            let born = item.time
-            result.append(FlyingDanmaku(
-                id: item.cid, item: item, lane: lane, born: born,
-                duration: item.isScrolling ? travel : 4.5
-            ))
+            let f = FlyingDanmaku(
+                id: item.cid, item: item,
+                lane: abs(item.cid) % max(1, layout.count - 2),
+                born: item.time,
+                duration: item.isScrolling ? speed : 4.5
+            )
+            if item.isScrolling { scroll.append(f) } else { fixed.append(f) }
         }
-        // Fixed (top/bottom) comments should not all pile up; keep the most recent few.
-        return result
+        // Cap scrolling comments: at most two per lane keeps overlapping rare while still dense.
+        let scrollCap = max(6, layout.count * 2)
+        if scroll.count > scrollCap {
+            // Keep the newest ones — they are mid-flight; older ones are about to exit anyway.
+            scroll = Array(scroll.suffix(scrollCap))
+        }
+        // Fixed comments: only the most recent few, so they don't stack into a wall.
+        if fixed.count > 4 { fixed = Array(fixed.suffix(4)) }
+        return scroll + fixed
     }
 
     @ViewBuilder
-    private func danmakuView(_ fly: FlyingDanmaku, now: Double, width: Double, lanes: Int) -> some View {
+    private func danmakuView(_ fly: FlyingDanmaku, now: Double, width: Double,
+                             layout: LaneLayout) -> some View {
         let age = now - fly.born
         let progress = max(0, min(1, age / fly.duration))
         let text = Text(fly.item.text)
-            .font(.system(size: 20, weight: .semibold))
+            .font(.system(size: CGFloat(fontSize), weight: .semibold))
             .foregroundColor(Color(uiColor: UIColor(rgb: fly.item.color)))
             .shadow(color: .black.opacity(0.9), radius: 1, x: 0, y: 1)
             .fixedSize()
 
         if fly.item.isScrolling {
-            // From just off the right edge to fully off the left edge.
+            // Right edge -> fully off the left edge.
             let startX = width
             let endX = -estimateWidth(fly.item.text)
             let x = startX + (endX - startX) * progress
-            let y = topInset + Double(fly.lane) * laneHeight
+            let y = topInset + Double(fly.lane) * layout.height
             text.offset(x: x, y: y)
         } else {
             // mode 5 = top, mode 4 = bottom; fixed and centred.
             let y = fly.item.mode == 5
-                ? topInset + Double(fly.lane % 2) * laneHeight
-                : estimateScreenBottom(lanes: lanes, fly: fly)
+                ? topInset + Double(fly.lane % 2) * layout.height
+                : max(topInset, layout.bottom - 2 * layout.height)
             text.frame(maxWidth: .infinity, alignment: .center)
                 .offset(y: y)
         }
     }
 
-    private func estimateScreenBottom(lanes: Int, fly: FlyingDanmaku) -> Double {
-        // Bottom row, above the timeline controls.
-        let row = 2 - (fly.lane % 2)
-        return 560 - Double(row * Int(laneHeight))
-    }
-
     private func estimateWidth(_ text: String) -> Double {
-        // CJK glyphs are ~1em, latin ~0.55em at size 20.
+        // CJK glyphs are ~1em, latin ~0.55em.
         var points: Double = 0
         for ch in text {
             let scalar = ch.unicodeScalars.first?.value ?? 0
-            points += (scalar > 0x2E80) ? 20 : 11
+            points += (scalar > 0x2E80) ? fontSize : fontSize * 0.55
         }
         return points + 16
     }
@@ -119,13 +141,40 @@ private extension UIColor {
     }
 }
 
-/// Controls for the danmaku layer: an on/off toggle and a source picker. Rendered in the player's
-/// top bar. Kept separate from the overlay so it participates in the control chrome only.
+/// Controls for the danmaku layer: on/off, source picker, plus display tuning — how much of the
+/// picture the comments cover, their size and their scroll speed. Rendered in the player's top bar.
 struct DanmakuControls: View {
     @Binding var enabled: Bool
     @Binding var selectedSourceID: String
+    @Binding var area: Double
+    @Binding var fontSize: Double
+    @Binding var speed: Double
     let sources: [DanmakuSource]
     let status: String
+
+    private struct Level: Identifiable {
+        let label: String
+        let value: Double
+        var id: Double { value }
+    }
+    private static let areaLevels: [Level] = [
+        Level(label: localized("四分之一屏"), value: 0.25),
+        Level(label: localized("半屏"), value: 0.5),
+        Level(label: localized("大半屏"), value: 0.75),
+        Level(label: localized("全屏"), value: 1.0),
+    ]
+    private static let sizeLevels: [Level] = [
+        Level(label: localized("小"), value: 15),
+        Level(label: localized("中"), value: 19),
+        Level(label: localized("大"), value: 24),
+        Level(label: localized("特大"), value: 30),
+    ]
+    private static let speedLevels: [Level] = [
+        Level(label: localized("快"), value: 6),
+        Level(label: localized("较快"), value: 8),
+        Level(label: localized("中"), value: 11),
+        Level(label: localized("慢"), value: 15),
+    ]
 
     var body: some View {
         Menu {
@@ -137,6 +186,22 @@ struct DanmakuControls: View {
                 Picker(localized("弹幕源"), selection: $selectedSourceID) {
                     ForEach(sources) { source in
                         Text(source.name).tag(source.id)
+                    }
+                }
+                Divider()
+                Picker(localized("占屏"), selection: $area) {
+                    ForEach(Self.areaLevels) { level in
+                        Text(level.label).tag(level.value)
+                    }
+                }
+                Picker(localized("字号"), selection: $fontSize) {
+                    ForEach(Self.sizeLevels) { level in
+                        Text(level.label).tag(level.value)
+                    }
+                }
+                Picker(localized("速度"), selection: $speed) {
+                    ForEach(Self.speedLevels) { level in
+                        Text(level.label).tag(level.value)
                     }
                 }
                 if !status.isEmpty {

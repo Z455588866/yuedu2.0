@@ -11,6 +11,9 @@ final class DanmakuController {
         static let enabled = "yd_danmaku_enabled"
         static let source = "yd_danmaku_source"
         static let opacity = "yd_danmaku_opacity"
+        static let area = "yd_danmaku_area"
+        static let fontSize = "yd_danmaku_fontSize"
+        static let speed = "yd_danmaku_speed"
     }
 
     var enabled: Bool {
@@ -21,6 +24,18 @@ final class DanmakuController {
     }
     var opacity: Double {
         didSet { defaults.set(opacity, forKey: Keys.opacity) }
+    }
+    /// Fraction of the picture height danmaku may cover (0.25 ... 1).
+    var area: Double {
+        didSet { defaults.set(area, forKey: Keys.area) }
+    }
+    /// Danmaku glyph size in points.
+    var fontSize: Double {
+        didSet { defaults.set(fontSize, forKey: Keys.fontSize) }
+    }
+    /// Seconds a scrolling comment takes to cross the picture.
+    var speed: Double {
+        didSet { defaults.set(speed, forKey: Keys.speed) }
     }
 
     private(set) var track: DanmakuTrack?
@@ -40,6 +55,18 @@ final class DanmakuController {
         self.opacity = {
             let raw = defaults.double(forKey: Keys.opacity)
             return raw == 0 ? 0.9 : raw
+        }()
+        self.area = {
+            let raw = defaults.double(forKey: Keys.area)
+            return raw == 0 ? 0.75 : raw
+        }()
+        self.fontSize = {
+            let raw = defaults.double(forKey: Keys.fontSize)
+            return raw == 0 ? 19 : raw
+        }()
+        self.speed = {
+            let raw = defaults.double(forKey: Keys.speed)
+            return raw == 0 ? 11 : raw
         }()
     }
 

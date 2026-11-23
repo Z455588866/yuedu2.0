@@ -56,7 +56,8 @@ struct VideoPlayerView: View {
                 // Danmaku sits above the picture and gestures but below the control chrome. It
                 // never takes touches, so seek/long-press/tap gestures keep working underneath.
                 if danmaku.enabled, let track = danmaku.track {
-                    DanmakuOverlay(player: controller.player, track: track, opacity: danmaku.opacity)
+                    DanmakuOverlay(player: controller.player, track: track, opacity: danmaku.opacity,
+                                   area: danmaku.area, fontSize: danmaku.fontSize, speed: danmaku.speed)
                         .ignoresSafeArea()
                 }
                 // Subtitles sit just above the danmaku, still below the control chrome.
@@ -316,6 +317,9 @@ struct VideoPlayerView: View {
                     get: { danmaku.selectedSourceID },
                     set: { danmaku.selectedSourceID = $0; danmaku.reload() }
                 ),
+                area: Binding(get: { danmaku.area }, set: { danmaku.area = $0 }),
+                fontSize: Binding(get: { danmaku.fontSize }, set: { danmaku.fontSize = $0 }),
+                speed: Binding(get: { danmaku.speed }, set: { danmaku.speed = $0 }),
                 sources: danmakuSources.enabledSources,
                 status: danmaku.status
             )
@@ -328,7 +332,9 @@ struct VideoPlayerView: View {
                 entries: subtitleStore.enabledEntries,
                 sources: onlineSubtitleSources.enabledSources,
                 status: subtitle.status,
-                onSelect: { subtitle.resolve() }
+                matched: subtitle.activeEntry != nil,
+                onSelect: { subtitle.resolve() },
+                onRetry: { subtitle.resolve() }
             )
             speedMenu(controller)
             // The system's button names itself to VoiceOver.
@@ -364,8 +370,24 @@ struct VideoPlayerView: View {
 
     private func subtitle(_ controller: VideoPlaybackController) -> String {
         let episode = controller.episodeTitle
-        guard let route = controller.route?.title, controller.guide.routes.count > 1 else { return episode }
-        return "\(route) · \(episode)"
+        let base: String
+        if let route = controller.route?.title, controller.guide.routes.count > 1 {
+            base = "\(route) · \(episode)"
+        } else {
+            base = episode
+        }
+        // Surface the subtitle match right under the title so the user can tell at a glance
+        // whether matching worked, without opening the subtitle menu.
+        guard subtitle.enabled else { return base }
+        let state: String
+        if subtitle.activeEntry != nil {
+            state = localized("字幕已加载")
+        } else if subtitle.status.isEmpty {
+            state = localized("字幕匹配中…")
+        } else {
+            state = subtitle.status
+        }
+        return "\(base) · \(state)"
     }
 
     private func speedMenu(_ controller: VideoPlaybackController) -> some View {

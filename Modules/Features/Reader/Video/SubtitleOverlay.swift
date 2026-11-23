@@ -69,7 +69,9 @@ struct SubtitleControls: View {
     let entries: [SubtitleEntry]
     let sources: [OnlineSubtitleSource]
     let status: String
+    let matched: Bool
     let onSelect: () -> Void
+    let onRetry: () -> Void
 
     private static let sourcePrefix = "src:"
 
@@ -79,6 +81,15 @@ struct SubtitleControls: View {
                 Label(localized("字幕"), systemImage: enabled ? "captions.bubble.fill" : "captions.bubble")
             }
             if enabled {
+                Divider()
+                // A clear match indicator so the user knows matching ran, even with no cues
+                // at the current timestamp.
+                Label(matched ? localized("已匹配到字幕") : localized("未匹配到字幕"),
+                      systemImage: matched ? "checkmark.circle.fill" : "xmark.circle")
+                    .foregroundStyle(matched ? Color.green : Color.secondary)
+                if !status.isEmpty {
+                    Text(status).font(.caption).foregroundStyle(.secondary)
+                }
                 Divider()
                 Picker(localized("字幕"), selection: $selectedEntryID) {
                     Text(localized("自动匹配")).tag("")
@@ -98,16 +109,17 @@ struct SubtitleControls: View {
                     }
                 }
                 .onChange(of: selectedEntryID) { _, _ in onSelect() }
-                if !status.isEmpty {
-                    Divider()
-                    Text(status).font(.caption).foregroundStyle(.secondary)
+                Button {
+                    onRetry()
+                } label: {
+                    Label(localized("重新匹配"), systemImage: "arrow.triangle.2.circlepath")
                 }
             }
         } label: {
             Image(systemName: enabled ? "captions.bubble.fill" : "captions.bubble")
                 .font(DSFont.toolbarIcon)
                 .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
-                .foregroundStyle(enabled ? Color.accentColor : .primary)
+                .foregroundStyle(enabled ? (matched ? Color.accentColor : Color.orange) : .primary)
         }
         .accessibilityLabel(localized("字幕设置"))
     }
