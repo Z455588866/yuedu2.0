@@ -266,21 +266,48 @@ struct CatVodHomeView: View {
                 sourcePicker
                 searchBar
 
+                // Category and filter chips live outside the grid branch on
+                // purpose: an empty 推荐 page used to hide the whole category
+                // bar, so a source whose home is blank could never be browsed
+                // at all — exactly the "暂无内容 and nothing else" screen.
+                if !list.categories.isEmpty { categoryBar }
+                if !currentFilters.isEmpty { filterBar }
+
                 if isLoading && list.media.isEmpty {
                     HStack { Spacer(); ProgressView(); Spacer() }.padding(.vertical, 40)
                 } else if list.media.isEmpty {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 10) {
                         Image(systemName: "film.stack")
                             .font(.system(size: 36))
                             .foregroundStyle(DSColor.textSecondary)
                         Text(localized("暂无内容")).font(DSFont.subheadline)
-                        if let message { Text(message).font(DSFont.caption).foregroundStyle(.secondary) }
+                        // An empty page is not always a dead end: netdisk/Alist
+                        // sources answer nothing until an account is configured,
+                        // and a slow source can simply have timed out. Say which
+                        // case it is instead of leaving a blank grid.
+                        Text(message ?? localized("这个站点这个分类没有返回内容。如果是网盘或 Alist 站点，需要先在「管理猫源 → 网盘账号配置」里登录；也可以重试，或者换个分类。"))
+                            .font(DSFont.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                        HStack(spacing: 12) {
+                            Button {
+                                Task { await reloadCurrent() }
+                            } label: {
+                                Text(localized("重试")).font(DSFont.caption)
+                            }
+                            .buttonStyle(.bordered)
+                            NavigationLink {
+                                CatVodSourceSettingsView()
+                            } label: {
+                                Text(localized("管理猫源")).font(DSFont.caption)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .padding(.top, 4)
                     }
-                    .frame(maxWidth: .infinity).padding(.vertical, 50)
+                    .frame(maxWidth: .infinity).padding(.vertical, 40)
                 } else {
-                    if !list.categories.isEmpty { categoryBar }
-                    if !currentFilters.isEmpty { filterBar }
-
                     LazyVGrid(columns: columns, spacing: 16) {
                         // Position identity: even if a source returns duplicate/empty
                         // vod_id, SwiftUI never crashes on duplicate Identifiable ids.
@@ -413,6 +440,16 @@ struct CatVodHomeView: View {
         }
     }
 
+    /// Retry what the grid is showing right now: the chosen category, or the
+    /// recommended page when no category has been picked.
+    private func reloadCurrent() async {
+        if let category = currentCategory {
+            await loadCategory(category)
+        } else {
+            await loadHome()
+        }
+    }
+
     private func loadHome() async {
         guard let bundle = currentBundleURL, let site = selectedSite else {
             await MainActor.run { isLoading = false }
@@ -463,7 +500,7 @@ struct CatVodHomeView: View {
                                                             extend: filterChoices) {
             await MainActor.run {
                 guard token == loadToken else { return }
-                list = cached
+                list = keepingCategories(cached)
                 resultSites = [:]
             }
         }
@@ -474,7 +511,7 @@ struct CatVodHomeView: View {
                                                                 extend: filterChoices)
             await MainActor.run {
                 guard token == loadToken else { return }
-                list = result
+                list = keepingCategories(result)
                 resultSites = [:]
                 isLoading = false
             }
@@ -486,6 +523,16 @@ struct CatVodHomeView: View {
                 }
             }
         }
+    }
+
+    /// `category` and `search` replies normally omit `class`; carry the list
+    /// from the last `home` so switching category does not erase the chip bar
+    /// (it used to vanish, leaving no way back to 推荐).
+    private func keepingCategories(_ result: CatVodList) -> CatVodList {
+        guard result.categories.isEmpty, !list.categories.isEmpty else { return result }
+        var copy = result
+        copy.categories = list.categories
+        return copy
     }
 
     private func loadMore() async {

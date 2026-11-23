@@ -52,6 +52,83 @@ async function readJSON(request, maximumBytes) {
   }
 }
 
+/// Bundles disagree on how a content list looks. TVBox's own contract is
+/// `{list, class, page, pagecount}`, but real sources answer `{data:[...]}`,
+/// `{data:{list:[...]}}`, `{vodlist:[...]}`, `{items:[...]}` or even a JSON
+/// string. Left alone, those all reach the app as "暂无内容" while the source
+/// actually returned a full page — so flatten them once here, in the trusted
+/// parent process, instead of teaching every caller the same aliases.
+export function normalizeCatVodResult(raw) {
+  let value = raw;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { return raw; }
+  }
+  if (Array.isArray(value)) return { list: value };
+  if (!value || typeof value !== "object") return raw;
+
+  const result = { ...value };
+  if (!Array.isArray(result.list)) {
+    const nested = result.data && typeof result.data === "object" && !Array.isArray(result.data)
+      ? result.data.list
+      : undefined;
+    const candidate = [result.vodlist, result.vodList, result.items, result.videos,
+      result.data, nested].find(Array.isArray);
+    if (candidate) result.list = candidate;
+  }
+  if (!Array.isArray(result.class)) {
+    const candidate = [result.classes, result.categories, result.types].find(Array.isArray);
+    if (candidate) result.class = candidate;
+  }
+  if (Array.isArray(result.class)) {
+    // `type_id` / `type_name` is the TVBox spelling; some spiders emit
+    // `id` / `name`, and numeric ids must become strings or the app drops them.
+    result.class = result.class.map((entry) => {
+      if (!entry || typeof entry !== "object") return entry;
+      const id = entry.type_id ?? entry.id ?? entry.typeId;
+      const name = entry.type_name ?? entry.name ?? entry.typeName;
+      return {
+        ...entry,
+        type_id: id === undefined || id === null ? "" : String(id),
+        type_name: name === undefined || name === null ? "" : String(name)
+      };
+    });
+  }
+  if (Array.isArray(result.list)) {
+    // Same story for the entries: `vod_id` / `vod_name` / `vod_pic` are the
+    // TVBox names, but plenty of spiders answer `id` / `name` / `pic`. Without
+    // the mapping those rows decode to an empty title and never show up.
+    const pick = (entry, keys) => {
+      for (const key of keys) {
+        const value = entry[key];
+        if (value !== undefined && value !== null && value !== "") return value;
+      }
+      return undefined;
+    };
+    const text = (value) => {
+      if (value === undefined) return "";
+      if (Array.isArray(value)) return value.length ? String(value[0]) : "";
+      return String(value);
+    };
+    result.list = result.list.map((entry) => {
+      if (!entry || typeof entry !== "object") return entry;
+      return {
+        ...entry,
+        vod_id: text(pick(entry, ["vod_id", "id", "vodId", "vid"])),
+        vod_name: text(pick(entry, ["vod_name", "name", "vodName", "title"])),
+        vod_pic: text(pick(entry, ["vod_pic", "pic", "vodPic", "cover", "poster"])),
+        vod_remarks: text(pick(entry, ["vod_remarks", "remarks", "vodRemarks", "note"])),
+        vod_year: text(pick(entry, ["vod_year", "year", "vodYear"])),
+        vod_type: text(pick(entry, ["vod_type", "type_name", "vodTypeName", "typeName"]))
+      };
+    });
+  }
+  return result;
+}
+
+function catVodListLength(result) {
+  return Array.isArray(result?.list) ? result.list.length : 0;
+}
+
 export function createGateway(config, dependencies = {}) {
   const jarCache = dependencies.jarCache || new JarCache(config);
   const workers = dependencies.workers || new WorkerManager(config);
@@ -64,6 +141,27 @@ export function createGateway(config, dependencies = {}) {
   // boundary as running the bundle at all: it already has outbound network).
   const catVod = dependencies.catVod || new CatVodManager({ ...config });
   const trustedFetch = dependencies.fetchValue || fetch;
+
+  /// Normalise a bundle reply, and when a list comes back empty try the two
+  /// argument shapes real spiders are known to require. Empty is the single
+  /// most common "source looks broken" report, and both causes are cheap to
+  /// rule out: a spider that compares `tid === 3` sees nothing when we send
+  /// `"3"`, and a handful paginate from 0 while TVBox starts at 1.
+  const invokeBundle = async (artifact, site, action, args) => {
+    let result = normalizeCatVodResult(await catVod.invoke(artifact, site, action, args));
+    if (!["category", "search"].includes(action) || catVodListLength(result) > 0) return result;
+    const retries = [];
+    if (typeof args.tid === "string" && /^\d+$/.test(args.tid)) retries.push({ tid: Number(args.tid) });
+    if (action === "category" && String(args.page) === "1") retries.push({ page: 0 });
+    for (const patch of retries) {
+      try {
+        const retried = normalizeCatVodResult(await catVod.invoke(artifact, site, action,
+          { ...args, ...patch }));
+        if (catVodListLength(retried) > 0) return retried;
+      } catch { /* keep the original — an empty page is a valid answer */ }
+    }
+    return result;
+  };
   // Trusted parent process only. Expose every provider the app configured so
   // built-in cloud actions (quark/123/aliyun/baidu/115/...) can read them.
   // Third-party spider bundles still never receive these values.
@@ -181,7 +279,7 @@ export function createGateway(config, dependencies = {}) {
           }
         }
         const artifact = await nodeBundleCache.resolve(invoke.site.jar);
-        sendJSON(response, 200, await catVod.invoke(artifact, invoke.site, invoke.action, invoke.arguments));
+        sendJSON(response, 200, await invokeBundle(artifact, invoke.site, invoke.action, invoke.arguments));
       } else {
         const artifact = await jarCache.resolve(invoke.site.jar);
         sendJSON(response, 200, await workers.invoke(artifact, invoke.site, invoke.action, invoke.arguments));
