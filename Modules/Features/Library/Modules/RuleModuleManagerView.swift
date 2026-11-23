@@ -29,6 +29,8 @@ struct RuleModuleManagerView: View {
     /// Imported subtitle files and online subtitle sources, another category on 模组.
     @State private var subtitleStore = SubtitleStore.shared
     @State private var onlineSubtitleStore = OnlineSubtitleSourceStore.shared
+    /// Imported CatVod interfaces, another category on 模组.
+    @State private var catVodSourceStore = CatVodSourceStore.shared
     /// Once per visit: back from a repository's page, the indexes are not read again.
     @State private var hasLoaded = false
     @State private var pendingUnsubscription: RuleModuleRepositoryModel.Repository?
@@ -103,8 +105,17 @@ struct RuleModuleManagerView: View {
                                         count: subtitleCount == 0 ? nil : subtitleCount)
                 }
                 .accessibilityIdentifier("modules.subtitles")
+
+                NavigationLink {
+                    CatVodSourceSettingsView()
+                } label: {
+                    RuleModuleOriginRow(title: localized("猫源"), systemImage: "tv.and.hifispeaker.fill",
+                                        subtitle: localized("导入猫影视接口，在「猫元」页浏览播放"), origin: localized("汇入"),
+                                        count: catVodSourceStore.sources.isEmpty ? nil : catVodSourceStore.sources.count)
+                }
+                .accessibilityIdentifier("modules.catvod.sources")
             } footer: {
-                Text(localized("弹幕源为弹弹play兼容接口；字幕源为 thesubtitledb 兼容接口，也可导入本地 .srt/.vtt 文件。都在播放视频时按片名自动匹配。")).dsSectionFooter()
+                Text(localized("弹幕源为弹弹play兼容接口；字幕源为 thesubtitledb 兼容接口，也可导入本地 .srt/.vtt 文件。都在播放视频时按片名自动匹配。猫源为猫影视 .js/.js.md5 接口。")).dsSectionFooter()
             }
             .interfaceSectionSurface()
 

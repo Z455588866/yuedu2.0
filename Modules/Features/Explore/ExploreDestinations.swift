@@ -31,6 +31,10 @@ private struct ExploreRouteDestinations: ViewModifier {
             .navigationDestination(for: ListedSeriesRoute.self) { route in
                 ListedSeriesPage(route: route).environmentObject(store)
             }
+            // 猫元: standalone CatVod browsing page.
+            .navigationDestination(for: CatVodHomeRoute.self) { _ in
+                CatVodHomeView()
+            }
     }
 
     @ViewBuilder

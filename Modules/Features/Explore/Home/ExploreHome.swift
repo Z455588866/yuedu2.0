@@ -567,6 +567,8 @@ private struct ExploreHomeRoot: View {
                 #endif
             }
             ToolbarItem(placement: .topBarTrailing) { configurationsButton.rootTabBarButton(overColor: barIsOverColor) }
+            // 猫元：独立的猫源浏览页,与首页配置并排 (maintainer request 2026-11-23)。
+            ToolbarItem(placement: .topBarTrailing) { catVodButton.rootTabBarButton(overColor: barIsOverColor) }
             // 首页配置 in its own glass, apart from ••• (maintainer, 2026-10-22).
             #if compiler(>=6.2)
             if #available(iOS 26.0, *) {
@@ -596,6 +598,16 @@ private struct ExploreHomeRoot: View {
         .accessibilityLabel(localized("首页配置"))
         .accessibilityValue(selectedConfiguration?.name ?? "")
         .accessibilityIdentifier("explore.configurations")
+    }
+
+    /// 猫元: the standalone CatVod browsing page (imported .js/.js.md5 interfaces).
+    private var catVodButton: some View {
+        Button { path.append(CatVodHomeRoute()) } label: {
+            Image(systemName: "tv.and.hifispeaker")
+                .accessibilityHidden(true)
+        }
+        .accessibilityLabel(localized("猫元"))
+        .accessibilityIdentifier("explore.catvod")
     }
 
     /// 探索's one ••• (Phase 5 plan, decisions 30 and 36). A native menu from iOS 18; on iOS 17
