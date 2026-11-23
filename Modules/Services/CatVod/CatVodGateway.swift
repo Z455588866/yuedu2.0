@@ -15,10 +15,33 @@ final class CatVodGateway {
     private var activeAllowedURLs: Set<String> = []
 
     init(resourcesDirectory: URL? = nil, entryPoint: URL? = nil, cacheDirectory: URL? = nil) {
-        let resources = resourcesDirectory
-            ?? Bundle.main.bundleURL.appendingPathComponent("SpiderGateway", isDirectory: true)
-        self.resourcesDirectory = resources
-        self.entryPoint = entryPoint ?? resources.appendingPathComponent("mobile-entry.mjs")
+        let bundle = Bundle.main.bundleURL
+        let fileManager = FileManager.default
+        let nested = bundle.appendingPathComponent("SpiderGateway", isDirectory: true)
+        let nestedEntry = nested.appendingPathComponent("mobile-entry.mjs")
+        let flatEntry = bundle.appendingPathComponent("mobile-entry.mjs")
+
+        // Xcode 既可能把 SpiderGateway 作为文件夹引用整目录拷入，也可能把里面的
+        // .mjs 平铺到 .app 根目录（实际签名 IPA 就是后者）。两种布局都接受，避免
+        // 因为找不到子目录而误报“手机内置脚本组件不完整”。
+        let resolvedResources: URL
+        let resolvedEntry: URL
+        if let resourcesDirectory {
+            resolvedResources = resourcesDirectory
+            resolvedEntry = entryPoint ?? resourcesDirectory.appendingPathComponent("mobile-entry.mjs")
+        } else if let entryPoint {
+            resolvedEntry = entryPoint
+            resolvedResources = entryPoint.deletingLastPathComponent()
+        } else if fileManager.fileExists(atPath: nestedEntry.path) {
+            resolvedResources = nested
+            resolvedEntry = nestedEntry
+        } else {
+            resolvedResources = bundle
+            resolvedEntry = flatEntry
+        }
+
+        self.resourcesDirectory = resolvedResources
+        self.entryPoint = resolvedEntry
         self.cacheDirectory = cacheDirectory
             ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Yuedu/CatVod", isDirectory: true)
