@@ -59,7 +59,13 @@ export function restrictMobileFileDescriptors() {
   // Public process.binding() bypasses the fs module and its descriptor checks.
   // Node's own internals use the separate, private internalBinding function.
   Object.defineProperty(process, 'binding', { value: denied, configurable: false, writable: false });
-  for (const key of ['kill', 'abort', 'reallyExit', '_debugProcess']) {
+  // `process.exit()` is safe here: inside a worker thread it ends only this
+  // thread, never the app. It is also Node's own fatal-error path
+  // (workerOnGlobalUncaughtException -> process.exit -> process.reallyExit), so
+  // guarding `reallyExit` replaced every real crash with a bogus
+  // "descriptors are unavailable" error. `kill` and `abort` still reach the OS
+  // process, so they stay denied.
+  for (const key of ['kill', 'abort', '_debugProcess']) {
     Object.defineProperty(process, key, { value: denied, configurable: false, writable: false });
   }
   // CatVod code can dynamically import a builtin. Its named ESM exports must

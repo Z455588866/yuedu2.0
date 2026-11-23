@@ -1,84 +1,11 @@
 import { createRequire } from "node:module";
 import { writeSync } from "node:fs";
+import http from "node:http";
 import { readFile } from "node:fs/promises";
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { readBoundedText } from "./bounded-response.mjs";
 import { startParentWatchdog } from "./process-lifecycle.mjs";
-
-function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-export function patchBundle(source) {
-  const legacyLifecycle = source.match(
-    /var ([A-Za-z_$][\w$]*)=null,[\s\S]{0,1000}?;async function ([A-Za-z_$][\w$]*)\(t\)\{\1=/
-  );
-  const modernLifecycle = legacyLifecycle ? null : source.match(
-    /var ([A-Za-z_$][\w$]*)=null;async function ([A-Za-z_$][\w$]*)\([^)]*\)\{\1&&await ([A-Za-z_$][\w$]*)\(\);/
-  );
-  if (!legacyLifecycle && !modernLifecycle) {
-    throw new Error("Unsupported CatVod bundle lifecycle");
-  }
-
-  let serverName;
-  let startName;
-  let stopName;
-  let startExport;
-  let patched = source;
-  if (legacyLifecycle) {
-    [, serverName, startName] = legacyLifecycle;
-    const stopMatch = source.match(
-      new RegExp(`async function ([A-Za-z_$][\\w$]*)\\(\\)\\{${escapeRegex(serverName)}&&`)
-    );
-    if (!stopMatch) throw new Error("Unsupported CatVod bundle stop lifecycle");
-    stopName = stopMatch[1];
-    const listenPattern = new RegExp(
-      `(${escapeRegex(serverName)}\\.register\\([A-Za-z_$][\\w$]*\\)),${escapeRegex(serverName)}\\.listen\\(\\{port:process\\.env\\.DEV_HTTP_PORT\\|\\|0,host:"127\\.0\\.0\\.1"\\}\\)`
-    );
-    if (!listenPattern.test(source)) throw new Error("Unsupported CatVod bundle listener");
-    patched = source.replace(
-      listenPattern,
-      `$1,await ${serverName}.ready(),globalThis.__catvodServer=${serverName}`
-    );
-    startExport = startName;
-  } else {
-    [, serverName, startName, stopName] = modernLifecycle;
-    const stopPattern = new RegExp(
-      `async function ${escapeRegex(stopName)}\\(\\)\\{${escapeRegex(serverName)}&&`
-    );
-    if (!stopPattern.test(source)) throw new Error("Unsupported CatVod bundle stop lifecycle");
-    const listenerPattern = new RegExp(
-      `,await [A-Za-z_$][\\w$]*\\(Number\\(process\\.env\\.DEV_HTTP_PORT\\|\\|process\\.env\\.PORT\\|\\|9988\\)\\)\\}async function ${escapeRegex(stopName)}`
-    );
-    if (!listenerPattern.test(source)) throw new Error("Unsupported CatVod bundle listener");
-    patched = source.replace(
-      listenerPattern,
-      `,await ${serverName}.ready(),globalThis.__catvodServer=${serverName}}async function ${stopName}`
-    );
-    // Newer bundles take a large internal default config. Passing the legacy
-    // cloud credential object would replace that config instead of extending it.
-    startExport = `()=>${startName}()`;
-  }
-
-  const addressPattern = new RegExp(
-    `${escapeRegex(serverName)}\\.address=function\\(\\)\\{let ([A-Za-z_$][\\w$]*)=this\\.server\\.address\\(\\);`
-  );
-  const addressMatch = patched.match(addressPattern);
-  if (addressMatch) {
-    patched = patched.replace(
-      addressPattern,
-      `${serverName}.address=function(){let ${addressMatch[1]}=this.server.address()||{address:"127.0.0.1",port:0};`
-    );
-  }
-  const exportMarker = "0&&(module.exports={start,stop});";
-  if (!patched.includes(exportMarker)) throw new Error("Unsupported CatVod bundle exports");
-  patched = patched.replace(
-    exportMarker,
-    `globalThis.__catvodExports={start:${startExport},stop:${stopName}};`
-  );
-  return patched;
-}
 
 export function actionRequest(site, action, args) {
   const base = site.api.replace(/\/$/, "");
@@ -171,38 +98,114 @@ export async function runCatVod(bundlePath, options = {}) {
   console.info = log;
   console.warn = log;
   console.error = log;
-  globalThis.catServerFactory = undefined;
   globalThis.catDartServerPort = () => 0;
 
-  const source = await readFile(bundlePath, "utf8");
-  const patched = patchBundle(source);
+  // Mature loader (proven in tvbox-silicon): require the bundle and call its
+  // exported start(). The bundle builds its HTTP app on the server returned by
+  // catServerFactory, which we bind to an ephemeral 127.0.0.1 port and drive
+  // with real loopback requests. Source is never patched, so this works with any
+  // packaging (Fastify/CatPaw/websiteBundle and future variants) — the old
+  // regex-based patch only matched one specific minified shape and failed on
+  // every real-world bundle.
+  let loopbackServer;
+  globalThis.catServerFactory = (handler) => {
+    // Every request that reaches the bundle's own server counts as activity:
+    // providers answer `player` with a URL on this very server (their
+    // `m3u8-proxy` route), so the player keeps fetching segments long after the
+    // last gateway call. Without this the session is dropped as idle mid-play
+    // and the stream dies.
+    const served = (request, response) => {
+      try { options.onActivity?.(); } catch { /* activity must never fail a request */ }
+      handler(request, response);
+    };
+    loopbackServer = http.createServer(served);
+    const originalListen = loopbackServer.listen.bind(loopbackServer);
+    loopbackServer.listen = (...args) =>
+      originalListen(0, "127.0.0.1", args.find((arg) => typeof arg === "function"));
+    return loopbackServer;
+  };
+
   const baseRequire = createRequire(pathToFileURL(bundlePath));
   const localRequire = options.wrapRequire ? options.wrapRequire(baseRequire) : baseRequire;
-  new Function("require", "module", "exports", patched)(localRequire, { exports: {} }, {});
-  if (!globalThis.__catvodExports?.start) throw new Error("CatVod start export is unavailable");
+  // Execute the bundle as-is (no source patching — real bundles use many
+  // packaging styles and the old regex approach only matched one). The bundle
+  // exports {start, stop}; we take start from module.exports (or a bundle that
+  // assigns globalThis.__catvodExports itself).
+  const source = await readFile(bundlePath, "utf8");
+  const bundleModule = { exports: {} };
+  const factory = new Function(
+    "require", "module", "exports", "__filename", "__dirname", source
+  );
+  factory(localRequire, bundleModule, bundleModule.exports, bundlePath,
+          bundlePath.replace(/\/[^/]+$/, ""));
+  globalThis.__catvodExports = bundleModule.exports;
+  const startBundle = bundleModule.exports?.start ?? globalThis.__catvodExports?.start;
+  if (typeof startBundle !== "function") throw new Error("CatVod start export is unavailable");
   // Account credentials remain in the trusted Gateway parent process. Remote
   // CatVod bundles receive only an empty compatibility configuration.
-  await globalThis.__catvodExports.start({
+  await startBundle({
     biliCookie: "",
     pans: { list: [] },
     cms: { list: [] },
     sites: { list: [] }
   });
-  const server = globalThis.__catvodServer;
-  if (!server?.inject) throw new Error("CatVod injection server is unavailable");
+  const listenDeadline = Date.now() + 20_000;
+  while (!loopbackServer?.listening) {
+    if (Date.now() > listenDeadline) throw new Error("CatVod server did not start listening");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  const port = loopbackServer.address().port;
   const initialized = new Map();
 
+  function injectOnce(method, route, payload) {
+    return new Promise((resolve, reject) => {
+      const body = payload === undefined ? undefined : JSON.stringify(payload);
+      const req = http.request({
+        host: "127.0.0.1",
+        port,
+        path: route,
+        method: method.toUpperCase(),
+        headers: body === undefined
+          ? {}
+          : { "content-type": "application/json", "content-length": Buffer.byteLength(body) }
+      }, (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          let value;
+          if (!text || text.trim() === "") value = {};
+          else {
+            try { value = JSON.parse(text); }
+            catch { return reject(new Error(`CatVod returned invalid JSON for ${route}`)); }
+          }
+          if (res.statusCode >= 400) {
+            const error = new Error(value?.message || `CatVod returned HTTP ${res.statusCode}`);
+            error.status = res.statusCode;
+            return reject(error);
+          }
+          resolve(value);
+        });
+      });
+      req.on("error", reject);
+      if (body !== undefined) req.write(body);
+      req.end();
+    });
+  }
+
+  // Providers keep their upstream connections in keep-alive agents and reuse
+  // sockets the far end has already dropped; the bundle then answers 500 with
+  // "socket hang up". One retry on a fresh connection (as tvbox-silicon does)
+  // rescues those calls without masking a source that fails every time.
   async function inject(method, route, payload) {
-    let request = server.inject()[method.toLowerCase()](route);
-    if (payload !== undefined) request = request.payload(payload);
-    const response = await request;
-    let value;
-    if (!response.body || response.body.trim() === "") value = {};
-    else {
-      try { value = response.json(); } catch { throw new Error(`CatVod returned invalid JSON for ${route}`); }
+    const started = Date.now();
+    try {
+      return await injectOnce(method, route, payload);
+    } catch (error) {
+      if (error.status !== 500 || !/socket hang up|ECONNRESET|EPIPE/.test(error.message || "")
+          || Date.now() - started > 2500) throw error;
+      return injectOnce(method, route, payload);
     }
-    if (response.statusCode >= 400) throw new Error(value?.message || `CatVod returned HTTP ${response.statusCode}`);
-    return value;
   }
 
   async function handle(message) {
@@ -219,11 +222,24 @@ export async function runCatVod(bundlePath, options = {}) {
     if (initialized.get(site.api) !== initKey) {
       // A failed init may already have changed provider state.
       initialized.delete(site.api);
-      await inject("post", `${site.api.replace(/\/$/, "")}/init`, { ext: site.ext || "" });
+      // Sites without an init route answer 404 and are ready as they are (the
+      // 玩偶/花卷/原盘 family). Treat only other failures as fatal.
+      await inject("post", `${site.api.replace(/\/$/, "")}/init`, { ext: site.ext || "" })
+        .catch((error) => { if (error.status !== 404) throw error; });
       initialized.set(site.api, initKey);
     }
     const request = actionRequest(site, message.action, message.arguments);
-    const result = await inject("post", request.path, request.payload);
+    let result;
+    try {
+      result = await inject("post", request.path, request.payload);
+    } catch (error) {
+      // A search with no matches answers 404 or an empty body in many bundles;
+      // neither is a failure, it is simply an empty result page.
+      if (message.action === "search" && (error.status === 404 || error.message === "No results")) {
+        return { list: [] };
+      }
+      throw error;
+    }
     return message.action === "player"
       ? await resolvePlayerResult(site, result, message.arguments.id)
       : result;

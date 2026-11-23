@@ -23,7 +23,10 @@ final class CatVodService {
         guard let sites = object["sites"] as? [[String: Any]] else { return [] }
         return sites.compactMap { dict in
             guard let data = try? JSONSerialization.data(withJSONObject: dict),
-                  let site = try? decoder.decode(CatVodSite.self, from: data) else { return nil }
+                  var site = try? decoder.decode(CatVodSite.self, from: data) else { return nil }
+            // `ext` may be a string or an object in the catalog; normalise it to the
+            // JSON text the spider expects on every init.
+            site.adoptRawExt(dict["ext"])
             return site
         }
     }
@@ -37,13 +40,14 @@ final class CatVodService {
 
     func category(bundleURL: String, site: CatVodSite, categoryID: String, page: Int) async throws -> CatVodList {
         let object = try await invoke(bundleURL: bundleURL, site: site, action: "category",
-                                      arguments: ["tid": categoryID, "page": String(page), "filter": false])
+                                      arguments: ["tid": categoryID, "page": String(page),
+                                                  "filter": false, "extend": [String: Any]()])
         return Self.parseList(object)
     }
 
     func search(bundleURL: String, site: CatVodSite, keyword: String, page: Int = 1) async throws -> CatVodList {
         let object = try await invoke(bundleURL: bundleURL, site: site, action: "search",
-                                      arguments: ["keyword": keyword, "page": String(page)])
+                                      arguments: ["keyword": keyword, "page": String(page), "quick": false])
         return Self.parseList(object)
     }
 
@@ -103,7 +107,7 @@ final class CatVodService {
                 "key": site.key,
                 "api": site.api ?? "/spider/\(site.key)/3",
                 "jar": bundleURL,
-                "ext": "",
+                "ext": site.ext,
                 "quickSearch": site.quickSearch ?? false
             ],
             "arguments": arguments
@@ -115,6 +119,11 @@ final class CatVodService {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // The embedded gateway is started with a per-launch token and rejects every
+        // request without `Authorization: Bearer <token>` (401). Send the same token
+        // the gateway was configured with.
+        request.setValue("Bearer \(CatVodGateway.shared.authenticationToken)",
+                         forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         request.timeoutInterval = 45
 

@@ -76,6 +76,10 @@ class CatVodSession {
       this.closed = true;
       this.#fail(new GatewayError("CATVOD_EXITED", "CatVod exited unexpectedly", 502));
     });
+    // A bundle that hands the player a URL on its own loopback server keeps
+    // serving segments there, outside this protocol. Those requests report
+    // activity so the idle sweeper does not cut the stream short.
+    processValue.on?.("activity", () => { this.lastUsedAt = Date.now(); });
   }
 
   request(payload) {

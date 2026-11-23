@@ -14,12 +14,21 @@ function requiredString(value, name, maximum = 4096) {
   return value;
 }
 
-function optionalString(value, name, maximum = 256 * 1024) {
+// CatVod catalogs declare `site.ext` either as a string or as an object (for
+// example `{"configurable":true}`). Spiders parse the JSON text on `init`, so an
+// object is accepted here and flattened, instead of failing the whole request.
+function optionalExt(value, name) {
   if (value === undefined || value === null) return "";
-  if (typeof value !== "string" || value.length > maximum) {
-    throw new GatewayError("INVALID_REQUEST", `${name} must be a string`, 400);
+  if (typeof value === "string") {
+    if (value.length > 256 * 1024) throw new GatewayError("INVALID_REQUEST", `${name} is too long`, 400);
+    return value;
   }
-  return value;
+  if (typeof value !== "object") {
+    throw new GatewayError("INVALID_REQUEST", `${name} must be a string or an object`, 400);
+  }
+  const text = JSON.stringify(value);
+  if (text.length > 256 * 1024) throw new GatewayError("INVALID_REQUEST", `${name} is too long`, 400);
+  return text;
 }
 
 export function validateInvokeRequest(body) {
@@ -35,7 +44,7 @@ export function validateInvokeRequest(body) {
     key: requiredString(body.site.key, "site.key", 256),
     api: requiredString(body.site.api, "site.api", 512),
     jar: requiredString(body.site.jar, "site.jar", 8192),
-    ext: optionalString(body.site.ext, "site.ext"),
+    ext: optionalExt(body.site.ext, "site.ext"),
     quickSearch: body.site.quickSearch === true
   };
   if (!site.api.startsWith("csp_") && !CATVOD_API.test(site.api)) {

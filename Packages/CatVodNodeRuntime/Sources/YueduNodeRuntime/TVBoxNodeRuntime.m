@@ -75,12 +75,15 @@ static napi_value initializeBridge(napi_env env, napi_value exports) {
         // kLinked (0x02) registers a built-in binding without loading native addons from disk.
         static napi_module bridge = { NAPI_MODULE_VERSION, 0x02, NULL, initializeBridge, "yuedu_mobile", NULL, { NULL } };
         napi_module_register(&bridge);
+        // No `--permission` here, matching the NodeHost that tvbox-silicon ships.
+        // The permission model is process-wide: a worker cannot lift it with its
+        // own execArgv, and real CatVod bundles open paths outside any allowlist
+        // we can name (their settings databases, module lookups above the bundle).
+        // They aborted before the HTTP server ever listened (catalog came back
+        // empty). Isolation instead comes from a disposable V8 worker with its
+        // own heap, as in mobile-catvod-process.mjs.
         NSArray<NSString *> *arguments = @[
-            @"node", @"--permission", @"--allow-worker", @"--allow-addons", @"--max-old-space-size=128",
-            [@"--allow-fs-read=" stringByAppendingString:script.stringByDeletingLastPathComponent],
-            [@"--allow-fs-read=" stringByAppendingString:assetsDirectory],
-            [@"--allow-fs-read=" stringByAppendingString:directory],
-            [@"--allow-fs-write=" stringByAppendingString:directory], script
+            @"node", @"--max-old-space-size=128", script
         ];
         engineThread = [[NSThread alloc] initWithBlock:^{
             @autoreleasepool {

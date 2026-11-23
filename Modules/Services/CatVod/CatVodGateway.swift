@@ -11,7 +11,9 @@ final class CatVodGateway {
     private let resourcesDirectory: URL
     private let entryPoint: URL
     private let cacheDirectory: URL
-    private let authenticationToken = UUID().uuidString + UUID().uuidString
+    /// Per-launch token the Node gateway requires on every spider request.
+    /// Read by `CatVodService` to build the `Authorization: Bearer` header.
+    let authenticationToken = UUID().uuidString + UUID().uuidString
     private var activeAllowedURLs: Set<String> = []
 
     init(resourcesDirectory: URL? = nil, entryPoint: URL? = nil, cacheDirectory: URL? = nil) {

@@ -10,12 +10,16 @@ struct CatVodSite: Codable, Identifiable, Hashable, Sendable {
     var searchable: Bool?
     var filterable: Bool?
     var quickSearch: Bool?
+    /// Provider configuration handed back on every `init`. CatVod catalogs declare
+    /// `ext` either as a string or as an object (`{"configurable":true}`); the
+    /// spider always wants the JSON text, so both shapes are flattened here.
+    var ext: String = ""
 
     var id: String { key }
 
     enum CodingKeys: String, CodingKey {
         case key, name, type, api
-        case searchable, filterable, quickSearch
+        case searchable, filterable, quickSearch, ext
     }
 
     init(from decoder: Decoder) throws {
@@ -27,6 +31,22 @@ struct CatVodSite: Codable, Identifiable, Hashable, Sendable {
         searchable = try c.decodeIfPresent(Bool.self, forKey: .searchable)
         filterable = try c.decodeIfPresent(Bool.self, forKey: .filterable)
         quickSearch = try c.decodeIfPresent(Bool.self, forKey: .quickSearch)
+        ext = (try? c.decodeIfPresent(String.self, forKey: .ext)) ?? ""
+    }
+
+    /// Replaces `ext` with the JSON text of whatever shape the catalog declared.
+    /// `init(from:)` cannot do this itself because `ext` may be an arbitrary JSON
+    /// value, which `Codable` cannot decode into `Any`.
+    mutating func adoptRawExt(_ value: Any?) {
+        guard let value else { return }
+        if let string = value as? String {
+            ext = string
+            return
+        }
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return }
+        ext = text
     }
 }
 
