@@ -70,6 +70,9 @@ struct LaidOutDanmaku: Identifiable {
 ///
 /// Unlike DanmakuKit's self-driven `CAAnimation` clock, positions here are a pure function of the
 /// video time, so seeking and rate changes stay perfectly in sync.
+/// Main actor: `ObservableObject.objectWillChange` is main-actor isolated in Swift 6, and the
+/// store is only ever read from SwiftUI `body` — so isolating it satisfies the protocol.
+@MainActor
 final class DanmakuLayoutStore: ObservableObject {
     private var key = ""
     private(set) var items: [LaidOutDanmaku] = []

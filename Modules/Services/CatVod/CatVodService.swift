@@ -3,6 +3,7 @@ import Foundation
 /// Talks to the embedded spider gateway over loopback HTTP and decodes the CatVod JSON into the
 /// small view models in `CatVodModels`. Independent of the book-source engine on purpose: the
 /// gateway owns the Node runtime and the spider protocol; this is a thin typed client.
+@MainActor
 final class CatVodService {
     static let shared = CatVodService()
 

@@ -4,6 +4,7 @@ import UIKit
 
 /// Presents a resolved CatVod stream in the app's own full-screen player, so danmaku, subtitles,
 /// PiP and gestures are identical to every other video. Mirrors `SourceBrowserPresenter.presentVideo`.
+@MainActor
 enum CatVodPlayerPresenter {
     static func present(url: URL, headers: [String: String], title: String) {
         guard let topVC = BookSourceFormLoginView.topViewController(),
