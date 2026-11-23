@@ -567,9 +567,16 @@ private struct ExploreHomeRoot: View {
                 #endif
             }
             ToolbarItem(placement: .topBarTrailing) { configurationsButton.rootTabBarButton(overColor: barIsOverColor) }
-            // 猫元：独立的猫源浏览页,与首页配置并排 (maintainer request 2026-11-23)。
+            // 猫元：独立的猫源浏览页。与「首页配置 / 分类」等模板入口隔开，自成一个玻璃位
+            // (maintainer request 2026-11-23)：前后各一个 spacer，让它在工具栏里独立成组。
+            // 首页配置与猫元之间（原 spacer，2026-10-22 起把配置从 ••• 分出）。
+            #if compiler(>=6.2)
+            if #available(iOS 26.0, *) {
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+            }
+            #endif
             ToolbarItem(placement: .topBarTrailing) { catVodButton.rootTabBarButton(overColor: barIsOverColor) }
-            // 首页配置 in its own glass, apart from ••• (maintainer, 2026-10-22).
+            // 猫元与 ••• 之间。
             #if compiler(>=6.2)
             if #available(iOS 26.0, *) {
                 ToolbarSpacer(.fixed, placement: .topBarTrailing)
@@ -603,7 +610,9 @@ private struct ExploreHomeRoot: View {
     /// 猫元: the standalone CatVod browsing page (imported .js/.js.md5 interfaces).
     private var catVodButton: some View {
         Button { path.append(CatVodHomeRoute()) } label: {
-            Image(systemName: "tv.and.hifispeaker")
+            // play.rectangle 在所有支持的 iOS 版本都稳定渲染；tv.and.hifispeaker 在部分
+            // 系统版本上符号缺失会显示成空白（用户 2026-11-23 截图反馈）。
+            Image(systemName: "play.rectangle")
                 .accessibilityHidden(true)
         }
         .accessibilityLabel(localized("猫元"))
