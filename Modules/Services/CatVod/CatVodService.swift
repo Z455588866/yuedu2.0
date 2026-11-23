@@ -14,6 +14,21 @@ final class CatVodService {
         self.session = session
     }
 
+    /// Interfaces already warmed during this launch (bundle downloaded, process
+    /// booted, first page fetched). Warm-up is idempotent, but `claimWarmUp`
+    /// keeps re-opening the 猫元 page from re-hammering every source.
+    private var warmedBundles = Set<String>()
+
+    func claimWarmUp(bundleURL: String) -> Bool {
+        warmedBundles.insert(bundleURL).inserted
+    }
+
+    /// Gives the claim back after a failed warm-up, so a later attempt can retry
+    /// instead of treating a transient network error as "already warm".
+    func releaseWarmUp(bundleURL: String) {
+        warmedBundles.remove(bundleURL)
+    }
+
     /// Loads the site catalog exposed by a CatVod bundle. Starts the engine with this bundle
     /// allowlisted, then asks the gateway for its sites.
     func catalog(bundleURL: String) async throws -> [CatVodSite] {
@@ -21,7 +36,7 @@ final class CatVodService {
         let endpoint = base.appendingPathComponent("/v1/catvod/catalog")
         let object = try await post(endpoint, body: ["bundle": bundleURL])
         guard let sites = object["sites"] as? [[String: Any]] else { return [] }
-        return sites.compactMap { dict in
+        let parsed = sites.compactMap { dict -> CatVodSite? in
             guard let data = try? JSONSerialization.data(withJSONObject: dict),
                   var site = try? decoder.decode(CatVodSite.self, from: data) else { return nil }
             // `ext` may be a string or an object in the catalog; normalise it to the
@@ -29,13 +44,36 @@ final class CatVodService {
             site.adoptRawExt(dict["ext"])
             return site
         }
+        Self.persistCatalog(parsed, bundleURL: bundleURL)
+        return parsed
+    }
+
+    /// Site list from the previous launch. Lets the browse screen draw its site
+    /// picker and category bar before the gateway has downloaded and booted the
+    /// bundle, instead of showing one spinner for the whole cold start.
+    func cachedCatalog(bundleURL: String) -> [CatVodSite]? {
+        let data = CatVodDiskCache.load(key: CatVodDiskCache.key(["catalog", bundleURL]))
+        guard let data, let sites = try? JSONDecoder().decode([CatVodSite].self, from: data),
+              !sites.isEmpty else { return nil }
+        return sites
     }
 
     /// Home categories and recommended media for a site.
     func home(bundleURL: String, site: CatVodSite) async throws -> CatVodList {
         let object = try await invoke(bundleURL: bundleURL, site: site, action: "home",
                                       arguments: ["filter": true])
-        return Self.parseList(object)
+        let list = Self.parseList(object)
+        Self.persistList(object, bundleURL: bundleURL, site: site, action: "home",
+                         categoryID: "", page: 1, extend: [:])
+        return list
+    }
+
+    /// The last successful 推荐 response for this interface + site, straight from
+    /// disk. The browse screen paints this before the network answers, so a
+    /// relaunch shows content immediately instead of an empty grid.
+    func cachedHome(bundleURL: String, site: CatVodSite) -> CatVodList? {
+        Self.loadList(bundleURL: bundleURL, site: site, action: "home",
+                      categoryID: "", page: 1, extend: [:])
     }
 
     func category(bundleURL: String, site: CatVodSite, categoryID: String, page: Int,
@@ -43,7 +81,18 @@ final class CatVodService {
         let object = try await invoke(bundleURL: bundleURL, site: site, action: "category",
                                       arguments: ["tid": categoryID, "page": String(page),
                                                   "filter": false, "extend": extend])
-        return Self.parseList(object)
+        let list = Self.parseList(object)
+        Self.persistList(object, bundleURL: bundleURL, site: site, action: "category",
+                         categoryID: categoryID, page: page, extend: extend)
+        return list
+    }
+
+    /// Cached copy of one category page, same stale-while-revalidate contract as
+    /// `cachedHome`. Switching back to a category you already opened is instant.
+    func cachedCategory(bundleURL: String, site: CatVodSite, categoryID: String, page: Int,
+                        extend: [String: String] = [:]) -> CatVodList? {
+        Self.loadList(bundleURL: bundleURL, site: site, action: "category",
+                      categoryID: categoryID, page: page, extend: extend)
     }
 
     func search(bundleURL: String, site: CatVodSite, keyword: String, page: Int = 1) async throws -> CatVodList {
@@ -90,7 +139,26 @@ final class CatVodService {
         }
         let from = first["vod_play_from"] as? String ?? ""
         let playURL = first["vod_play_url"] as? String ?? ""
-        return (media, CatVodPlaylistParser.groups(from: from, playURL: playURL))
+        let groups = CatVodPlaylistParser.groups(from: from, playURL: playURL)
+        // Only the two play columns are stored: the episode list is all the detail
+        // sheet needs, and keeping `vod_*` text out of the cache avoids persisting
+        // a whole title's metadata for every poster the person taps.
+        if !groups.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: ["from": from, "url": playURL]) {
+            CatVodDiskCache.store(data, key: Self.detailCacheKey(bundleURL: bundleURL, site: site, id: id))
+        }
+        return (media, groups)
+    }
+
+    /// Episode list from a previous visit, so re-opening a title shows its
+    /// episodes on the first frame instead of the "正在加载剧集…" placeholder.
+    func cachedDetail(bundleURL: String, site: CatVodSite, id: String) -> [CatVodGroup]? {
+        let key = Self.detailCacheKey(bundleURL: bundleURL, site: site, id: id)
+        guard let data = CatVodDiskCache.load(key: key),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
+              let from = object["from"], let playURL = object["url"] else { return nil }
+        let groups = CatVodPlaylistParser.groups(from: from, playURL: playURL)
+        return groups.isEmpty ? nil : groups
     }
 
     /// Resolves a spider episode id to a stream URL + headers. Mirrors tvbox-silicon's
@@ -265,6 +333,55 @@ final class CatVodService {
             throw CatVodError.emptyResponse
         }
         return object
+    }
+
+    /// Rebuilds a list from stored response bytes (see `CatVodDiskCache`).
+    static func parseList(data: Data) -> CatVodList? {
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        return parseList(object)
+    }
+
+    private static func persistCatalog(_ sites: [CatVodSite], bundleURL: String) {
+        guard !sites.isEmpty, let data = try? JSONEncoder().encode(sites) else { return }
+        CatVodDiskCache.store(data, key: CatVodDiskCache.key(["catalog", bundleURL]))
+    }
+
+    private static func listCacheKey(bundleURL: String, site: CatVodSite, action: String,
+                                     categoryID: String, page: Int,
+                                     extend: [String: String]) -> String {
+        let extendText = extend.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+        return CatVodDiskCache.key(["list", bundleURL, site.key, action,
+                                    categoryID, String(page), extendText])
+    }
+
+    private static func detailCacheKey(bundleURL: String, site: CatVodSite, id: String) -> String {
+        CatVodDiskCache.key(["detail", bundleURL, site.key, id])
+    }
+
+    private static func persistList(_ object: [String: Any], bundleURL: String, site: CatVodSite,
+                                    action: String, categoryID: String, page: Int,
+                                    extend: [String: String]) {
+        // Cache only real content: an empty or error-shaped response must not
+        // replace a good list the person can still browse.
+        let hasContent = (object["list"] as? [[String: Any]])?.isEmpty == false
+            || (object["class"] as? [[String: Any]])?.isEmpty == false
+        guard hasContent, let data = try? JSONSerialization.data(withJSONObject: object) else { return }
+        CatVodDiskCache.store(data, key: listCacheKey(bundleURL: bundleURL, site: site, action: action,
+                                                      categoryID: categoryID, page: page,
+                                                      extend: extend))
+    }
+
+    private static func loadList(bundleURL: String, site: CatVodSite, action: String,
+                                 categoryID: String, page: Int,
+                                 extend: [String: String]) -> CatVodList? {
+        let key = listCacheKey(bundleURL: bundleURL, site: site, action: action,
+                               categoryID: categoryID, page: page, extend: extend)
+        guard let data = CatVodDiskCache.load(key: key) else { return nil }
+        return parseList(data: data)
     }
 
     static func parseList(_ object: [String: Any]) -> CatVodList {

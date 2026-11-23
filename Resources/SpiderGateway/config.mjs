@@ -91,6 +91,10 @@ export function loadConfig(overrides = {}) {
     nodeBundleAllowPrivateNetwork: boolean("CATVOD_BUNDLE_ALLOW_PRIVATE_NETWORK", false),
     nodeBundleMaxBytes: integer("CATVOD_BUNDLE_MAX_BYTES", 16 * 1024 * 1024),
     nodeBundleDownloadTimeoutMs: integer("CATVOD_BUNDLE_DOWNLOAD_TIMEOUT_MS", 40_000),
+    // How long a `.js.md5` manifest is trusted from disk. Inside this window a
+    // warm start reads the script straight from cache with no network at all.
+    nodeBundleManifestTTLms: integer("CATVOD_BUNDLE_MANIFEST_TTL_MS", 10 * 60_000, 0),
+    nodeBundleManifestTimeoutMs: integer("CATVOD_BUNDLE_MANIFEST_TIMEOUT_MS", 8_000, 1_000),
     nodeBundleRuntimeDir: path.resolve(process.env.CATVOD_RUNTIME_DIR || "spider-gateway/data/runtime"),
     jarAllowedHosts: (process.env.SPIDER_JAR_ALLOWED_HOSTS || "")
       .split(",")

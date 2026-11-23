@@ -27,6 +27,11 @@ export async function startMobileGateway(bridge, dependencies = {}) {
     // Bundles are immutable once imported; keep the resolved artifact much
     // longer so switching back does not re-download + re-hash a 16MB file.
     artifactCacheTTLms: 10 * 60 * 1000,
+    // An imported interface rarely changes. Half an hour of manifest trust means
+    // a warm launch reads the script from disk with zero network, instead of
+    // paying an 0.2–2s manifest round-trip before the first category can render.
+    nodeBundleManifestTTLms: 30 * 60 * 1000,
+    nodeBundleManifestTimeoutMs: 6_000,
     responseCacheOptions: { ttlMs: 2 * 60 * 1000, maxEntries: 128 }
   });
   const nodeBundleCache = new NodeBundleCache(config);

@@ -86,6 +86,9 @@ struct CatVodHomeView: View {
         .sheet(item: $detailItem, onDismiss: {
             isLoadingDetail = false
             playingEpisodeID = nil
+            // A sheet swiped away mid-request must not leave the tap guard armed:
+            // otherwise a 150s resolve keeps the grid refusing every tap.
+            isOpeningDetail = false
         }) { item in detailSheet(item) }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -306,7 +309,49 @@ struct CatVodHomeView: View {
             .padding(.top)
         }
         .refreshable { await loadHome() }
-        .task { await loadCatalogAndHome() }
+        .task {
+            await loadCatalogAndHome()
+            warmUpOtherSources()
+        }
+    }
+
+    /// Boots the other enabled interfaces while the person is reading the current
+    /// one — the same thing the CatVod shells do by keeping every spider loaded.
+    ///
+    /// A cold source costs download + compile + process boot before it returns a
+    /// single item, and paying that on tap is the 3–8s wait. Two lanes, four
+    /// interfaces max: each session holds a 256MB heap and the app has to stay
+    /// inside the jetsam budget, so this is deliberately not a fan-out.
+    private func warmUpOtherSources() {
+        let current = selectedSourceID
+        let targets = Array(sources.filter { $0.id != current }.map(\.url).prefix(4))
+        guard !targets.isEmpty else { return }
+        Task(priority: .utility) {
+            await withTaskGroup(of: Void.self) { group in
+                for lane in 0..<2 {
+                    group.addTask {
+                        for (index, url) in targets.enumerated() where index % 2 == lane {
+                            await Self.warmInterface(url)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static func warmInterface(_ bundleURL: String) async {
+        guard await CatVodService.shared.claimWarmUp(bundleURL: bundleURL) else { return }
+        guard let sites = try? await CatVodService.shared.catalog(bundleURL: bundleURL),
+              let first = sites.first else {
+            // A transient failure should not burn the one attempt this interface
+            // gets; the next visit to 猫元 can try again.
+            await CatVodService.shared.releaseWarmUp(bundleURL: bundleURL)
+            return
+        }
+        // First page as well: a warm process with no content still shows an empty
+        // grid until the upstream answers. This also writes the on-disk cache the
+        // browse screen paints from on the next launch.
+        _ = try? await CatVodService.shared.home(bundleURL: bundleURL, site: first)
     }
 
     // MARK: - Data
@@ -322,6 +367,24 @@ struct CatVodHomeView: View {
             return
         }
         let token = await MainActor.run { loadToken += 1; return loadToken }
+        // Cold start: paint the site list and the last 推荐 from disk before the
+        // gateway has downloaded (or verified) and booted the bundle. Without this
+        // the whole page is one spinner for the length of the process start.
+        if let cachedSites = CatVodService.shared.cachedCatalog(bundleURL: bundle),
+           let firstSite = cachedSites.first {
+            let cachedList = CatVodService.shared.cachedHome(bundleURL: bundle, site: firstSite)
+            await MainActor.run {
+                guard token == loadToken else { return }
+                sites = cachedSites
+                selectedSite = firstSite
+                currentCategory = nil
+                filterChoices = [:]
+                if let cachedList {
+                    list = cachedList
+                    allFilters = cachedList.filters
+                }
+            }
+        }
         await MainActor.run { isLoading = true; message = nil }
         do {
             let loaded = try await CatVodService.shared.catalog(bundleURL: bundle)
@@ -356,6 +419,17 @@ struct CatVodHomeView: View {
             return
         }
         let token = await MainActor.run { loadToken += 1; return loadToken }
+        // Paint the last known 推荐 from disk before touching the network. A cold
+        // interface costs download + compile + process boot + upstream, and an
+        // empty grid for all of that is exactly what reads as "点了没反应".
+        if let cached = CatVodService.shared.cachedHome(bundleURL: bundle, site: site) {
+            await MainActor.run {
+                guard token == loadToken else { return }
+                list = cached
+                if !cached.filters.isEmpty { allFilters = cached.filters }
+                resultSites = [:]
+            }
+        }
         await MainActor.run { isLoading = true; message = nil }
         do {
             let result = try await CatVodService.shared.home(bundleURL: bundle, site: site)
@@ -382,6 +456,17 @@ struct CatVodHomeView: View {
             return
         }
         let token = await MainActor.run { loadToken += 1; return loadToken }
+        // Same stale-while-revalidate treatment as 推荐: a category the person
+        // already opened shows its previous page on the first frame.
+        if let cached = CatVodService.shared.cachedCategory(bundleURL: bundle, site: site,
+                                                            categoryID: category.id, page: 1,
+                                                            extend: filterChoices) {
+            await MainActor.run {
+                guard token == loadToken else { return }
+                list = cached
+                resultSites = [:]
+            }
+        }
         await MainActor.run { isLoading = true; message = nil }
         do {
             let result = try await CatVodService.shared.category(bundleURL: bundle, site: site,
@@ -500,18 +585,10 @@ struct CatVodHomeView: View {
         // site with the same key, and a cache hit from the other one would show the
         // wrong episode list.
         let cacheKey = "\(bundle)|\(site.key)|\(item.id)"
-
-        // Already fetched this one: open instantly instead of hitting the source again.
-        if let cached = detailCache[cacheKey] {
-            await MainActor.run {
-                detailGroups = cached
-                isLoadingDetail = false
-                message = nil
-                detailSite = site
-                detailItem = item
-            }
-            return
-        }
+        // Memory first, then disk. Both mean the sheet can show real episodes on
+        // the tap instead of the "正在加载剧集…" placeholder.
+        let known = detailCache[cacheKey]
+            ?? CatVodService.shared.cachedDetail(bundleURL: bundle, site: site, id: item.id)
 
         // Claim the in-flight flag and present the sheet in the SAME main-actor hop.
         // The important part is ordering: the tap now shows a screen immediately,
@@ -520,7 +597,10 @@ struct CatVodHomeView: View {
         let busy = await MainActor.run { () -> Bool in
             if isOpeningDetail { return true }
             isOpeningDetail = true
-            detailGroups = []
+            if let known { detailCache[cacheKey] = known }
+            detailGroups = known ?? []
+            // With a stored copy on screen the spinner must not cover it; it only
+            // signals that the episodes are being refreshed in the background.
             isLoadingDetail = true
             message = nil
             detailSite = site
@@ -543,6 +623,8 @@ struct CatVodHomeView: View {
         } catch {
             await MainActor.run {
                 if detailItem?.id == item.id {
+                    // Keep the cached episodes visible: a failed refresh is worth a
+                    // line of text, not wiping the list the person can still play.
                     message = error.localizedDescription
                     isLoadingDetail = false
                 }
@@ -649,7 +731,7 @@ struct CatVodHomeView: View {
                             .lineLimit(4)
                     }
 
-                    if isLoadingDetail {
+                    if isLoadingDetail && detailGroups.isEmpty {
                         HStack {
                             Spacer()
                             VStack(spacing: 10) {
@@ -676,6 +758,16 @@ struct CatVodHomeView: View {
                         }
                         .padding(.vertical, 30)
                     } else {
+                        if isLoadingDetail {
+                            // Episodes from the cache are already on screen; this is
+                            // just an inline hint that a refresh is in flight.
+                            HStack(spacing: 6) {
+                                ProgressView().scaleEffect(0.6)
+                                Text(localized("正在刷新剧集…"))
+                                    .font(DSFont.caption2)
+                                    .foregroundStyle(DSColor.textSecondary)
+                            }
+                        }
                         ForEach(detailGroups) { group in
                             VStack(alignment: .leading, spacing: 10) {
                                 HStack {

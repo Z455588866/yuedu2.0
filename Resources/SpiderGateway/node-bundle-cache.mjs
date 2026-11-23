@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import dns from "node:dns/promises";
 import { createReadStream } from "node:fs";
-import { mkdir, open, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { GatewayError } from "./errors.mjs";
 import { isPrivateAddress } from "./jar-reference.mjs";
@@ -92,6 +92,12 @@ export class NodeBundleCache {
     this.completed = new Map();
     this.artifactCacheTTLms = options.artifactCacheTTLms || 30_000;
     this.artifactCacheEntries = options.artifactCacheEntries || 32;
+    // The `.js.md5` manifest is the only network call left on a warm start:
+    // the script itself is on disk and md5-verified. Caching the manifest for a
+    // short window is what turns "open 猫元" from a 1–3s wait into instant, and
+    // it is what the CatVod players do (FongMi keeps a spider jar for hours).
+    this.manifestTTLms = options.nodeBundleManifestTTLms || 10 * 60 * 1000;
+    this.manifestTimeoutMs = options.nodeBundleManifestTimeoutMs || 8_000;
   }
 
   async resolve(reference) {
@@ -136,11 +142,13 @@ export class NodeBundleCache {
     const requestedURL = parsed.url;
     let bundleURL = requestedURL;
     let expectedMD5 = null;
+    let manifestStale = false;
     if (requestedURL.pathname.endsWith(".js.md5")) {
-      const manifest = await this.#fetchText(requestedURL, 1024, parsed.authorization);
-      const match = manifest.trim().match(/^[a-fA-F0-9]{32}$/);
-      if (!match) throw new GatewayError("INVALID_BUNDLE_MANIFEST", "CatVod MD5 manifest is invalid", 422);
-      expectedMD5 = match[0].toLowerCase();
+      const manifest = await this.#manifest(requestedURL, cacheKey, parsed.authorization);
+      expectedMD5 = manifest.md5;
+      // A cached-but-expired manifest still lets an on-disk bundle run while the
+      // manifest host is unreachable. Only a fresh manifest may invalidate it.
+      manifestStale = manifest.fromCache === "stale";
       bundleURL = new URL(requestedURL);
       bundleURL.pathname = bundleURL.pathname.slice(0, -4);
       assertAllowedURL(bundleURL, this.allowedURLs, this.allowHTTP);
@@ -155,7 +163,7 @@ export class NodeBundleCache {
       const info = await stat(filePath);
       if (info.isFile() && info.size > 0 && info.size <= this.maxBytes) {
         const digests = await fileDigests(filePath);
-        if (!expectedMD5 || digests.md5 === expectedMD5) {
+        if (manifestStale || !expectedMD5 || digests.md5 === expectedMD5) {
           return this.#withConfig({ path: filePath, digest: digests.sha256, sourceURL: bundleURL.toString() },
             bundleURL, cacheKey, parsed.authorization);
         }
@@ -170,7 +178,7 @@ export class NodeBundleCache {
         bundleURL, temporaryPath, parsed.authorization,
         this.allowChecksumRedirects && expectedMD5 !== null
       );
-      if (expectedMD5 && result.md5 !== expectedMD5) {
+      if (expectedMD5 && !manifestStale && result.md5 !== expectedMD5) {
         throw new GatewayError("BUNDLE_CHECKSUM_MISMATCH", "CatVod bundle checksum does not match", 422);
       }
       await rename(temporaryPath, filePath);
@@ -226,8 +234,46 @@ export class NodeBundleCache {
     }
   }
 
-  async #fetchText(url, maximumBytes, authorization) {
-    const response = await this.#fetch(url, authorization);
+  /// Resolves the pinned md5 for a `.js.md5` bundle, preferring a cached copy.
+  ///
+  /// Returns `{ md5, fromCache }` where `fromCache` is `false` (network),
+  /// `"fresh"` (on-disk record inside the TTL window) or `"stale"` (network
+  /// failed, old record reused). A `"stale"` md5 must not invalidate an on-disk
+  /// bundle: the manifest may have moved on while its host is unreachable, and
+  /// refusing to run the last verified copy is exactly how a working source
+  /// turns into "加载不了".
+  async #manifest(url, cacheKey, authorization) {
+    await mkdir(this.cacheDir, { recursive: true, mode: 0o700 });
+    const filePath = path.join(this.cacheDir, `${cacheKey}.manifest.json`);
+    let record = null;
+    try {
+      const parsed = JSON.parse(await readFile(filePath, "utf8"));
+      if (typeof parsed?.md5 === "string" && /^[a-f0-9]{32}$/.test(parsed.md5)
+        && Number.isFinite(parsed.fetchedAt)) {
+        record = parsed;
+      }
+    } catch {
+      // Missing or corrupt record: fall through to the network.
+    }
+    if (record && Date.now() - record.fetchedAt < this.manifestTTLms) {
+      return { md5: record.md5, fromCache: "fresh" };
+    }
+    try {
+      const manifest = await this.#fetchText(url, 1024, authorization, this.manifestTimeoutMs);
+      const match = manifest.trim().match(/^[a-fA-F0-9]{32}$/);
+      if (!match) throw new GatewayError("INVALID_BUNDLE_MANIFEST", "CatVod MD5 manifest is invalid", 422);
+      const md5 = match[0].toLowerCase();
+      await writeFile(filePath, JSON.stringify({ md5, fetchedAt: Date.now() }), { mode: 0o600 })
+        .catch(() => {});
+      return { md5, fromCache: false };
+    } catch (error) {
+      if (record) return { md5: record.md5, fromCache: "stale" };
+      throw error;
+    }
+  }
+
+  async #fetchText(url, maximumBytes, authorization, timeoutMs) {
+    const response = await this.#fetch(url, authorization, false, timeoutMs);
     const buffer = await readBoundedBuffer(response, {
       maximumBytes,
       code: "BUNDLE_MANIFEST_TOO_LARGE",
@@ -259,7 +305,7 @@ export class NodeBundleCache {
     return { sha256: sha256.digest("hex"), md5: md5.digest("hex") };
   }
 
-  async #fetch(initialURL, authorization, allowChecksumRedirects = false) {
+  async #fetch(initialURL, authorization, allowChecksumRedirects = false, timeoutMs = this.timeoutMs) {
     let currentURL = initialURL;
     const credentialOrigin = initialURL.origin;
     for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
@@ -267,7 +313,7 @@ export class NodeBundleCache {
       const requestAuthorization = currentURL.origin === credentialOrigin ? authorization : "";
       const response = await this.fetchValue(currentURL, {
         redirect: "manual",
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(timeoutMs),
         headers: {
           "user-agent": "tvbox-spider-gateway/0.2",
           ...(requestAuthorization ? { authorization: requestAuthorization } : {})
