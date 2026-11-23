@@ -32,17 +32,17 @@ struct CatVodCloudAccounts: Codable, Sendable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        quarkCookie = c.decodeIfPresent(String.self, forKey: .quarkCookie) ?? ""
-        quarkServiceTicket = c.decodeIfPresent(String.self, forKey: .quarkServiceTicket) ?? ""
-        ucCookie = c.decodeIfPresent(String.self, forKey: .ucCookie) ?? ""
-        ucToken = c.decodeIfPresent(String.self, forKey: .ucToken) ?? ""
-        aliyunToken = c.decodeIfPresent(String.self, forKey: .aliyunToken) ?? ""
-        baiduCookie = c.decodeIfPresent(String.self, forKey: .baiduCookie) ?? ""
-        pan115Cookie = c.decodeIfPresent(String.self, forKey: .pan115Cookie) ?? ""
-        tianyiToken = c.decodeIfPresent(String.self, forKey: .tianyiToken) ?? ""
-        pan123Token = c.decodeIfPresent(String.self, forKey: .pan123Token) ?? ""
-        guangyaToken = c.decodeIfPresent(String.self, forKey: .guangyaToken) ?? ""
-        xunleiCookie = c.decodeIfPresent(String.self, forKey: .xunleiCookie) ?? ""
+        quarkCookie = try c.decodeIfPresent(String.self, forKey: .quarkCookie) ?? ""
+        quarkServiceTicket = try c.decodeIfPresent(String.self, forKey: .quarkServiceTicket) ?? ""
+        ucCookie = try c.decodeIfPresent(String.self, forKey: .ucCookie) ?? ""
+        ucToken = try c.decodeIfPresent(String.self, forKey: .ucToken) ?? ""
+        aliyunToken = try c.decodeIfPresent(String.self, forKey: .aliyunToken) ?? ""
+        baiduCookie = try c.decodeIfPresent(String.self, forKey: .baiduCookie) ?? ""
+        pan115Cookie = try c.decodeIfPresent(String.self, forKey: .pan115Cookie) ?? ""
+        tianyiToken = try c.decodeIfPresent(String.self, forKey: .tianyiToken) ?? ""
+        pan123Token = try c.decodeIfPresent(String.self, forKey: .pan123Token) ?? ""
+        guangyaToken = try c.decodeIfPresent(String.self, forKey: .guangyaToken) ?? ""
+        xunleiCookie = try c.decodeIfPresent(String.self, forKey: .xunleiCookie) ?? ""
     }
 
     /// Shape consumed by the gateway's `config.cloudConfig`. Spiders and the
