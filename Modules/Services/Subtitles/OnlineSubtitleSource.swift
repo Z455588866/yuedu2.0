@@ -55,9 +55,9 @@ struct OnlineSubtitleSource: Codable, Identifiable, Hashable, Sendable {
         language = (try c.decodeIfPresent(String.self, forKey: .language)) ?? "zh"
         enabled = (try c.decodeIfPresent(Bool.self, forKey: .enabled)) ?? true
         // Accept `apiType`, `type`, or `format`; unknown strings degrade to theSubtitleDB.
-        // `try` goes once in front of the whole `??` chain — marking only an operand makes the
-        // other throwing operands unmarked ("operator can throw but expression is not marked").
-        let alias = decoder.container(keyedBy: AliasKeys.self)
+        // `decoder.container` itself throws, and `try` must prefix the whole `??` chain so every
+        // throwing operand is covered (otherwise: "operator can throw but expression is not marked").
+        let alias = try decoder.container(keyedBy: AliasKeys.self)
         let rawType = try c.decodeIfPresent(String.self, forKey: .apiType)
             ?? alias.decodeIfPresent(String.self, forKey: .type)
             ?? alias.decodeIfPresent(String.self, forKey: .format)
