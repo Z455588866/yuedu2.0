@@ -1,8 +1,14 @@
 import { GatewayError } from "./errors.mjs";
 
 const ACTIONS = new Set(["home", "category", "detail", "search", "player"]);
-// Require one Unicode provider segment and the actual end of the string.
-const CATVOD_API = /^\/spider\/[\p{L}\p{N}_-]+\/\d{1,2}(?![\s\S])/u;
+// `<key>` is whatever the catalog declared, percent-encoded by the gateway when
+// it is not URL-safe. Real catalogs use keys like 「直」亿茶正经的Alist库 or
+// "a b", which appear here as `%E3%80%8C...` after encoding. Accepting only
+// \p{L}\p{N}_- rejected every one of them with
+// "site.api must be csp_* or a valid /spider/<key>/<type> path" — which the app
+// surfaced as "分类加载不了". A key can be any non-empty segment without a
+// slash or whitespace; the path is only routed, never concatenated into a URL.
+const CATVOD_API = /^\/spider\/[^/\s]+\/\d{1,2}$/u;
 
 function requiredString(value, name, maximum = 4096) {
   if (typeof value !== "string" || value.trim() === "") {

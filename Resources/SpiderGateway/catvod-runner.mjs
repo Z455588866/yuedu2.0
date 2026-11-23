@@ -7,12 +7,25 @@ import { pathToFileURL } from "node:url";
 import { readBoundedText } from "./bounded-response.mjs";
 import { startParentWatchdog } from "./process-lifecycle.mjs";
 
+/// Base route for a site's provider endpoints.
+///
+/// Bundles sometimes declare their own api literally (`/spider/某个中文站/3`).
+/// `http.request` aborts on a path with raw non-ASCII bytes
+/// (ERR_UNESCAPED_CHARACTERS), so encode only that case. A gateway-normalised
+/// api is already percent-encoded and ASCII, and re-encoding it would turn
+/// `%E7%9B%B4` into `%25E7%259B%25B4`.
+export function siteBasePath(api) {
+  const trimmed = typeof api === "string" ? api.replace(/\/$/, "") : "";
+  if (!trimmed) return "";
+  return /^[\x20-\x7E]*$/.test(trimmed) ? trimmed : encodeURI(trimmed);
+}
+
 export function actionRequest(site, action, args) {
   // A malformed catalog entry can carry a non-string api; never let `.replace`
   // throw an opaque "r.replace is not a function" deep inside the runner.
   const rawAPI = typeof site.api === "string" ? site.api : "";
   if (!rawAPI) throw new Error("站点接口无效（配置站点不支持浏览）");
-  const base = rawAPI.replace(/\/$/, "");
+  const base = siteBasePath(rawAPI);
   switch (action) {
     case "home": return { path: `${base}/home`, payload: { filter: args.filter } };
     case "category": return { path: `${base}/category`, payload: { id: args.tid, page: args.page, filter: args.filter, filters: args.extend } };
@@ -448,7 +461,7 @@ export async function runCatVod(bundlePath, options = {}) {
       initialized.delete(site.api);
       // Sites without an init route answer 404 and are ready as they are (the
       // 玩偶/花卷/原盘 family). Treat only other failures as fatal.
-      const initBase = typeof site.api === "string" ? site.api.replace(/\/$/, "") : "";
+      const initBase = siteBasePath(site.api);
       if (initBase) {
         await inject("post", `${initBase}/init`, { ext: site.ext || "" })
           .catch((error) => { if (error.status !== 404) throw error; });

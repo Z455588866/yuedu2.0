@@ -120,7 +120,7 @@ export function createGateway(config, dependencies = {}) {
         // object or omit it. Downstream requires a string route, so drop those
         // malformed entries here rather than letting `site.api.replace()` throw
         // deep in the runner ("r.replace is not a function").
-        const spiderAPIPattern = /^\/spider\/[\p{L}\p{N}_-]+\/\d{1,2}$/u;
+        const spiderAPIPattern = /^\/spider\/[^/\s]+\/\d{1,2}$/u;
         let sites = Array.isArray(result?.sites)
           ? result.sites
               .filter((site) => site && typeof site === "object")
