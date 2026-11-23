@@ -24,8 +24,6 @@ final class VideoPlaybackController {
 
     /// Speeds the speed menu offers (legado-E / MD3: 0.5–3.0).
     static let rates: [Float] = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
-    /// legado-E's long-press speed default (`longPressSpeed` 30 = 3.0×).
-    static let longPressRate: Float = 3
 
     let player = AVPlayer()
     let guide: VideoEpisodeGuide
@@ -37,9 +35,8 @@ final class VideoPlaybackController {
     /// The span the timeline and a swipe across the picture can seek in; `nil` while the stream
     /// has no seekable span (still loading, or live with no window to go back in).
     private(set) var seekableRange: ClosedRange<Double>?
-    /// The speed the player keeps; a long press only lends it another for a while.
+    /// The speed the player keeps, chosen from the speed menu.
     private(set) var rate: Float = 1
-    private(set) var isLongPressing = false
     /// The picture's size once the stream reports it; the player turns to match it.
     private(set) var pictureSize: CGSize?
 
@@ -316,7 +313,7 @@ final class VideoPlaybackController {
     }
 
     func resume() {
-        player.playImmediately(atRate: isLongPressing ? Self.longPressRate : rate)
+        player.playImmediately(atRate: rate)
         phase = .playing
     }
 
@@ -345,14 +342,7 @@ final class VideoPlaybackController {
     func setRate(_ rate: Float) {
         self.rate = rate
         player.defaultRate = rate
-        if phase == .playing, !isLongPressing { player.rate = rate }
-    }
-
-    /// legado-E's long press: a faster speed while the finger stays down.
-    func setLongPressing(_ pressing: Bool) {
-        guard pressing != isLongPressing else { return }
-        isLongPressing = pressing
-        if phase == .playing { player.rate = pressing ? Self.longPressRate : rate }
+        if phase == .playing { player.rate = rate }
     }
 
     // MARK: Observation

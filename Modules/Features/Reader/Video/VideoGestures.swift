@@ -71,9 +71,10 @@ struct VideoPan: Equatable {
 
 // MARK: - Recognizers
 
-/// The picture's gestures, through UIKit's recognizers: a long press reports when it begins and
-/// when the finger lifts, and the recognizers keep one another apart — a pan does not start under a
-/// held long press, and two fingers pinch instead of panning.
+/// The picture's gestures, through UIKit's recognizers: a tap shows the controls, a one-finger pan
+/// seeks / sets brightness / volume, and two fingers pinch. The pan is reported only once the finger
+/// has moved far enough to tell its direction — reporting it at `.began`, when translation is ~0,
+/// looked vertical and turned a horizontal scrub into an episode swipe.
 struct VideoGestureSurface: UIViewRepresentable {
     enum PanEvent {
         case began(start: CGPoint, translation: CGSize, size: CGSize)
@@ -82,10 +83,12 @@ struct VideoGestureSurface: UIViewRepresentable {
         case cancelled
     }
 
+    /// Below this much travel a pan is still just a touch (a tap); direction is meaningless.
+    private static let panStartThreshold: CGFloat = 8
+
     /// Only a tap while locked: it shows or hides the unlock button.
     let isLocked: Bool
     let onTap: () -> Void
-    let onLongPress: (Bool) -> Void
     let onPan: (PanEvent) -> Void
     /// The pinch's final scale.
     let onPinch: (CGFloat) -> Void
@@ -99,15 +102,13 @@ struct VideoGestureSurface: UIViewRepresentable {
         view.accessibilityElementsHidden = true
         let coordinator = context.coordinator
         let tap = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.tapped))
-        let longPress = UILongPressGestureRecognizer(target: coordinator, action: #selector(Coordinator.longPressed(_:)))
-        longPress.minimumPressDuration = DSAnimation.videoLongPressSeconds
         let pan = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.panned(_:)))
         pan.maximumNumberOfTouches = 1
         let pinch = UIPinchGestureRecognizer(target: coordinator, action: #selector(Coordinator.pinched(_:)))
-        for recognizer in [tap, longPress, pan, pinch] as [UIGestureRecognizer] {
+        for recognizer in [tap, pan, pinch] as [UIGestureRecognizer] {
             view.addGestureRecognizer(recognizer)
         }
-        coordinator.lockable = [longPress, pan, pinch]
+        coordinator.lockable = [pan, pinch]
         return view
     }
 
@@ -120,37 +121,43 @@ struct VideoGestureSurface: UIViewRepresentable {
     final class Coordinator: NSObject {
         var surface: VideoGestureSurface?
         var lockable: [UIGestureRecognizer] = []
+        /// Whether this pan has travelled far enough to be reported as a drag.
+        private var panStarted = false
         private var panBegan: TimeInterval = 0
 
         @objc func tapped() {
             surface?.onTap()
         }
 
-        @objc func longPressed(_ recognizer: UILongPressGestureRecognizer) {
-            switch recognizer.state {
-            case .began: surface?.onLongPress(true)
-            case .ended, .cancelled, .failed: surface?.onLongPress(false)
-            default: break
-            }
-        }
-
         @objc func panned(_ recognizer: UIPanGestureRecognizer) {
             guard let view = recognizer.view else { return }
             let translation = CGSize(recognizer.translation(in: view))
+
             switch recognizer.state {
-            case .began:
-                panBegan = ProcessInfo.processInfo.systemUptime
-                let point = recognizer.location(in: view)
-                let start = CGPoint(x: point.x - translation.width, y: point.y - translation.height)
-                surface?.onPan(.began(start: start, translation: translation, size: view.bounds.size))
-            case .changed:
-                surface?.onPan(.changed(translation: translation, size: view.bounds.size))
+            case .began, .changed:
+                if !panStarted {
+                    // Wait for real movement before deciding what the drag does. Reporting began
+                    // at ~0 translation made every horizontal scrub look vertical.
+                    guard hypot(translation.width, translation.height) >= VideoGestureSurface.panStartThreshold
+                    else { return }
+                    panStarted = true
+                    panBegan = ProcessInfo.processInfo.systemUptime
+                    let point = recognizer.location(in: view)
+                    let start = CGPoint(x: point.x - translation.width, y: point.y - translation.height)
+                    surface?.onPan(.began(start: start, translation: translation, size: view.bounds.size))
+                } else {
+                    surface?.onPan(.changed(translation: translation, size: view.bounds.size))
+                }
             case .ended:
+                guard panStarted else { return }
+                panStarted = false
                 let elapsed = ProcessInfo.processInfo.systemUptime - panBegan
                 surface?.onPan(.ended(translation: translation, elapsed: elapsed))
             case .cancelled, .failed:
+                guard panStarted else { return }
+                panStarted = false
                 surface?.onPan(.cancelled)
-            default:
+            @unknown default:
                 break
             }
         }

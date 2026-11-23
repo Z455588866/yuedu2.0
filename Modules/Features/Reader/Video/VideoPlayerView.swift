@@ -73,9 +73,6 @@ struct VideoPlayerView: View {
                     controls(controller)
                         .transition(.opacity)
                 }
-                if controller.isLongPressing {
-                    longPressBadge
-                }
                 if let pan, pan.kind == .seek, let range = controller.seekableRange {
                     VideoSeekBadge(time: pan.value, end: range.upperBound, delta: pan.value - pan.origin)
                 }
@@ -212,7 +209,6 @@ struct VideoPlayerView: View {
                 showsControls.toggle()
                 touched()
             },
-            onLongPress: { controller.setLongPressing($0) },
             onPan: { panned($0, controller) },
             // Pinching is not wired in yet (0ac5df7a's pieces); a pinch does nothing.
             onPinch: { _ in }
@@ -254,20 +250,6 @@ struct VideoPlayerView: View {
             pan = nil
             scrubTime = nil
         }
-    }
-
-    private var longPressBadge: some View {
-        VStack {
-            Label(VideoPlayerFormat.rate(VideoPlaybackController.longPressRate), systemImage: "forward.fill")
-                .font(DSFont.subheadline.weight(.semibold))
-                .foregroundStyle(DSColor.textOnFixedFill)
-                .padding(.horizontal, DSSpacing.md)
-                .padding(.vertical, DSSpacing.xs)
-                .background(DSColor.videoControlScrim, in: Capsule())
-                .padding(.top, DSSpacing.xl)
-            Spacer()
-        }
-        .allowsHitTesting(false)
     }
 
     // MARK: Controls
