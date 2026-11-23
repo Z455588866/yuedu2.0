@@ -39,41 +39,137 @@ function htmlAttribute(value) {
   return value
     .replaceAll("&amp;", "&")
     .replaceAll("&#39;", "'")
-    .replaceAll("&quot;", '"');
+    .replaceAll("&quot;", '"')
+    .replaceAll("\\/", "/");
 }
 
+const MEDIA_PATH = /\.(?:m3u8|mp4|mkv|avi|mov|flv|ts|m4v|mp3|m4a)(?:$|\?)/i;
+
+function httpURL(value, base) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = base ? new URL(value, base) : new URL(value);
+    return ["http:", "https:"].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/// Ported from tvbox-silicon's WebPlayback.embeddedMedia: MacCMS pages embed
+/// `player_aaaa = {"url": ..., "encrypt": 0|1|2}`, other players write the stream
+/// inline as an escaped m3u8/mp4. Pure HTTP + regex — no web view required.
+function embeddedMedia(html, base) {
+  const player = html.match(/player_[A-Za-z0-9_]*\s*=\s*(\{.*?\})\s*[;<]/s);
+  if (player) {
+    try {
+      const object = JSON.parse(player[1]);
+      let address = object.url;
+      if (typeof address === "string" && address.trim()) {
+        const encrypt = Number(object.encrypt ?? 0);
+        if (encrypt === 1) address = decodeURIComponent(address);
+        else if (encrypt === 2) {
+          const decoded = Buffer.from(address, "base64").toString("utf8");
+          address = decodeURIComponent(decoded);
+        }
+        const resolved = httpURL(htmlAttribute(address), base);
+        if (resolved && MEDIA_PATH.test(new URL(resolved).pathname + new URL(resolved).search)) return resolved;
+      }
+    } catch { /* fall through to inline match */ }
+  }
+  const inline = html.match(/https?:(?:\\?\/){2}[^"'\s<>()]+?\.(?:m3u8|mp4)(?:\?[^"'\s<>()]*)?/i);
+  const resolved = inline ? httpURL(htmlAttribute(inline[0]), base) : null;
+  return resolved;
+}
+
+/// A `json:`/`parse:` URL names an external parse service. TVBox's JSON contract
+/// is GET service(+page) answering {"url": ...} (sometimes under `data`).
+async function askParseService(value, episodeID, fetchValue) {
+  const service = value.replace(/^(?:json|parse):/i, "").trim();
+  const page = httpURL(episodeID);
+  let target;
+  try { target = new URL(service, page || undefined); } catch { return null; }
+  if (page && !target.searchParams.has("url") && !target.searchParams.has("v")) {
+    target.searchParams.set("url", page);
+  }
+  try {
+    const response = await fetchValue(target, {
+      headers: { "user-agent": "Mozilla/5.0", accept: "application/json, text/plain, */*" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(10_000)
+    });
+    if (!response.ok) { try { await response.body?.cancel(); } catch {} return null; }
+    const text = await readBoundedText(response);
+    let object;
+    try { object = JSON.parse(text); } catch {
+      const inline = text.match(/https?:\/\/[^"'\s]+\.(?:m3u8|mp4)/i);
+      return inline ? inline[0] : null;
+    }
+    const payload = object?.data && typeof object.data === "object" ? object.data : object;
+    const address = payload?.url || payload?.link || payload?.playurl;
+    const resolved = httpURL(address, target.href);
+    if (resolved && resolved !== page) return resolved;
+  } catch { /* unreachable service: fall back to page sniffing */ }
+  return null;
+}
+
+const SNIFF_HEADERS = {
+  "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
+};
+
+/// Follow at most one iframe level, the pattern xb6v and many MacCMS sites use.
+async function sniffPage(pageURL, headers, fetchValue) {
+  const response = await fetchValue(pageURL, {
+    headers: { ...SNIFF_HEADERS, ...(headers || {}) },
+    redirect: "follow",
+    signal: AbortSignal.timeout(12_000)
+  });
+  if (!response.ok) { try { await response.body?.cancel(); } catch {} return null; }
+  const page = await readBoundedText(response);
+  const direct = embeddedMedia(page, pageURL);
+  if (direct) return direct;
+
+  const frame = page.match(/<iframe\b[^>]*\bsrc=["']([^"']+)["']/i);
+  if (!frame) return null;
+  const frameURL = httpURL(htmlAttribute(frame[1]), pageURL);
+  if (!frameURL) return null;
+  const frameResponse = await fetchValue(frameURL, {
+    headers: { ...SNIFF_HEADERS, referer: pageURL, ...(headers || {}) },
+    redirect: "follow",
+    signal: AbortSignal.timeout(12_000)
+  });
+  if (!frameResponse.ok) { try { await frameResponse.body?.cancel(); } catch {} return null; }
+  const frameHTML = await readBoundedText(frameResponse);
+  const inFrame = embeddedMedia(frameHTML, frameURL);
+  if (inFrame) return inFrame;
+  const declared = frameHTML.match(/\b(?:const|var|let)\s+(?:url|playurl|videoUrl)\s*=\s*(["'])(.*?)\1\s*;/s);
+  return declared ? httpURL(htmlAttribute(declared[2]), frameURL) : null;
+}
+
+/// Resolve `parse=1`/`jx=1` and `json:`/`parse:` lines to a direct stream on the
+/// HTTP fast path. Returns the original result unchanged when nothing resolves,
+/// so the app can fall back to its headless WebView sniffer for JS-driven pages.
 export async function resolvePlayerResult(site, result, episodeID, fetchValue = fetch) {
   const normalized = normalizePlayerResult(result, episodeID);
-  if (site?.api !== "/spider/xb6v/3") return normalized;
+  const parse = Number(normalized?.parse ?? 0);
+  const jx = Number(normalized?.jx ?? 0);
+  const rawURL = Array.isArray(normalized?.url) ? normalized.url.find(Boolean) : normalized?.url;
+  const headers = normalized?.header && typeof normalized.header === "object" ? normalized.header : {};
 
-  try {
-    const configuredBase = typeof site.ext === "string" && /^https?:\/\//i.test(site.ext)
-      ? site.ext
-      : "https://www.xb6v.com/";
-    const episodeURL = new URL(episodeID, configuredBase);
-    const pageResponse = await fetchValue(episodeURL, {
-      headers: { "user-agent": "Mozilla/5.0" }
-    });
-    if (!pageResponse.ok) return normalized;
-    const page = await readBoundedText(pageResponse);
-    const frameMatch = page.match(/<iframe\b[^>]*\bsrc=["']([^"']+)["']/i);
-    if (!frameMatch) return normalized;
-
-    const frameURL = new URL(htmlAttribute(frameMatch[1]), episodeURL);
-    const frameResponse = await fetchValue(frameURL, {
-      headers: { "user-agent": "Mozilla/5.0", referer: episodeURL.href }
-    });
-    if (!frameResponse.ok) return normalized;
-    const frame = await readBoundedText(frameResponse);
-    const mediaMatch = frame.match(/\bconst\s+url\s*=\s*(["'])(.*?)\1\s*;/s);
-    if (!mediaMatch) return normalized;
-
-    const mediaURL = new URL(htmlAttribute(mediaMatch[2]), frameURL);
-    if (!["http:", "https:"].includes(mediaURL.protocol)) return normalized;
-    return { ...normalized, parse: 0, jx: 0, url: mediaURL.href };
-  } catch {
+  if (typeof rawURL === "string" && /^(?:json|parse):/i.test(rawURL)) {
+    const resolved = await askParseService(rawURL, episodeID, fetchValue);
+    if (resolved) return { ...normalized, parse: 0, jx: 0, url: resolved };
     return normalized;
   }
+  if (parse === 0 && jx === 0) return normalized;
+
+  // The play page is the returned url when it is HTTP; otherwise the episode id.
+  const page = httpURL(rawURL) || httpURL(episodeID);
+  if (!page) return normalized;
+  try {
+    const resolved = await sniffPage(page, headers, fetchValue);
+    if (resolved) return { ...normalized, parse: 0, jx: 0, url: resolved };
+  } catch { /* keep the flagged result for the WebView fallback */ }
+  return normalized;
 }
 
 // A route can hold mutable parser state shared by its category/detail handlers.

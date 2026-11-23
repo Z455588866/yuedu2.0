@@ -61,9 +61,33 @@ export function createGateway(config, dependencies = {}) {
   // trusted parent process.
   const catVod = dependencies.catVod || new CatVodManager({ ...config, cloudConfig: {} });
   const trustedFetch = dependencies.fetchValue || fetch;
-  const cloudCredentials = {
-    get quarkCookie() { return String(config.cloudConfig?.quarkCookie || ""); }
-  };
+  // Trusted parent process only. Expose every provider the app configured so
+  // built-in cloud actions (quark/123/aliyun/baidu/115/...) can read them.
+  // Third-party spider bundles still never receive these values.
+  const credentialOverrides = {};
+  const cloudCredentials = new Proxy(credentialOverrides, {
+    get(target, key) {
+      if (typeof key !== "string") return Reflect.get(target, key);
+      // A refreshed cookie written back by the cloud module wins over the
+      // initial config snapshot for the lifetime of this request path.
+      if (Object.prototype.hasOwnProperty.call(target, key)) return target[key];
+      return String(config.cloudConfig?.[key] ?? "");
+    },
+    set(target, key, value) {
+      target[key] = value;
+      return true;
+    },
+    has(_target, key) {
+      return typeof key === "string" && (key in (config.cloudConfig || {}));
+    },
+    ownKeys() { return Reflect.ownKeys(config.cloudConfig || {}); },
+    getOwnPropertyDescriptor(_target, key) {
+      if (typeof key === "string" && key in (config.cloudConfig || {})) {
+        return { enumerable: true, configurable: true };
+      }
+      return undefined;
+    }
+  });
   const server = http.createServer(async (request, response) => {
     try {
       await dependencies.beforeRequest?.();

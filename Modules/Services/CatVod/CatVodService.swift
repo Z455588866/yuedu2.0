@@ -102,11 +102,15 @@ final class CatVodService {
             resolvedURL = rawURL
         }
 
-        // `parse:` / `json:` payloads and parse flags need a secondary resolver the
-        // app does not ship; fail with a precise, actionable message instead of
-        // handing a non-media string to the player ("不支持的 URL").
+        // `parse=1` / `jx=1` lines need a secondary resolver. The gateway first tries
+        // an HTTP fast path (embedded player_aaaa / inline m3u8 / JSON parse service).
+        // Whatever it cannot resolve, this app finishes with its own headless WebView
+        // sniffer — the same one Legado book sources use to find a page's stream.
         if parse == 1 || jx == 1 || resolvedURL.hasPrefix("parse:")
             || resolvedURL.hasPrefix("json:") {
+            if let sniffed = await Self.sniffPlaybackPage(resolvedURL, headers: headers) {
+                return CatVodPlayback(parse: 0, url: sniffed.absoluteString, header: headers)
+            }
             throw CatVodError.parseUnsupported
         }
         // Magnet / thunder links are not playable in an in-app video player.
@@ -133,6 +137,28 @@ final class CatVodService {
         let lowered = value.lowercased()
         return [".mp4", ".m3u8", ".mkv", ".avi", ".mov", ".flv", ".ts", ".mp3", ".m4a"]
             .contains { lowered.contains($0) }
+    }
+
+    /// Last chance for a `parse=1` line: load the play page unseen and let its own
+    /// script hand over the stream (mirrors tvbox-silicon's WebSniffer and the app's
+    /// own Legado page sniffer). Returns nil for `json:`/`parse:` service payloads,
+    /// which carry no page of their own — those are resolved inside the gateway.
+    private static func sniffPlaybackPage(_ address: String, headers: [String: String]) async -> URL? {
+        guard let pageURL = URL(string: address),
+              ["http", "https"].contains(pageURL.scheme?.lowercased() ?? "") else { return nil }
+        var request = URLRequest(url: pageURL)
+        request.timeoutInterval = 15
+        var userAgent: String?
+        for (field, value) in headers {
+            if field.lowercased() == "user-agent" { userAgent = value }
+            else { request.setValue(value, forHTTPHeaderField: field) }
+        }
+        return await LegadoHeadlessWebView.sniffVideo(
+            page: request,
+            userAgent: userAgent,
+            timeout: 15,
+            isVideoRequest: DirectChapterVideoResolver.isVideoRequest
+        )
     }
 
     // MARK: - Low level
