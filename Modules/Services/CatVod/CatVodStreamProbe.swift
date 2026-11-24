@@ -31,7 +31,7 @@ enum CatVodStreamProbe {
         // 探测只是「提前说清楚死因」，不是播放的前置条件。以前给 12 秒，网盘 CDN
         // 光握手就要好几秒，于是正常线路被判定成"源站连不上"，人看到转圈十几秒
         // 然后回到选集——也就是"点了半天进不去播放器"。6 秒够识别死域名。
-        request.timeoutInterval = isLoopback ? 4 : 6
+        request.timeoutInterval = 6
         // Loopback belongs to the bundle's own proxy; its headers are not ours to
         // forward, and a stale Range can upset it.
         if !isLoopback {
@@ -45,10 +45,15 @@ enum CatVodStreamProbe {
             return .playable
         } catch let error as URLError {
             if isLoopback {
-                // The proxy died with its session. Re-resolving the episode is
-                // the actual fix, so this must be retryable rather than fatal.
-                return .retryable(localized("播放代理已断开（源会话被回收），请重试这一集"))
+                // 127.0.0.1 是我们自己的网关：第一包要等 spider 去远端换地址
+                // （短剧源经常 5 秒以上才开始吐流），探测超时完全不代表播不了。
+                // 以前在这里报「播放代理已断开」，红果短剧每一集都被这句话拦下，
+                // 其实播放器自己连上去就能播。交给 AVPlayer 判定。
+                return .playable
             }
+            // 网盘/大文件 CDN 对 Range 探测经常不回包，超时不代表不能播。这类地址
+            // 交给 AVPlayer 自己谈，失败时播放器会带着自己的错误提示。
+            if error.code == .timedOut, Self.isNetdiskCDN(url) { return .playable }
             // 网盘/大文件 CDN 对 Range 探测经常不回包，超时不代表不能播。这类地址
             // 交给 AVPlayer 自己谈，失败时播放器会带着自己的错误提示。
             if error.code == .timedOut, Self.isNetdiskCDN(url) { return .playable }

@@ -299,13 +299,33 @@ extension CatVodCloudProvider {
             })()
             """
         case .tianyi:
+            // 189 网页版的登录态是 cookie 里的 `sessionKey`（很多版本还同步写进
+            // localStorage）。只读 localStorage 时经常拿到空串，于是「登录了但分类
+            // 没有内容」——所以先宽范围找键名，再退回 document.cookie。
             return """
             (function(){
               try {
-                var keys = ['sessionKey','SESSIONKEY','token','accessToken'];
+                var keys = ['sessionKey','SESSIONKEY','sessionkey','token','accessToken','access_token'];
                 for (var i = 0; i < keys.length; i++) {
                   var v = localStorage.getItem(keys[i]);
-                  if (v && v.length >= 16) return v;
+                  if (v && v.length >= 16) {
+                    try {
+                      var o = JSON.parse(v);
+                      var t = o.sessionKey || o.token || o.accessToken || o.access_token;
+                      if (t) return String(t);
+                    } catch (e) {}
+                    return String(v);
+                  }
+                }
+              } catch (e) {}
+              try {
+                var parts = String(document.cookie || '').split(';');
+                for (var j = 0; j < parts.length; j++) {
+                  var cut = parts[j].indexOf('=');
+                  if (cut < 0) continue;
+                  var name = parts[j].slice(0, cut).trim().toLowerCase();
+                  var value = parts[j].slice(cut + 1).trim();
+                  if ((name === 'sessionkey' || name === 'session_key') && value.length >= 16) return value;
                 }
               } catch (e) {}
               return '';

@@ -498,7 +498,11 @@ struct CatVodHomeView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
                 if message == nil {
-                    Text(localized("网盘或 Alist 站点需要先在「管理猫源 → 网盘账号」里登录。"))
+                    // 已经填过网盘凭据还劝人去登录，是把自己「源站没返回」的问题
+                    // 推给用户——天翼这类站点登录了照样空，文案必须先认这个事实。
+                    Text(CatVodCloudAccountStore.shared.accounts.hasAnyCredential
+                         ? localized("已经填过网盘账号。这个分类还空，说明源站这次没有返回内容（换分类或换源试试）。")
+                         : localized("网盘或 Alist 站点需要先在「管理猫源 → 网盘账号」里登录。"))
                         .font(DSFont.caption2)
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
@@ -954,14 +958,61 @@ struct CatVodHomeView: View {
         UserDefaults.standard.set(searchHistory, forKey: Self.searchHistoryKey)
     }
 
+    /// 聚合条目（豆瓣/榜单）没有自己的 detail，只能按片名去别的站点找。
+    /// 先问当前站点——一个请求通常亚秒级——没有再全网并发；拿到第一条命中就
+    /// 直接打开它的详情，人看到的是海报→选集，而不是海报→搜索框。
+    private func openAggregate(_ item: CatVodMedia) async {
+        guard let bundle = currentBundleURL else { return }
+        let term = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return }
+        let claimed = await MainActor.run { () -> Bool in
+            if isOpeningDetail { return true }
+            isOpeningDetail = true
+            message = nil
+            return false
+        }
+        if claimed { return }
+
+        var pool = sites
+        if pool.isEmpty, let cached = CatVodService.shared.cachedCatalog(bundleURL: bundle), !cached.isEmpty {
+            pool = CatVodSourceHealth.shared.arranged(cached, bundleURL: bundle)
+        }
+        let preferred = selectedSite ?? pool.first
+        var best: (site: CatVodSite, media: CatVodMedia)?
+        // 聚合条目自己常待在一个「只做榜单」的站点上，它的 search 多半什么都不回，
+        // 所以当前站点失败后要立刻转全网，而不是把这次点击耗成一次空搜索。
+        // 榜单站（豆瓣这类）自己声明了不可搜索，先问它只会白等一次超时。
+        if let preferred, preferred.searchable != false,
+           let quick = try? await CatVodService.shared.search(bundleURL: bundle, site: preferred, keyword: term) {
+            best = quick.media.first.map { (site: preferred, media: $0) }
+        }
+        if best == nil, !pool.isEmpty {
+            let hits = await CatVodService.shared.searchAll(bundleURL: bundle, sites: pool,
+                                                            keyword: term, preferring: preferred?.key)
+            for (site, result) in hits {
+                if let media = result.media.first { best = (site: site, media: media); break }
+            }
+        }
+        await MainActor.run { isOpeningDetail = false }
+
+        if let best {
+            await openDetail(best.media, from: best.site)
+        } else {
+            // 一部都没找到：退回搜索界面，词留在框里可以改，并且让下面的空态
+            // 说清楚是「没搜到」，不是「源没响应」。
+            await MainActor.run { keyword = item.name }
+            await search()
+        }
+    }
+
     private func openDetail(_ item: CatVodMedia, from overrideSite: CatVodSite? = nil) async {
         guard let bundle = currentBundleURL, let site = overrideSite ?? selectedSite else { return }
         // 豆瓣/推荐类站点的条目是「聚合条目」，id 形如 msearch:36847425，它们的
-        // detail 永远返回空——点下去只能看到「没有可播放的剧集」。TVBox 的处理
-        // 方式是把这类条目转成一次全网搜索，这里照做，否则默认落地页整个废物。
+        // detail 永远返回空。TVBox 的处理方式是把这类条目转成一次搜索；但直接把
+        // 词填进搜索框再走一遍搜索，人点了一张海报却退回列表、输入框里多出一个
+        // 片名，看起来就是「点开不播放，只是替我把名字填上去了」。
         if item.id.lowercased().hasPrefix("msearch") {
-            await MainActor.run { keyword = item.name }
-            await search()
+            await openAggregate(item)
             return
         }
         // The interface URL belongs in the key: two different interfaces can carry a

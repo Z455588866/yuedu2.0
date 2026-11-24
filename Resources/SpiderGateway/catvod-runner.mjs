@@ -5,7 +5,15 @@ import { readFile } from "node:fs/promises";
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { readBoundedText } from "./bounded-response.mjs";
+import { installFetch, installReq } from "./fetch-polyfill.mjs";
 import { startParentWatchdog } from "./process-lifecycle.mjs";
+
+// nodejs-mobile has no global `fetch`. Bundles target Electron (Node 18+), so
+// every `player` that talks to its own API used to fail with
+// `fetch is not defined` — the list loads, nothing plays. Install before the
+// bundle is evaluated so its module scope sees the same globals Electron would.
+installFetch();
+installReq();
 
 /// Base route for a site's provider endpoints.
 ///
@@ -367,12 +375,19 @@ export async function runCatVod(bundlePath, options = {}) {
     for (const [drive, key] of drives) {
       const value = String(accounts[key] || "").trim();
       if (!value) continue;
-      for (const layout of layouts) {
+      // 凭据形态决定先试哪个位置。天翼/阿里/123 的「token」在网页登录后其实
+      // 是一整串 cookie（`sessionKey=...`），而 bundle 有的读 `/token`、有的读
+      // `/cookie`，只写成功的那一个会让另一类 bundle 认为没登录——分类点开就是
+      // 「暂无内容」。两种位置都写，bundle 读哪个都有值。
+      const looksLikeCookie = value.includes("=") && !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(value);
+      const ordered = looksLikeCookie
+        ? [layouts[0], layouts[2], layouts[1]]
+        : [layouts[1], layouts[0], layouts[2]];
+      for (const layout of ordered) {
         try {
           await injectOnce("put", layout.route(drive), layout.body(value));
-          break;
         } catch {
-          // A bundle may use the other layout, or offer neither.
+          // A bundle may offer only one of the layouts, or none for this drive.
         }
       }
     }
