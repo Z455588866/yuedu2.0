@@ -63,10 +63,20 @@ struct VideoPlayerView: View {
                 gestureSurface(controller)
                 // Danmaku sits above the picture and gestures but below the control chrome. It
                 // never takes touches, so seek/long-press/tap gestures keep working underneath.
+                //
+                // The layer is constrained to the picture rectangle instead of the whole
+                // window: on a 16:9 clip in a portrait window the window includes two large
+                // black bars, and comments laid out over them read as a wall of text floating
+                // outside the video.
                 if danmaku.enabled, let track = danmaku.track {
-                    DanmakuOverlay(clock: clock, track: track, opacity: danmaku.opacity,
-                                   area: danmaku.area, fontSize: danmaku.fontSize, speed: danmaku.speed)
-                        .ignoresSafeArea()
+                    GeometryReader { geo in
+                        let rect = pictureRect(in: geo.size)
+                        DanmakuOverlay(clock: clock, track: track, opacity: danmaku.opacity,
+                                       area: danmaku.area, fontSize: danmaku.fontSize, speed: danmaku.speed)
+                            .frame(width: max(1, rect.width), height: max(1, rect.height))
+                            .position(x: rect.midX, y: rect.midY)
+                    }
+                    .ignoresSafeArea()
                 }
                 // Subtitles sit just above the danmaku, still below the control chrome.
                 if subtitle.enabled, let entry = subtitle.activeEntry {
@@ -199,6 +209,25 @@ struct VideoPlayerView: View {
             guard let scene = uiWindow.windowScene, scene.traitCollection.userInterfaceIdiom == .phone else { return }
             ReaderOrientationController.shared.request(orientation, in: scene)
         }
+    }
+
+    /// The rectangle the picture actually occupies inside the player, in the coordinate
+    /// space of a full-window `GeometryReader`. Falls back to the whole window until the
+    /// stream has reported its size, so the first frames do not blank the danmaku layer.
+    private func pictureRect(in size: CGSize) -> CGRect {
+        guard let picture = controller?.pictureSize, picture.width > 0, picture.height > 0 else {
+            return CGRect(origin: .zero, size: size)
+        }
+        var width = picture.width
+        var height = picture.height
+        if pictureRotation % 2 == 1 { swap(&width, &height) }
+        let scale = fillsScreen
+            ? max(size.width / width, size.height / height)
+            : min(size.width / width, size.height / height)
+        let drawn = CGSize(width: width * scale, height: height * scale)
+        return CGRect(x: (size.width - drawn.width) / 2,
+                      y: (size.height - drawn.height) / 2,
+                      width: drawn.width, height: drawn.height)
     }
 
     private func touched() {

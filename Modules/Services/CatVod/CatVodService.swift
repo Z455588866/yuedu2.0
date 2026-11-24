@@ -177,7 +177,10 @@ final class CatVodService {
                 guard let deeper = try? await invoke(bundleURL: bundleURL, site: site, action: "detail",
                                                      arguments: ["ids": [nextID]]),
                       let resolved = (deeper["list"] as? [[String: Any]])?.first,
-                      let deeperURL = resolved["vod_play_url"] as? String, !deeperURL.isEmpty else { continue }
+                      let deeperURL = resolved["vod_play_url"] as? String, !deeperURL.isEmpty,
+                      // 三个 provider 常常返回同一份剧集（只是线路名不同），合并后
+                      // 选集里就出现三组一模一样的「第1集…第10集」。同一份播放串只留一组。
+                      !urlParts.contains(deeperURL) else { continue }
                 let deeperFrom = resolved["vod_play_from"] as? String ?? ""
                 // 两条线路可能同名（"量子线路(1)"），重名会让选集合并到同一条里。
                 var flags = deeperFrom.components(separatedBy: "$$$")

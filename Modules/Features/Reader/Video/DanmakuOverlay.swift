@@ -219,8 +219,9 @@ struct DanmakuOverlay: View {
     /// Seconds a scrolling comment takes to cross the picture (smaller = faster).
     let speed: Double
 
-    /// Keep clear of the player's top control bar.
-    private let topInset: Double = 36
+    /// Keep clear of the player's top control bar. The layer now only spans the picture,
+    /// which already sits below the chrome, so this is a small breathing margin.
+    private let topInset: Double = 10
 
     @State private var store = DanmakuLayoutStore()
 

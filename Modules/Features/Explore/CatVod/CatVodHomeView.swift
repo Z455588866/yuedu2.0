@@ -68,6 +68,25 @@ struct CatVodHomeView: View {
         return allFilters[category.id] ?? []
     }
 
+    /// Names that mean "the home page" in the feeds we have seen. A source's own
+    /// class list usually starts with one of these, and drawing it next to our
+    /// pinned 推荐 chip is what put the same chip on screen twice.
+    private static let homeCategoryNames: Set<String> = [
+        "推荐", "首页", "精选", "推荐片单", "热门推荐",
+    ]
+
+    /// Class list with the pinned home chip removed and repeated names collapsed.
+    /// Feeds routinely ship 「最近更新」 twice (once per provider), and a duplicate
+    /// name means a duplicate chip that scrolls to nowhere.
+    private var displayCategories: [CatVodCategory] {
+        var seen = Set<String>()
+        return list.categories.filter { category in
+            let name = category.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, !Self.homeCategoryNames.contains(name) else { return false }
+            return seen.insert(name).inserted
+        }
+    }
+
     var body: some View {
         Group {
             if sources.isEmpty {
@@ -125,7 +144,12 @@ struct CatVodHomeView: View {
                 get: { selectedSourceID ?? sources.first?.id ?? "" },
                 set: { selectedSourceID = $0 }
             )) {
-                ForEach(sources) { source in Text(source.name).tag(source.id) }
+                ForEach(sources) { source in
+                    Text(source.name)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .tag(source.id)
+                }
             }
             .pickerStyle(.menu)
             .frame(maxWidth: .infinity)
@@ -192,7 +216,7 @@ struct CatVodHomeView: View {
                     currentCategory = nil
                     Task { await loadHome() }
                 }
-                ForEach(Array(list.categories.enumerated()), id: \.offset) { _, category in
+                ForEach(Array(displayCategories.enumerated()), id: \.offset) { _, category in
                     categoryChip(title: category.name, selected: currentCategory?.id == category.id) {
                         currentCategory = category
                         filterChoices = [:]
@@ -285,11 +309,18 @@ struct CatVodHomeView: View {
                         // sources answer nothing until an account is configured,
                         // and a slow source can simply have timed out. Say which
                         // case it is instead of leaving a blank grid.
-                        Text(message ?? localized("这个站点这个分类没有返回内容。如果是网盘或 Alist 站点，需要先在「管理猫源 → 网盘账号配置」里登录；也可以重试，或者换个分类。"))
+                        Text(message ?? localized("这个分类没有返回内容。换一个分类，或点重试再看看。"))
                             .font(DSFont.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 32)
+                        if message == nil {
+                            Text(localized("网盘或 Alist 站点需要先在「管理猫源 → 网盘账号」里登录。"))
+                                .font(DSFont.caption2)
+                                .foregroundStyle(.tertiary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
+                        }
                         HStack(spacing: 12) {
                             Button {
                                 Task { await reloadCurrent() }
@@ -333,8 +364,13 @@ struct CatVodHomeView: View {
                     Text(message).font(DSFont.caption).foregroundStyle(.secondary).padding(.horizontal)
                 }
             }
-            .padding(.top)
+            .padding(.top, 8)
         }
+        // The inline navigation bar is translucent, so a grid that starts flush with the
+        // scroll view's top edge has its first row of posters half under the title. An
+        // explicit content margin keeps that row readable while still letting the posters
+        // scroll under the bar afterwards.
+        .contentMargins(.top, 6, for: .scrollContent)
         .refreshable { await loadHome() }
         .task {
             await loadCatalogAndHome()
@@ -470,6 +506,22 @@ struct CatVodHomeView: View {
         await MainActor.run { isLoading = true; message = nil }
         do {
             let result = try await CatVodService.shared.home(bundleURL: bundle, site: site)
+            // An interface whose first site is a 豆瓣-style aggregator answers the home
+            // request with nothing at all, and the screen then shows 「暂无内容」 no matter
+            // which category the person taps. Fall through to the next site that has
+            // something, so opening 猫元 lands on a browsable page instead of an empty one.
+            if result.media.isEmpty && result.categories.isEmpty,
+               let fallback = await firstStockedSite(bundle: bundle, excluding: site) {
+                await MainActor.run {
+                    guard token == loadToken else { return }
+                    selectedSite = fallback.site
+                    list = fallback.list
+                    if !fallback.list.filters.isEmpty { allFilters = fallback.list.filters }
+                    resultSites = [:]
+                    isLoading = false
+                }
+                return
+            }
             await MainActor.run {
                 guard token == loadToken else { return }
                 list = result
@@ -485,6 +537,26 @@ struct CatVodHomeView: View {
                 }
             }
         }
+    }
+
+    /// The first other site in this interface whose 推荐 page is not empty.
+    ///
+    /// Only two candidates, raced: a dead interface has a dozen silent sites, and
+    /// walking them one by one is a minute of spinner for a page that may still be
+    /// empty at the end. A site already on disk answers without any network at all.
+    private func firstStockedSite(bundle: String, excluding current: CatVodSite)
+        async -> (site: CatVodSite, list: CatVodList)? {
+        let candidates = Array(sites.filter { $0.key != current.key }.prefix(2))
+        for candidate in candidates {
+            if let cached = CatVodService.shared.cachedHome(bundleURL: bundle, site: candidate),
+               !cached.media.isEmpty {
+                return (candidate, cached)
+            }
+            guard let fresh = try? await CatVodService.shared.home(bundleURL: bundle, site: candidate),
+                  !fresh.media.isEmpty else { continue }
+            return (candidate, fresh)
+        }
+        return nil
     }
 
     private func loadCategory(_ category: CatVodCategory) async {
@@ -903,14 +975,16 @@ struct CatVodHomeView: View {
                                                     ProgressView()
                                                         .scaleEffect(0.7)
                                                 } else {
-                                                    Text(episode.title)
+                                                    Text(episodeTitle(episode.title))
                                                         .font(DSFont.caption)
                                                         .foregroundStyle(DSColor.textPrimary)
-                                                        .lineLimit(1)
+                                                        .lineLimit(2)
+                                                        .minimumScaleFactor(0.7)
+                                                        .multilineTextAlignment(.center)
                                                 }
                                             }
-                                            .frame(maxWidth: .infinity, minHeight: 34)
-                                            .padding(.horizontal, 6)
+                                            .frame(maxWidth: .infinity, minHeight: 44)
+                                            .padding(.horizontal, 4)
                                             .background(DSColor.surfaceTertiary, in: RoundedRectangle(cornerRadius: 8))
                                         }
                                         .buttonStyle(.plain)
@@ -928,7 +1002,9 @@ struct CatVodHomeView: View {
                 }
                 .padding()
             }
-            .navigationTitle(item.name)
+            // The header already carries the title at title3; repeating it in the
+            // navigation bar put the same line on screen twice.
+            .navigationTitle(localized("选集"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -953,6 +1029,18 @@ struct CatVodHomeView: View {
 
     private func episodes(for group: CatVodGroup) -> [CatVodEpisode] {
         episodesReversed ? Array(group.episodes.reversed()) : group.episodes
+    }
+
+    /// Episode tiles are narrow (72pt at 5 columns). A title like
+    /// 「第1集 完整版」 rendered as 「第1集 完…」, which tells the person nothing;
+    /// the marker alone is what they scan for, so fall back to it when the full
+    /// title cannot fit even at two lines.
+    private func episodeTitle(_ title: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 6,
+              let range = trimmed.range(of: #"第\s*\d+\s*[集话期回]"#,
+                                        options: .regularExpression) else { return trimmed }
+        return String(trimmed[range])
     }
 }
 

@@ -46,12 +46,20 @@ struct CatVodSource: Codable, Identifiable, Hashable, Sendable {
     }
 
     /// A readable default name from the URL host/path when the import has no explicit name.
+    ///
+    /// Deliberately short: the picker draws this in a menu row, and "host · index.js.md5"
+    /// wrapped onto two lines and read as an address rather than a name. The file name is
+    /// dropped entirely when it is the generic CatVod entry point, and the host is used
+    /// alone — uniqueness is enforced by `CatVodSourceStore` (see `uniqueName`).
     static func name(from url: String) -> String {
-        guard let components = URLComponents(string: url), let host = components.host else {
+        guard let components = URLComponents(string: url), var host = components.host else {
             return String(url.suffix(24))
         }
+        if host.hasPrefix("www.") { host.removeFirst(4) }
         let last = (components.path as NSString).lastPathComponent
-        return last.isEmpty ? host : "\(host) · \(last)"
+        let generic: Set<String> = ["index.js.md5", "index.js", "index.md5", "config.js", "api.js"]
+        guard !last.isEmpty, !generic.contains(last.lowercased()) else { return host }
+        return "\(host) · \(last)"
     }
 
     var checksumURL: String {
@@ -76,10 +84,37 @@ final class CatVodSourceStore {
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.storageKey),
            let decoded = try? JSONDecoder().decode([CatVodSource].self, from: data) {
-            sources = decoded
+            sources = Self.dedupeNames(decoded)
+            // Older builds stored the same interface several times under one display
+            // name ("ghfast.top · index.js.md5" x5), which made the picker a list of
+            // identical rows. Persist the suffix once so the fix survives relaunch.
+            if sources.map(\.name) != decoded.map(\.name) { persist() }
         } else {
             sources = []
         }
+    }
+
+    /// Suffixes duplicated display names so every row in the picker is distinguishable.
+    /// Names are what the person reads; ids stay untouched.
+    private static func dedupeNames(_ list: [CatVodSource]) -> [CatVodSource] {
+        var result: [CatVodSource] = []
+        var taken = Set<String>()
+        for var source in list {
+            let base = source.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if base.isEmpty {
+                source.name = CatVodSource.name(from: source.url)
+            }
+            var candidate = source.name
+            if taken.contains(candidate) {
+                var index = 2
+                while taken.contains("\(candidate) (\(index))") { index += 1 }
+                candidate = "\(candidate) (\(index))"
+            }
+            source.name = candidate
+            taken.insert(candidate)
+            result.append(source)
+        }
+        return result
     }
 
     var enabledSources: [CatVodSource] { sources.filter(\.enabled) }
@@ -105,10 +140,16 @@ final class CatVodSourceStore {
         let incoming = try Self.decodeSources(data)
         guard !incoming.isEmpty else { return 0 }
         var next = sources
-        for source in incoming {
+        for var source in incoming {
+            let defaultName = CatVodSource.name(from: source.url)
             if let index = next.firstIndex(where: { $0.id == source.id || $0.url == source.url }) {
+                // Re-importing the same address must not wipe a name the person typed.
+                if source.name == defaultName { source.name = next[index].name }
                 next[index] = source
             } else {
+                if source.name == defaultName {
+                    source.name = uniqueName(defaultName, in: next)
+                }
                 next.append(source)
             }
         }
@@ -120,15 +161,26 @@ final class CatVodSourceStore {
     /// Convenience for a URL typed/pasted on its own.
     @discardableResult
     func add(url: String, name: String? = nil) -> CatVodSource {
-        let source = CatVodSource(id: CatVodSource.id(from: url),
+        var source = CatVodSource(id: CatVodSource.id(from: url),
                                   name: name ?? CatVodSource.name(from: url), url: url)
         if let index = sources.firstIndex(where: { $0.id == source.id || $0.url == source.url }) {
             sources[index] = source
         } else {
+            source.name = uniqueName(source.name, in: sources)
             sources.append(source)
         }
         persist()
         return source
+    }
+
+    /// Appends " (2)", " (3)"… when another interface already owns this display name, so
+    /// the picker never renders two rows that read identically.
+    private func uniqueName(_ base: String, in list: [CatVodSource]) -> String {
+        let taken = Set(list.map(\.name))
+        guard taken.contains(base) else { return base }
+        var index = 2
+        while taken.contains("\(base) (\(index))") { index += 1 }
+        return "\(base) (\(index))"
     }
 
     func setEnabled(id: String, enabled: Bool) {
