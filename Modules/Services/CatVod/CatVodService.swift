@@ -459,7 +459,8 @@ final class CatVodService {
         // 网盘「分享页」不是媒体流：AVPlayer 打开它只会黑屏/转圈。源站经常把
         // 分享链接直接当播放地址返回，必须认出来并说明白，否则就是无限转圈。
         if Self.isNetdiskSharePage(resolvedURL) {
-            AppLogger.error("[CatVod] netdisk share page used as play url host=\(finalURL.host ?? "?")", level: .error)
+            let shareHost = URL(string: resolvedURL)?.host ?? "?"
+            AppLogger.error("[CatVod] netdisk share page used as play url host=\(shareHost)", level: .error)
             throw CatVodError.http(-6, localized("这条线路给的是网盘分享页，不是可播放的视频流。换一条线路，或先把分享转存到自己的网盘再播放。"))
         }
 
