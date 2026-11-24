@@ -133,29 +133,41 @@ final class CatVodSourceStore {
         }
     }
 
+    /// Outcome of one import. Kept separate from `Int` because "已导入 1 个" on a
+    /// link that already existed is indistinguishable from a no-op: the list does
+    /// not grow, and the person concludes the import silently failed.
+    struct ImportResult: Sendable {
+        let added: Int
+        let updated: Int
+        var total: Int { added + updated }
+    }
+
     /// Imports one or more sources. Accepts a bare array, `{"sources":[…]}`, a single object,
-    /// or a plain-text list of URLs (one per line, `#` comments). Returns sources accepted.
+    /// or a plain-text list of URLs (one per line, `#` comments). Returns what changed.
     @discardableResult
-    func `import`(_ data: Data) throws -> Int {
+    func `import`(_ data: Data) throws -> ImportResult {
         let incoming = try Self.decodeSources(data)
-        guard !incoming.isEmpty else { return 0 }
+        guard !incoming.isEmpty else { return ImportResult(added: 0, updated: 0) }
         var next = sources
+        var added = 0, updated = 0
         for var source in incoming {
             let defaultName = CatVodSource.name(from: source.url)
             if let index = next.firstIndex(where: { $0.id == source.id || $0.url == source.url }) {
                 // Re-importing the same address must not wipe a name the person typed.
                 if source.name == defaultName { source.name = next[index].name }
                 next[index] = source
+                updated += 1
             } else {
                 if source.name == defaultName {
                     source.name = uniqueName(defaultName, in: next)
                 }
                 next.append(source)
+                added += 1
             }
         }
         sources = next
         persist()
-        return incoming.count
+        return ImportResult(added: added, updated: updated)
     }
 
     /// Convenience for a URL typed/pasted on its own.
@@ -211,23 +223,37 @@ final class CatVodSourceStore {
         if let list = try? decoder.decode([CatVodSource].self, from: data) { return list }
         if let wrapped = try? decoder.decode(SourceWrapper.self, from: data) { return wrapped.sources }
         if let single = try? decoder.decode(CatVodSource.self, from: data) { return [single] }
-        // Plain text: one interface address per line. Annotations like "#二小接口" are names.
+        // Plain text. Real-world pastes look like any of these:
+        //   #二小接口# https://…/index.js.md5        ← 名字和地址同一行
+        //   狸猫\nhttps://…/index.js.md5             ← 名字一行、地址一行
+        //   https://…/index.js                          ← 只有地址
+        // The old parser treated every line starting with `#` as a comment and
+        // dropped it — including the whole address on lines like `#二小接口#
+        // https://…`. Import then reported "已导入 1 个猫源" while the list stayed
+        // empty, which the person reads as "导入没生效".
         if let text = String(data: data, encoding: .utf8) {
             var result: [CatVodSource] = []
             var pendingName: String?
             for raw in text.split(separator: "\n") {
                 let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 if line.isEmpty { continue }
-                if line.hasPrefix("#") {
-                    let candidate = line.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines)
-                    if candidate.contains("http") { pendingName = nil } else { pendingName = candidate }
+                // A line carrying an address is always a source, whatever its prefix.
+                if let range = line.range(of: "https?://", options: .regularExpression) {
+                    let url = String(line[range.lowerBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    let head = line[line.startIndex..<range.lowerBound]
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "#＃ 　\t"))
+                    let name = head.isEmpty ? (pendingName ?? CatVodSource.name(from: url)) : String(head)
+                    result.append(CatVodSource(id: CatVodSource.id(from: url), name: name, url: url))
+                    pendingName = nil
                     continue
                 }
-                guard let range = line.range(of: "https?://", options: .regularExpression) else { continue }
-                let url = String(line[range.lowerBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                result.append(CatVodSource(id: CatVodSource.id(from: url),
-                                           name: pendingName ?? CatVodSource.name(from: url), url: url))
-                pendingName = nil
+                if line.hasPrefix("#") || line.hasPrefix("＃") {
+                    let candidate = line.trimmingCharacters(in: CharacterSet(charactersIn: "#＃ 　\t"))
+                    pendingName = candidate.isEmpty ? nil : candidate
+                    continue
+                }
+                // A short bare line with no address is the name for the next one.
+                if line.count <= 24 { pendingName = line }
             }
             if !result.isEmpty { return result }
         }

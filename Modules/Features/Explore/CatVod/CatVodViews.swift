@@ -192,8 +192,14 @@ struct CatVodSourceSettingsView: View {
     private func applyImport(_ data: Data) {
         let before = Set(store.sources.map(\.id))
         do {
-            let count = try store.import(data)
-            importMessage = String(format: localized("已导入 %d 个猫源"), count)
+            let result = try store.import(data)
+            if result.added == 0, result.updated > 0 {
+                importMessage = String(format: localized("这 %d 个接口已经在列表里（已刷新）"), result.updated)
+            } else if result.updated > 0 {
+                importMessage = String(format: localized("已导入 %d 个猫源，%d 个已存在并更新"), result.added, result.updated)
+            } else {
+                importMessage = String(format: localized("已导入 %d 个猫源"), result.added)
+            }
             // 导入完成后立刻在后台把脚本拉下来、启动一次、解析站点表。
             // 一个接口的脚本常有 5–10MB，第一步走完要几秒；不等它，
             // 人点进「影视」时看到的就是这几秒的转圈。只预热第一个新源：
