@@ -35,6 +35,10 @@ struct CatVodHomeView: View {
     /// the person already switched away from) are discarded. Prevents the
     /// endless spinner and wrong-list flashes caused by racing requests.
     @State private var loadToken = 0
+    /// 搜索独立计次：首页/分类完成时不能作废一次正在进行的搜索。
+    @State private var searchToken = 0
+    /// 点搜索时先收起键盘：不然键盘挡住结果区，看着就像没搜。
+    @FocusState private var searchFocused: Bool
     /// Guards a poster tap while its detail request is in flight: without it a
     /// burst of taps queues a burst of requests, and when they all land they
     /// stack a dozen detail sheets on top of each other.
@@ -180,6 +184,7 @@ struct CatVodHomeView: View {
             HStack {
                 TextField(localized("搜索全部站点片名"), text: $keyword)
                     .textFieldStyle(.roundedBorder)
+                    .focused($searchFocused)
                     .onSubmit { Task { await search() } }
                 Button { Task { await search() } } label: {
                     Image(systemName: "magnifyingglass")
@@ -438,11 +443,11 @@ struct CatVodHomeView: View {
         // gateway has downloaded (or verified) and booted the bundle. Without this
         // the whole page is one spinner for the length of the process start.
         if let cachedSites = CatVodService.shared.cachedCatalog(bundleURL: bundle),
-           let firstSite = cachedSites.first {
+           let firstSite = CatVodSourceHealth.shared.arranged(cachedSites, bundleURL: bundle).first {
             let cachedList = CatVodService.shared.cachedHome(bundleURL: bundle, site: firstSite)
             await MainActor.run {
                 guard token == loadToken else { return }
-                sites = cachedSites
+                sites = CatVodSourceHealth.shared.arranged(cachedSites, bundleURL: bundle)
                 selectedSite = firstSite
                 currentCategory = nil
                 filterChoices = [:]
@@ -457,9 +462,13 @@ struct CatVodHomeView: View {
             let loaded = try await CatVodService.shared.catalog(bundleURL: bundle)
             let stale = await MainActor.run { token != loadToken }
             if stale { return }
+            // 最近反复失败的站点沉到列表底部：它们每次都要走完整个超时预算，
+            // 排在第一个就等于每次打开都要等一遍。
+            CatVodSourceHealth.shared.prune(bundleURL: bundle)
+            let ordered = CatVodSourceHealth.shared.arranged(loaded, bundleURL: bundle)
             await MainActor.run {
-                sites = loaded
-                selectedSite = loaded.first
+                sites = ordered
+                selectedSite = ordered.first
                 currentCategory = nil
                 filterChoices = [:]
                 allFilters = [:]
@@ -533,7 +542,9 @@ struct CatVodHomeView: View {
                 resultSites = [:]
                 isLoading = false
             }
+            CatVodSourceHealth.shared.recordSuccess(bundleURL: bundle, siteKey: site.key)
         } catch {
+            CatVodSourceHealth.shared.note(error: error, bundleURL: bundle, siteKey: site.key)
             await MainActor.run {
                 if token == loadToken {
                     message = error.localizedDescription
@@ -591,7 +602,9 @@ struct CatVodHomeView: View {
                 resultSites = [:]
                 isLoading = false
             }
+            CatVodSourceHealth.shared.recordSuccess(bundleURL: bundle, siteKey: site.key)
         } catch {
+            CatVodSourceHealth.shared.note(error: error, bundleURL: bundle, siteKey: site.key)
             await MainActor.run {
                 if token == loadToken {
                     message = error.localizedDescription
@@ -652,21 +665,50 @@ struct CatVodHomeView: View {
     }
 
     private func search() async {
-        guard let bundle = currentBundleURL, !sites.isEmpty else {
-            await MainActor.run { isLoading = false }
-            return
-        }
+        guard let bundle = currentBundleURL else { return }
         let term = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return }
-        let token = await MainActor.run { loadToken += 1; return loadToken }
-        await MainActor.run { isLoading = true; message = nil }
+        // 搜索用自己的一条令牌，不跟 loadToken 共用：搜索期间只要首页/分类
+        // 有一次加载完成，共用令牌就会把搜索结果整份丢掉，表现是「搜了没反应」。
+        let token = await MainActor.run { searchToken += 1; return searchToken }
+        await MainActor.run { isLoading = true; message = nil; searchFocused = false }
+
+        // 站点表可能还没准备好——冷启动时脚本还在下载。旧代码在这里直接
+        // return，点了搜索什么都不发生。现在用它手头能有的：上次落盘的站点表，
+        // 或者等一次 catalog，实在没有才如实说一句。
+        var pool = sites
+        if pool.isEmpty {
+            if let cached = CatVodService.shared.cachedCatalog(bundleURL: bundle), !cached.isEmpty {
+                pool = CatVodSourceHealth.shared.arranged(cached, bundleURL: bundle)
+                await MainActor.run {
+                    guard token == searchToken else { return }
+                    sites = pool
+                    if selectedSite == nil { selectedSite = pool.first }
+                }
+            } else if let loaded = try? await CatVodService.shared.catalog(bundleURL: bundle), !loaded.isEmpty {
+                pool = CatVodSourceHealth.shared.arranged(loaded, bundleURL: bundle)
+                await MainActor.run {
+                    guard token == searchToken else { return }
+                    sites = pool
+                    if selectedSite == nil { selectedSite = pool.first }
+                }
+            }
+        }
+        guard !pool.isEmpty else {
+            await MainActor.run {
+                guard token == searchToken else { return }
+                isLoading = false
+                message = localized("站点列表还没准备好，等首页出来再搜一次")
+            }
+            return
+        }
 
         // 搜整个接口下的所有站点，而不是当前选中的那一个。
-        let targets = sites
+        let targets = pool
         let hits = await CatVodService.shared.searchAll(bundleURL: bundle, sites: targets, keyword: term)
 
         await MainActor.run {
-            guard token == loadToken else { return }
+            guard token == searchToken else { return }
             var merged: [CatVodMedia] = []
             var sitesByID: [String: CatVodSite] = [:]
             var seenKeys = Set<String>()
@@ -684,9 +726,15 @@ struct CatVodHomeView: View {
             list = CatVodList(categories: list.categories, media: merged, page: 1, pageCount: 1)
             currentCategory = nil
             isLoading = false
-            message = merged.isEmpty
-                ? String(format: localized("在「%@」的所有站点里都没有找到结果"), term)
-                : nil
+            if merged.isEmpty {
+                // 一个站点都没回话，和「都回了但没有这部片」是两件事：前者该说
+                // 站点没响应（再搜一次没用），后者该说换个词。
+                message = hits.isEmpty
+                    ? String(format: localized("「%@」的 %d 个站点都没有响应，可能是源站在维护，换一个接口或稍后再试"), term, targets.count)
+                    : String(format: localized("在「%@」的所有站点里都没有找到结果"), term)
+            } else {
+                message = nil
+            }
             saveSearchTerm(term)
         }
     }

@@ -113,10 +113,10 @@ final class CatVodService {
         let targets = sites.filter { $0.searchable != false }
         guard !targets.isEmpty else { return [] }
         // 全源搜索动辄几十上百个站点。一次全放出去会把会话池挤爆（每个会话
-        // 串行、各自 30s 超时），最后是最慢的那个决定整页出现的时间。这里保持
-        // 6 路并发，并在 25s 后带着已有结果返回——先给能给的，比等到超时好。
+        // 串行、各自 16s 超时），最后是最慢的那个决定整页出现的时间。这里保持
+        // 6 路并发，并在 14s 后带着已有结果返回——先给能给的，比等到超时好。
         let maximumConcurrent = 6
-        let budget: UInt64 = 25_000_000_000
+        let budget: UInt64 = 14_000_000_000
         let started = DispatchTime.now().uptimeNanoseconds
         return await withTaskGroup(of: (CatVodSite, CatVodList?).self) { group in
             var next = 0
@@ -167,21 +167,41 @@ final class CatVodService {
         // Resolve up to three of them and merge their play lines.
         if playURL.isEmpty, items.count > 0 {
             var visited: Set<String> = [id]
-            var fromParts: [String] = []
-            var urlParts: [String] = []
-            var usedFlags = Set<String>()
-            for item in items.prefix(3) {
+            var candidates: [(order: Int, id: String)] = []
+            for (order, item) in items.prefix(3).enumerated() {
                 guard let nextID = item["vod_id"] as? String, !nextID.isEmpty,
                       !visited.contains(nextID) else { continue }
                 visited.insert(nextID)
-                guard let deeper = try? await invoke(bundleURL: bundleURL, site: site, action: "detail",
-                                                     arguments: ["ids": [nextID]]),
-                      let resolved = (deeper["list"] as? [[String: Any]])?.first,
-                      let deeperURL = resolved["vod_play_url"] as? String, !deeperURL.isEmpty,
-                      // 三个 provider 常常返回同一份剧集（只是线路名不同），合并后
-                      // 选集里就出现三组一模一样的「第1集…第10集」。同一份播放串只留一组。
-                      !urlParts.contains(deeperURL) else { continue }
-                let deeperFrom = resolved["vod_play_from"] as? String ?? ""
+                candidates.append((order, nextID))
+            }
+            // The providers are independent, so asking them one after another just
+            // stacks their latencies: opening a detail used to cost up to 3 × 18s
+            // before the sheet could show a single episode. Ask together, merge in
+            // the original order, and keep the line order the source declared.
+            let deeper = await withTaskGroup(of: (Int, String, String)?.self) { group in
+                for candidate in candidates {
+                    group.addTask { [weak self] in
+                        guard let self,
+                              let response = try? await self.invoke(bundleURL: bundleURL, site: site,
+                                                                    action: "detail",
+                                                                    arguments: ["ids": [candidate.id]]),
+                              let first = (response["list"] as? [[String: Any]])?.first,
+                              let url = first["vod_play_url"] as? String, !url.isEmpty else { return nil }
+                        return (candidate.order, first["vod_play_from"] as? String ?? "", url)
+                    }
+                }
+                var hits: [(Int, String, String)] = []
+                for await hit in group { if let hit { hits.append(hit) } }
+                return hits.sorted { $0.0 < $1.0 }
+            }
+            var fromParts: [String] = []
+            var urlParts: [String] = []
+            var usedFlags = Set<String>()
+            for (_, rawFrom, deeperURL) in deeper {
+                // 三个 provider 常常返回同一份剧集（只是线路名不同），合并后
+                // 选集里就出现三组一模一样的「第1集…第10集」。同一份播放串只留一组。
+                guard !urlParts.contains(deeperURL) else { continue }
+                let deeperFrom = rawFrom.isEmpty ? "线路\(fromParts.count + 1)" : rawFrom
                 // 两条线路可能同名（"量子线路(1)"），重名会让选集合并到同一条里。
                 var flags = deeperFrom.components(separatedBy: "$$$")
                 for index in flags.indices where usedFlags.contains(flags[index]) {

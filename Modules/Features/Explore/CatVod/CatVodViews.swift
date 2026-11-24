@@ -150,9 +150,20 @@ struct CatVodSourceSettingsView: View {
     }
 
     private func applyImport(_ data: Data) {
+        let before = Set(store.sources.map(\.id))
         do {
             let count = try store.import(data)
             importMessage = String(format: localized("已导入 %d 个猫源"), count)
+            // 导入完成后立刻在后台把脚本拉下来、启动一次、解析站点表。
+            // 一个接口的脚本常有 5–10MB，第一步走完要几秒；不等它，
+            // 人点进「影视」时看到的就是这几秒的转圈。只预热第一个新源：
+            // 一次导入七八个接口时，把全部流量都提前打出去并不划算。
+            if let first = store.sources.first(where: { !before.contains($0.id) }) {
+                let url = first.url
+                Task(priority: .utility) {
+                    _ = try? await CatVodService.shared.catalog(bundleURL: url)
+                }
+            }
         } catch {
             importMessage = localized("导入失败：格式无法识别")
         }

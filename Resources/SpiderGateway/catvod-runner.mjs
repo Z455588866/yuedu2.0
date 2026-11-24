@@ -444,11 +444,17 @@ export async function runCatVod(bundlePath, options = {}) {
       // making the person stare at a spinner that long is worse than telling
       // them it failed and letting them tap 重试. Only playback keeps a long
       // budget — a signed-out netdisk line waits for its own poll.
-      const fallbackMs = Number(options.injectTimeoutMs) > 0 ? Number(options.injectTimeoutMs) : 30000;
-      const timeoutMs = route.includes("/search") ? Math.min(fallbackMs, 30000)
-        : route.includes("/play") ? Math.min(fallbackMs, 90000)
-        : route.includes("/detail") ? Math.min(fallbackMs, 30000)
-        : route.includes("/category") || route.includes("/home") ? Math.min(fallbackMs, 25000)
+      // Measured on real interfaces: a healthy site answers 推荐 in 0.5–0.9s and a
+      // category in 0.2–0.3s, so 25s was not a safety net — it was 24 seconds of
+      // spinner in front of a source that had already given up. 12s still covers a
+      // slow mobile network and fails fast enough for 重试 or another site to feel
+      // like a choice rather than a hang. Detail keeps a little more because some
+      // bundles resolve their provider before they list episodes.
+      const fallbackMs = Number(options.injectTimeoutMs) > 0 ? Number(options.injectTimeoutMs) : 16000;
+      const timeoutMs = route.includes("/search") ? Math.min(fallbackMs, 16000)
+        : route.includes("/play") ? Math.min(fallbackMs, 60000)
+        : route.includes("/detail") ? Math.min(fallbackMs, 18000)
+        : route.includes("/category") || route.includes("/home") ? Math.min(fallbackMs, 12000)
         : fallbackMs;
       req.setTimeout(timeoutMs, () => {
         fail(new Error(`CatVod request timed out for ${route}`));
