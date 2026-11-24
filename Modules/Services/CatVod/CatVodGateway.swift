@@ -224,6 +224,11 @@ final class CatVodGateway {
             components.percentEncodedPath = String(components.percentEncodedPath.dropLast(4))
             if let value = components.url?.absoluteString { values.append(value) }
         } else if !lowerPath.hasSuffix(".js") {
+            // Python / Java 源原样保留：给 `x.py` 补成 `x.py/index.js` 会变成一个
+            // 根本不存在的地址，报错只会更难懂。
+            if lowerPath.hasSuffix(".py") || lowerPath.hasSuffix(".jar") {
+                return Array(Set(values)).sorted()
+            }
             // 只给了目录（如 `https://host/cat`）时按 index.js 补全，与 node
             // 侧的兜底规则保持一致。
             let base = components.percentEncodedPath
@@ -321,7 +326,7 @@ enum CatVodError: LocalizedError {
         // 已经写好的中文说明，再补一句该去哪儿改，否则「请求失败（400）」只会
         // 让人以为软件坏了。
         if text.contains("不是猫源脚本") || text.contains("没有找到猫源脚本") {
-            return "\(text)。去「管理猫源」删掉这条，或换成以 .js / .js.md5 结尾的地址"
+            return "\(text)。JS 源请用以 .js / .js.md5 结尾的地址；.jar（Java）和 .py（Python）源需要各自的运行时，当前宿主只内置了 JS。"
         }
         if code == 401 || code == 403 {
             return String(format: localized("源站拒绝访问（%ld），可能需要登录或 Cookie 已失效：%@"), code, text)
