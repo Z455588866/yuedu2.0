@@ -15,6 +15,10 @@ enum CatVodVLCKernel {
 #if canImport(VLCKitSPM)
 import VLCKitSPM
 import UIKit
+// iOS 26 SDK 起 SwiftUI 不再把 Combine 转出（re-export），@Published /
+// ObservableObject 的成员必须显式 import，否则报 "missing import of defining
+// module 'Combine'"。
+import Combine
 
 /// VLC 内核的播放状态。系统播放器开不了的容器（MKV/AVI/FLV/WMV/RMVB）走这里。
 ///

@@ -42,9 +42,9 @@ final class WebViewCookieMirror: @unchecked Sendable {
     /// （CatVod 的 Node 网关就是这样共用一份 cookie 的）。
     func allCookies() async -> [HTTPCookie] {
         await primeIfNeeded()
-        lock.lock()
-        defer { lock.unlock() }
-        return isPrimed ? snapshot : []
+        // lock()/unlock() 是 noasync 的（持锁跨挂起点会死锁），async 函数里必须用
+        // withLock 这种「不可挂起的作用域」写法。
+        return lock.withLock { isPrimed ? snapshot : [] }
     }
 
     /// Mirror lookup. `nil` means "not primed yet" — distinct from "primed, and this
