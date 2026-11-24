@@ -86,6 +86,10 @@ export class NodeBundleCache {
     this.fetchValue = options.fetchValue || fetch;
     this.maxBytes = options.nodeBundleMaxBytes;
     this.timeoutMs = options.nodeBundleDownloadTimeoutMs;
+    // 对齐 TVBox/OkHttp 的 retryOnConnectionFailure。网络抖动、瞬时 5xx 时重试，
+    // 一次失败不再直接判死整个源。
+    this.retries = Number.isInteger(options.nodeBundleDownloadRetries)
+      ? options.nodeBundleDownloadRetries : 2;
     this.inflight = new Map();
     this.completed = new Map();
     this.artifactCacheTTLms = options.artifactCacheTTLms || 30_000;
@@ -203,6 +207,20 @@ export class NodeBundleCache {
         bundleURL, cacheKey, parsed.authorization);
     } catch (error) {
       await unlink(temporaryPath).catch(() => {});
+      // 对齐 TVBox/OkHttp 的 cache fallback：网络失败（超时/连接断开/5xx）时，
+      // 磁盘上若有之前下载过的 bundle，就先用它把源跑起来，而不是整页报「全部失败」。
+      // 只有连接类错误才兜底；checksum 不匹配、体积超限、不是脚本这类确定性错误照常抛。
+      const transient = ["BUNDLE_DOWNLOAD_TIMEOUT", "BUNDLE_DOWNLOAD_FAILED"].includes(error.code);
+      if (transient) {
+        try {
+          const info = await stat(filePath);
+          if (info.isFile() && info.size > 0 && info.size <= this.maxBytes) {
+            const digests = await fileDigests(filePath);
+            return this.#withConfig({ path: filePath, digest: digests.sha256, sourceURL: bundleURL.toString() },
+              bundleURL, cacheKey, parsed.authorization);
+          }
+        } catch { /* 没有可用的旧缓存，继续按原错误处理 */ }
+      }
       if (assumedIndex && error.code === "BUNDLE_DOWNLOAD_FAILED") {
         throw new GatewayError("INVALID_BUNDLE_URL",
           `这个地址下没有找到猫源脚本（应在 ${bundleURL.toString()}，需要以 .js 或 .js.md5 结尾）：`
@@ -313,7 +331,35 @@ export class NodeBundleCache {
     return { sha256: sha256.digest("hex"), md5: md5.digest("hex") };
   }
 
+  /// 对齐 TVBox/OkHttp 的 retryOnConnectionFailure：连接失败、超时、瞬时 5xx
+  /// 最多重试 `retries` 次（默认 2）。4xx 是确定的失败（地址错/被拒），不重试。
   async #fetch(initialURL, authorization, allowChecksumRedirects = false, timeoutMs = this.timeoutMs) {
+    let lastError;
+    for (let attempt = 0; attempt <= this.retries; attempt += 1) {
+      try {
+        const response = await this.#fetchOnce(initialURL, authorization, allowChecksumRedirects, timeoutMs);
+        const status = response.status;
+        if (status >= 500 && status < 600 && attempt < this.retries) {
+          await response.body?.cancel().catch(() => {});
+          lastError = new GatewayError("BUNDLE_DOWNLOAD_FAILED",
+            `CatVod server returned HTTP ${status}`, 502);
+          continue;
+        }
+        return response;
+      } catch (error) {
+        const retryable = error?.code === "BUNDLE_DOWNLOAD_TIMEOUT"
+          || error?.code === "BUNDLE_DOWNLOAD_FAILED";
+        if (retryable && attempt < this.retries) {
+          lastError = error;
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastError;
+  }
+
+  async #fetchOnce(initialURL, authorization, allowChecksumRedirects = false, timeoutMs = this.timeoutMs) {
     let currentURL = initialURL;
     const credentialOrigin = initialURL.origin;
     for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {

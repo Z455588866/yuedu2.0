@@ -1222,7 +1222,8 @@ struct CatVodHomeView: View {
         }
         do {
             let playback = try await CatVodService.shared.player(bundleURL: bundle, site: site, episode: episode)
-            guard let urlString = playback.url, let url = URL(string: urlString) else {
+            guard let urlString = playback.url, !urlString.isEmpty, let url = URL(string: urlString) else {
+                AppLogger.error("[CatVod] play: player 返回空地址 site=\(site.key) flag=\(episode.spiderFlag)", level: .error)
                 await MainActor.run {
                     message = localized("该片源没有返回可播放地址")
                     isResolvingPlayback = false
@@ -1247,6 +1248,7 @@ struct CatVodHomeView: View {
                 }
             }
             if case .blocked(let reason) = verdict {
+                AppLogger.error("[CatVod] play: 流探测判定不可播 \(reason) site=\(site.key)", level: .error)
                 await MainActor.run {
                     message = reason
                     isResolvingPlayback = false
@@ -1255,6 +1257,7 @@ struct CatVodHomeView: View {
                 return
             }
             if case .retryable(let reason) = verdict {
+                AppLogger.error("[CatVod] play: 流探测要求重试 \(reason) site=\(site.key)", level: .error)
                 await MainActor.run {
                     message = reason
                     isResolvingPlayback = false
@@ -1265,6 +1268,7 @@ struct CatVodHomeView: View {
             // 网盘线路会给出多档清晰度（会员权限决定哪几档能播）。有多档就先问
             // 一次，只有一档就直接播——非会员常常只有一档，多问一次纯属打扰。
             if let options = resolved.qualityOptions, options.count > 1 {
+                AppLogger.info("[CatVod] play: \(options.count) 档清晰度，弹选择窗 site=\(site.key)", level: .notice)
                 await MainActor.run {
                     qualityPrompt = QualityPrompt(title: "\(title) · \(episode.title)",
                                                   episodeID: episode.id,
@@ -1291,6 +1295,7 @@ struct CatVodHomeView: View {
                 playingEpisodeID = nil
             }
         } catch {
+            AppLogger.error("[CatVod] play: 解析/播放失败 site=\(site.key) error=\(error.localizedDescription)", level: .error)
             await MainActor.run {
                 message = error.localizedDescription
                 isResolvingPlayback = false

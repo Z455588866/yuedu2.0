@@ -256,13 +256,29 @@ final class CatVodGateway {
             let gatewayPort = (baseURL ?? YueduNodeRuntime.listeningURL().flatMap(URL.init(string:)))?.port
             if let gatewayPort, port != gatewayPort { return url }
         }
-        guard let base = baseURL ?? YueduNodeRuntime.listeningURL().flatMap(URL.init(string:)) else {
-            return nil
-        }
+        let base = baseURL ?? YueduNodeRuntime.listeningURL().flatMap(URL.init(string:))
+        return Self.proxyURL(for: url, bundleURL: bundleURL, headers: headers,
+                             forceLoopback: isLoopback, token: authenticationToken, base: base)
+    }
+
+    /// 弹幕走网关代理：插件进程里的 loopback 地址（网盘源的弹幕路由）临时端口
+    /// 会随 spider 会话回收，直连必 404。这里不按端口过滤，强制用 `bundleURL`
+    /// 让网关按当前活端口重建目标，再取回弹幕 XML。
+    func danmakuProxyURL(for url: URL, bundleURL: String) -> URL? {
+        let host = url.host?.lowercased() ?? ""
+        let isLoopback = ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host)
+        guard isLoopback else { return url }
+        let base = baseURL ?? YueduNodeRuntime.listeningURL().flatMap(URL.init(string:))
+        return Self.proxyURL(for: url, bundleURL: bundleURL, headers: [:],
+                             forceLoopback: true, token: authenticationToken, base: base) ?? url
+    }
+
+    /// 代理 spec 的公共构造，播放与弹幕共用，避免两处漂移。
+    private static func proxyURL(for url: URL, bundleURL: String, headers: [String: String],
+                                 forceLoopback: Bool, token: String, base: URL?) -> URL? {
+        guard let base else { return nil }
         var spec: [String: Any]
-        if isLoopback {
-            // Same spelling the rest of the project uses; `URL.percentEncodedPath`
-            // needs a newer deployment target than the app declares.
+        if forceLoopback {
             var path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath
                 ?? url.path
             if let query = url.query, !query.isEmpty { path += "?" + query }
@@ -272,16 +288,14 @@ final class CatVodGateway {
         } else {
             spec = ["u": url.absoluteString, "h": headers]
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: spec, options: [.sortedKeys]) else {
-            return nil
-        }
+        guard let data = try? JSONSerialization.data(withJSONObject: spec, options: [.sortedKeys]),
+              var components = URLComponents(url: base.appendingPathComponent("v1/media"),
+                                             resolvingAgainstBaseURL: false) else { return nil }
         let encoded = data.base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-        guard var components = URLComponents(url: base.appendingPathComponent("v1/media"),
-                                             resolvingAgainstBaseURL: false) else { return nil }
-        components.queryItems = [URLQueryItem(name: "k", value: Self.mediaKey(for: authenticationToken)),
+        components.queryItems = [URLQueryItem(name: "k", value: mediaKey(for: token)),
                                  URLQueryItem(name: "s", value: encoded)]
         return components.url
     }

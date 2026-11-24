@@ -290,12 +290,17 @@ struct CatVodDanmakuPayload: Decodable, Sendable {
     var items: [CatVodDanmakuItem] = []
     var link: String?
     var sources: [CatVodDanmakuSource] = []
+    /// 弹幕地址常是插件进程里的 loopback（红果 `/hg_dm`）。它的临时端口会随
+    /// spider 会话回收，直连会 404；带上 bundle 身份后，加载器可把地址改写成
+    /// 稳定的网关代理，由网关重建会话再取。不参与 JSON 解码。
+    var bundleURL: String? = nil
 
     init(items: [CatVodDanmakuItem] = [], link: String? = nil,
-         sources: [CatVodDanmakuSource] = []) {
+         sources: [CatVodDanmakuSource] = [], bundleURL: String? = nil) {
         self.items = items
         self.link = link
         self.sources = sources
+        self.bundleURL = bundleURL
     }
 
     init(from decoder: Decoder) throws {

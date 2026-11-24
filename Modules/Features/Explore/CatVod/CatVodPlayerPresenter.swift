@@ -116,6 +116,7 @@ enum CatVodPlayerPresenter {
 ///
 /// 全过程放在播放之后执行：拉弹幕要几秒到十几秒，先取再播就是点一集黑屏十几秒。
 enum DanmakuFeed {
+    @MainActor
     static func load(_ payload: CatVodDanmakuPayload) async -> [DanmakuItem]? {
         if !payload.items.isEmpty {
             let rows: [DanmakuItem] = payload.items.enumerated().compactMap { index, row in
@@ -128,9 +129,27 @@ enum DanmakuFeed {
         if let link = payload.link, !link.isEmpty { candidates.append(link) }
         candidates.append(contentsOf: payload.sources.compactMap(\.url).filter { !$0.isEmpty })
         for address in candidates {
-            if let items = await fetchXML(address), !items.isEmpty { return items }
+            // 弹幕地址若是插件进程的 loopback，直连会随会话回收而 404。
+            // 走网关代理（与播放同一条稳定路由），由网关重建会话再取。
+            let routed = Self.proxied(address, bundleURL: payload.bundleURL)
+            if let items = await fetchXML(routed), !items.isEmpty { return items }
         }
         return nil
+    }
+
+    /// 把弹幕地址改写成网关代理。仅对 loopback 且能拿到 bundle 身份时改写；
+    /// 普通公网弹幕源（B 站 XML）直连即可，不必绕网关。
+    @MainActor
+    private static func proxied(_ address: String, bundleURL: String?) -> String {
+        guard let bundleURL,
+              let original = URL(string: address),
+              let host = original.host?.lowercased(),
+              ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host),
+              let proxied = CatVodGateway.shared.danmakuProxyURL(for: original,
+                                                                  bundleURL: bundleURL) else {
+            return address
+        }
+        return proxied.absoluteString
     }
 
     private static func make(time: Double, mode: Int, color: Int,

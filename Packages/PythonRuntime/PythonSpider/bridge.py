@@ -62,17 +62,36 @@ class Registry:
 
     @staticmethod
     def discover(directory):
-        """扫描目录里的 .py：放进去就能用，不必再维护一份清单。"""
+        """扫描目录里的 .py：放进去就能用，不必再维护一份清单。
+
+        显示名和开关由同目录的 `.manifest.json` 管理（App 侧写入）：
+        - `name` 只覆盖展示用的名字，不动 `key`（key=file:<stem> 是 token 的
+          来源，改了会让会话、收藏、播放历史全部对不上）。
+        - `enabled` 为 false 的源不进目录，等于关掉这个源，文件仍保留。
+        这份文件是可选的，不存在时行为与以前完全一样。
+        """
         if not directory or not os.path.isdir(directory):
             return []
+        manifest = {}
+        try:
+            with open(os.path.join(directory, ".manifest.json"), encoding="utf-8") as stream:
+                loaded = json.load(stream)
+            if isinstance(loaded, dict) and isinstance(loaded.get("sources"), dict):
+                manifest = loaded["sources"]
+        except (OSError, ValueError):
+            pass
         found = []
         for name in sorted(os.listdir(directory)):
             if not name.lower().endswith(".py") or name.startswith("."):
                 continue
+            entry = manifest.get(name) if isinstance(manifest.get(name), dict) else {}
+            if entry.get("enabled") is False:
+                continue
             stem = os.path.splitext(name)[0]
+            display = str(entry.get("name") or "").strip() or stem
             found.append({
                 "key": "file:" + stem,
-                "name": stem,
+                "name": display,
                 "api": os.path.join(directory, name),
                 "ext": "",
             })

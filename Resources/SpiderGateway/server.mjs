@@ -492,8 +492,13 @@ export function createGateway(config, dependencies = {}) {
       });
     }
   });
+  // 下载失败会按 nodeBundleDownloadRetries 重试，最坏情况是 (retries+1) 次下载；
+  // requestTimeout 必须覆盖这个上限，否则连接先被 Node 断开，重试等于白做。
+  const downloadAttempts = Math.max(1, (config.nodeBundleDownloadRetries ?? 2) + 1);
   server.requestTimeout = Math.max(
-    config.workerTimeoutMs + Math.max(config.jarDownloadTimeoutMs, config.nodeBundleDownloadTimeoutMs) + 5_000,
+    config.workerTimeoutMs
+      + Math.max(config.jarDownloadTimeoutMs, config.nodeBundleDownloadTimeoutMs * downloadAttempts)
+      + 5_000,
     30_000
   );
   server.headersTimeout = 10_000;

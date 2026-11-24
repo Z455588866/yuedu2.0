@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 /// fills only by import (file / clipboard). Mirrors `DanmakuSourceSettingsView` in layout.
 struct CatVodSourceSettingsView: View {
     @ObservedObject private var store = CatVodSourceStore.shared
+    /// Python 源单独管理：显示 / 改名 / 删除 / 开关。它们不进 `store`（那是 .js 接口地址）。
+    @ObservedObject private var pyStore = PythonSourceStore.shared
     /// 渲染用快照，唯一真相仍在上面的 store。
     ///
     /// 直接 `ForEach(store.sources)` 依赖 SwiftUI 对 @Observable 的自动追踪；一旦
@@ -19,6 +21,8 @@ struct CatVodSourceSettingsView: View {
     @State private var importMessage: String?
     @State private var renamingSource: CatVodSource?
     @State private var renameText = ""
+    @State private var renamingPython: PythonSourceInfo?
+    @State private var pythonRenameText = ""
 
     var body: some View {
         List {
@@ -115,6 +119,72 @@ struct CatVodSourceSettingsView: View {
                 Text(localized("猫源列表"))
             }
 
+            // —— Python 源：单独一组，来自 Documents/PythonSources，不进上面的 store ——
+            Section {
+                if pyStore.sources.isEmpty {
+                    Text(localized("还没有 Python 源。用右上角的导入按钮选 .py 文件即可。"))
+                        .font(DSFont.caption)
+                        .foregroundStyle(DSColor.textSecondary)
+                }
+                ForEach(pyStore.sources) { source in
+                    HStack(spacing: 12) {
+                        Toggle(isOn: Binding(
+                            get: { source.enabled },
+                            set: { enabled in
+                                pyStore.setEnabled(file: source.file, enabled: enabled)
+                                Task { await pyStore.applyToRuntime() }
+                            }
+                        )) {
+                            EmptyView()
+                        }
+                        .labelsHidden()
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                                    .font(.caption)
+                                    .foregroundStyle(DSColor.accent)
+                                Text(source.name)
+                                    .font(DSFont.subheadline.weight(.semibold))
+                                    .foregroundStyle(source.enabled ? DSColor.textPrimary : DSColor.textSecondary)
+                            }
+                            Text(source.file)
+                                .font(DSFont.caption2)
+                                .foregroundStyle(DSColor.textSecondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            pythonRenameText = source.name
+                            renamingPython = source
+                        }
+
+                        Button {
+                            pythonRenameText = source.name
+                            renamingPython = source
+                        } label: {
+                            Image(systemName: "pencil.circle")
+                                .font(.system(size: 20))
+                                .foregroundStyle(DSColor.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(localized("改名"))
+                    }
+                }
+                .onDelete { offsets in
+                    let files = offsets.compactMap { pyStore.sources[$0].file }
+                    pyStore.delete(files: files)
+                    Task { await pyStore.applyToRuntime() }
+                    importMessage = String(format: localized("已删除 %d 个 Python 源"), files.count)
+                }
+            } header: {
+                Text(localized("Python 源"))
+            } footer: {
+                Text(localized(".py 脚本单独管理：关闭只是暂时不用（文件保留），删除会把脚本一起删掉。点名称或铅笔改名。"))
+                    .dsSectionFooter()
+            }
+
             Section {
                 NavigationLink {
                     CatVodCloudAccountView()
@@ -152,9 +222,13 @@ struct CatVodSourceSettingsView: View {
             }
         }
         .softScrollEdges()
-        .task { rows = store.sources }
+        .task {
+            rows = store.sources
+            pyStore.refresh()
+        }
         // 兜底：其它入口（文件导入、猫元页、改名弹窗）改了 store 时也让列表跟上。
         .onChange(of: store.sources) { _, next in rows = next }
+        .onChange(of: store.pythonRevision) { _, _ in pyStore.refresh() }
         .navigationTitle(localized("猫源"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -206,6 +280,23 @@ struct CatVodSourceSettingsView: View {
                 }
                 rows = store.sources
                 renamingSource = nil
+            }
+        }
+        .alert(localized("重命名 Python 源"), isPresented: Binding(
+            get: { renamingPython != nil },
+            set: { if !$0 { renamingPython = nil } }
+        )) {
+            TextField(localized("名称"), text: $pythonRenameText)
+            Button(localized("取消"), role: .cancel) { renamingPython = nil }
+            Button(localized("保存")) {
+                if let source = renamingPython {
+                    let name = pythonRenameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !name.isEmpty {
+                        pyStore.rename(file: source.file, to: name)
+                        Task { await pyStore.applyToRuntime() }
+                    }
+                }
+                renamingPython = nil
             }
         }
     }

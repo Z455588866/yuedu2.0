@@ -106,6 +106,9 @@ export function loadConfig(overrides = {}) {
     nodeBundleAllowPrivateNetwork: boolean("CATVOD_BUNDLE_ALLOW_PRIVATE_NETWORK", false),
     nodeBundleMaxBytes: integer("CATVOD_BUNDLE_MAX_BYTES", 65 * 1024 * 1024),
     nodeBundleDownloadTimeoutMs: integer("CATVOD_BUNDLE_DOWNLOAD_TIMEOUT_MS", 40_000),
+    // 对齐 TVBox/OkHttp 的 retryOnConnectionFailure：网络抖动/瞬时 5xx 时重试，
+    // 而不是一次失败就把整个源判死。只重试连接类错误和 5xx，不重试 4xx。
+    nodeBundleDownloadRetries: integer("CATVOD_BUNDLE_DOWNLOAD_RETRIES", 2, 0),
     // How long a `.js.md5` manifest is trusted from disk. Inside this window a
     // warm start reads the script straight from cache with no network at all.
     nodeBundleManifestTTLms: integer("CATVOD_BUNDLE_MANIFEST_TTL_MS", 10 * 60_000, 0),

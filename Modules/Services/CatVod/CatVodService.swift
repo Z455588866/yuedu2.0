@@ -422,16 +422,28 @@ final class CatVodService {
         let qualityChoices = Self.qualityOptions(object["qualityOptions"])
         // 片源自带弹幕（红果这类）。放在这里解析，是因为下面每一条返回路径都要把它带上：
         // 切清晰度、parse=1 嗅探都会重建 `CatVodPlayback`，漏一处弹幕就没了。
-        let danmakuPayload = Self.danmakuPayload(object["danmaku"])
+        // 带上 bundle 身份：弹幕地址若是插件进程的 loopback，加载器据此把它改写成
+        // 网关代理，避免临时端口回收后取不到弹幕（红果 /hg_dm 就是这种情况）。
+        var danmakuWithContext = Self.danmakuPayload(object["danmaku"])
+        danmakuWithContext?.bundleURL = bundleURL
+        let danmakuPayload = danmakuWithContext
 
         // A spider may hand back an episode id that is itself a direct media URL.
         // The runner already normalises this, but keep a fallback for gateways that
         // return `url` empty with `parse=0`.
         let resolvedURL: String
         if rawURL.isEmpty {
-            if parse == 0, jx == 0, Self.isDirectMedia(episode.playID) {
+            // 网盘/聚合源的播放地址常在 url 以外的字段。先把整个响应扫一遍，
+            // 再退回 episode 自带的直链；都拿不到才报错，并留下诊断线索。
+            let recovered = Self.recoverPlayerURL(from: object)
+            if !recovered.isEmpty {
+                resolvedURL = recovered
+            } else if parse == 0, jx == 0, Self.isDirectMedia(episode.playID) {
                 resolvedURL = episode.playID
             } else {
+                // 只记键名和 parse 标记，不记值（值里可能有 share token）。
+                let keys = object.keys.sorted().joined(separator: ",")
+                AppLogger.error("[CatVod] player empty url site=\(site.key) parse=\(parse) jx=\(jx) keys=[\(keys)] qualityOptions=\(qualityChoices.count)", level: .error)
                 throw CatVodError.emptyPlayerURL
             }
         } else {
@@ -561,6 +573,33 @@ final class CatVodService {
     private static func firstURL(_ value: Any?) -> String {
         if let s = value as? String { return s }
         if let arr = value as? [String] { return arr.first(where: { !$0.isEmpty }) ?? "" }
+        // TVBox 各家 spider 的 player 返回字段不统一：`url` 有时是
+        // `{url, playUrl, links}` 的字典，或嵌在 `data` 里。结果网关拿到的
+        // `url` 是空串，App 就抛「没有可播放地址」，表现是网盘线路点了没反应。
+        if let dict = value as? [String: Any] {
+            for key in ["url", "playUrl", "play_url", "m3u8", "link", "links"] {
+                let found = firstURL(dict[key])
+                if !found.isEmpty { return found }
+            }
+        }
+        return ""
+    }
+
+    /// player 返回空 url 时，从整个响应里再找一遍可播地址。网盘/聚合源的字段
+    /// 位置和普通源不同，不能只看 `url` 一个键就判死。键名做白名单，避免把
+    /// `header`/`danmaku` 之类误当成地址。
+    private static func recoverPlayerURL(from object: [String: Any]) -> String {
+        let keys = ["url", "playUrl", "play_url", "m3u8", "link", "links", "vod_play_url"]
+        for key in keys {
+            let found = firstURL(object[key])
+            if found.hasPrefix("http://") || found.hasPrefix("https://") { return found }
+        }
+        if let data = object["data"] as? [String: Any] {
+            for key in keys {
+                let found = firstURL(data[key])
+                if found.hasPrefix("http://") || found.hasPrefix("https://") { return found }
+            }
+        }
         return ""
     }
 
