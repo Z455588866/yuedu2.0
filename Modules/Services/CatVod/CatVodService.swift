@@ -390,6 +390,11 @@ final class CatVodService {
         let parse = Self.flexibleInt(object["parse"])
         let jx = Self.flexibleInt(object["jx"])
         let rawURL = Self.firstURL(object["url"])
+        // 网盘线路会带清晰度与降级说明：哪些档位真的能播、当前用的是哪一档。
+        // 以前这两个字段被丢掉，用户只能看到「画面很糊」却没有任何解释。
+        let playbackNotice = object["playbackNotice"] as? String
+        let qualityName = object["quality"] as? String
+        let qualityChoices = Self.qualityOptions(object["qualityOptions"])
 
         // A spider may hand back an episode id that is itself a direct media URL.
         // The runner already normalises this, but keep a fallback for gateways that
@@ -412,7 +417,8 @@ final class CatVodService {
         if parse == 1 || jx == 1 || resolvedURL.hasPrefix("parse:")
             || resolvedURL.hasPrefix("json:") {
             if let sniffed = await Self.sniffPlaybackPage(resolvedURL, headers: headers) {
-                return Self.proxiedPlayback(url: sniffed, headers: headers, bundleURL: bundleURL)
+                return Self.proxiedPlayback(url: sniffed, headers: headers, bundleURL: bundleURL,
+                                            notice: playbackNotice)
             }
             throw CatVodError.parseUnsupported
         }
@@ -444,7 +450,9 @@ final class CatVodService {
            let scheme = finalURL.scheme, let host = finalURL.host {
             finalHeaders["Referer"] = "\(scheme)://\(host)/"
         }
-        return Self.proxiedPlayback(url: finalURL, headers: finalHeaders, bundleURL: bundleURL)
+        return Self.proxiedPlayback(url: finalURL, headers: finalHeaders, bundleURL: bundleURL,
+                                    quality: qualityName, options: qualityChoices,
+                                    notice: playbackNotice)
     }
 
     /// Single place that hands a stream to the player.
@@ -456,12 +464,48 @@ final class CatVodService {
     /// (engine not up) the raw URL still plays, so behaviour degrades instead of
     /// breaking.
     private static func proxiedPlayback(url: URL, headers: [String: String],
-                                        bundleURL: String) -> CatVodPlayback {
+                                        bundleURL: String,
+                                        quality: String? = nil,
+                                        options: [CatVodQualityOption] = [],
+                                        notice: String? = nil) -> CatVodPlayback {
+        // 每一档都要走同一个代理：转码地址同样校验 Referer/Cookie，直接把原始
+        // CDN 地址交给 AVPlayer 会 403。代理不可用时退回原地址。
+        let proxiedOptions: [CatVodQualityOption] = options.map { option in
+            var copy = option
+            if let raw = URL(string: option.url),
+               let proxied = CatVodGateway.shared.playbackProxyURL(for: raw, bundleURL: bundleURL,
+                                                                   headers: headers) {
+                copy.url = proxied.absoluteString
+            }
+            return copy
+        }
         if let proxied = CatVodGateway.shared.playbackProxyURL(for: url, bundleURL: bundleURL,
                                                                headers: headers) {
-            return CatVodPlayback(parse: 0, url: proxied.absoluteString, header: [:])
+            return CatVodPlayback(parse: 0, url: proxied.absoluteString, header: [:],
+                                  quality: quality,
+                                  qualityOptions: proxiedOptions.isEmpty ? nil : proxiedOptions,
+                                  playbackNotice: notice)
         }
-        return CatVodPlayback(parse: 0, url: url.absoluteString, header: headers)
+        return CatVodPlayback(parse: 0, url: url.absoluteString, header: headers,
+                              quality: quality,
+                              qualityOptions: proxiedOptions.isEmpty ? nil : proxiedOptions,
+                              playbackNotice: notice)
+    }
+
+    /// 网关的清晰度列表解码成模型；字段缺失或类型异常时返回空表而不是抛错——
+    /// 播放地址才是必需项，清晰度只是附加信息。
+    private static func qualityOptions(_ value: Any?) -> [CatVodQualityOption] {
+        guard let list = value as? [[String: Any]] else { return [] }
+        return list.compactMap { entry in
+            guard let name = entry["name"] as? String, !name.isEmpty,
+                  let url = entry["url"] as? String, !url.isEmpty else { return nil }
+            return CatVodQualityOption(
+                name: name,
+                url: url,
+                width: Self.flexibleInt(entry["width"]),
+                height: Self.flexibleInt(entry["height"]),
+                bitrate: Self.flexibleInt(entry["bitrate"]))
+        }
     }
 
     private static func firstURL(_ value: Any?) -> String {
@@ -510,12 +554,51 @@ final class CatVodService {
         )
     }
 
-    // MARK: - Low level
+    // MARK: - Cookie 池
+
+    /// bundle -> 上次灌 cookie 的时间。刷得太勤等于每个请求都多一次 IPC，
+    /// 5 分钟一次足够覆盖「用户在浏览器里刚登录完就回来播放」这条路径。
+    private var cookieSeededAt: [String: Date] = [:]
+    private let cookieSeedingLock = NSLock()
+
+    private func shouldSeedCookies(_ bundleURL: String) -> Bool {
+        cookieSeedingLock.lock()
+        defer { cookieSeedingLock.unlock() }
+        let now = Date()
+        if let last = cookieSeededAt[bundleURL], now.timeIntervalSince(last) < 300 { return false }
+        cookieSeededAt[bundleURL] = now
+        return true
+    }
+
+    /// 把 WKWebView 的 cookie 交给 bundle 的 Cookie 池。
+    ///
+    /// 只按 domain 传，不按 url：WKWebView 里 `pan.quark.cn` 的 cookie 属于
+    /// `.quark.cn`，按 url 存会变成 host-only，spider 访问 `drive-pc.quark.cn`
+    /// 时又拿不到——正是「登录过但取链说没登录」的成因。
+    private func seedCookies(bundleURL: String) async {
+        let cookies = await WebViewCookieMirror.shared.allCookies()
+        guard !cookies.isEmpty else { return }
+        // 只传还没过期的，并限个数：整个 WKWebView jar 可能有几千条，灌给
+        // 一个 bundle 既慢也没意义。
+        let now = Date()
+        let items: [[String: String]] = cookies.prefix(200).compactMap { cookie in
+            guard !cookie.name.isEmpty, !cookie.domain.isEmpty,
+                  cookie.expiresDate.map({ $0 > now }) ?? true else { return nil }
+            return ["domain": cookie.domain, "cookie": "\(cookie.name)=\(cookie.value)"]
+        }
+        guard !items.isEmpty else { return }
+        await CatVodGateway.shared.pushCookies(bundleURL: bundleURL, items: items)
+    }
 
     private func invoke(bundleURL: String, site: CatVodSite, action: String,
                         arguments: [String: Any],
                         timeout: TimeInterval = 150) async throws -> [String: Any] {
         let base = try await CatVodGateway.shared.ensureStarted(allowedBundleURL: bundleURL)
+        // WebView 里登录/过挑战拿到的 cookie，先灌进 bundle 的 Cookie 池，
+        // 否则同一个站点在浏览器里是登录态、在 spider 里是游客态。
+        if shouldSeedCookies(bundleURL) {
+            await seedCookies(bundleURL: bundleURL)
+        }
         let endpoint = base.appendingPathComponent("/v1/spider/invoke")
         let body: [String: Any] = [
             "version": 1,

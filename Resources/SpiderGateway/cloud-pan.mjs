@@ -369,7 +369,18 @@ export async function playQuarkSourceEpisode(file, credentials, fetchValue, orig
     if (!metadata) throw new Error(`${service.name}分享中没有找到该剧集，请重新打开资源详情`);
     const verifiedFile = { ...file, ...metadata };
     const savedFileId = await cachedQuarkSourceFile(verifiedFile, resource, credentials, fetchValue, service);
-    if (!originalFile) return quarkPlaybackForSavedFile(savedFileId, credentials, fetchValue, service);
+    // 原画（file/download）只对 avplayable 容器有意义：AVPlayer 不认 mkv/avi/flv，
+    // 就算取到直链也是黑屏，还会白白多打一次接口。旧实现在这里先撞原画、失败
+    // 再降级，非会员等于每次播放都多等一个 400。
+    const container = String(verifiedFile.fileName || "").split(".").pop().toLowerCase();
+    const originalPlayable = ["mp4", "m4v", "mov"].includes(container);
+    if (!originalFile || !originalPlayable) {
+      const plan = await quarkPlaybackForSavedFile(savedFileId, credentials, fetchValue, service);
+      if (originalFile && !originalPlayable) {
+        return { ...plan, playbackNotice: `${service.key}-transcoded-container` };
+      }
+      return plan;
+    }
     try {
       const body = await quarkJSON(`file/download?${service.query}`, {
         body: { fids: [savedFileId] }, credentials, fetchValue, service
@@ -381,7 +392,7 @@ export async function playQuarkSourceEpisode(file, credentials, fetchValue, orig
       if (url.protocol !== "https:" || url.username || url.password) {
         throw new Error(`${service.name}原画地址无效`);
       }
-      return { parse: 0, jx: 0, url: url.toString(),
+      return { parse: 0, jx: 0, url: url.toString(), quality: "原画",
         header: quarkPlaybackHeaders(service, url.toString(), cookie) };
     } catch (error) {
       if (error?.code !== "CLOUD_ORIGINAL_SIZE_LIMIT") throw error;
@@ -605,31 +616,41 @@ async function quarkPlaybackForSavedFile(savedFileId, credentials, fetchValue,
     ["normal", "标清"],
     ["low", "流畅"]
   ]);
-  const qualityVideos = [...qualityNames.keys()]
-    .map((resolution) => videos.find(
-      (video) => String(video?.resolution || "").toLowerCase() === resolution
-        && video?.video_info?.url
-    ))
-    .filter(Boolean);
-  const knownURLs = new Set(qualityVideos.map((video) => video.video_info.url));
-  qualityVideos.push(...videos.filter(
-    (video) => video?.video_info?.url && !knownURLs.has(video.video_info.url)
-  ));
-  const selected = qualityVideos[0];
+  // 只有拿到 `video_info.url` 的档位才真的能播。会员限制、转码未完成（
+  // `accessable:false` / `trans_status` 未成功）都只表现在这里——按会员等级
+  // 挑「最高可用」，而不是按顺序撞第一个。
+  const playable = videos.filter((video) => video?.video_info?.url);
+  const heightOf = (video) => Number(video?.video_info?.height || video?.video_info?.width || 0);
+  playable.sort((lhs, rhs) => heightOf(rhs) - heightOf(lhs));
+  const labelFor = (video, index) => {
+    const height = heightOf(video);
+    // 用真实分辨率标 1080P/720P，比「超清/高清」这类主观档位名更能说明画质，
+    // 也是用户看到「为什么这么糊」时唯一能对上号的信息。
+    if (height >= 2000) return "4K";
+    if (height >= 1000) return "1080P";
+    if (height >= 700) return "720P";
+    if (height >= 500) return "480P";
+    if (height >= 300) return "360P";
+    const resolution = String(video?.resolution || "").toLowerCase();
+    return qualityNames.get(resolution) || (height > 0 ? `${height}P` : `线路${index + 1}`);
+  };
+  const selected = playable[0];
   const playbackURL = selected?.video_info?.url;
   if (!playbackURL) throw new Error(`${service.name}网盘没有返回可播放地址，请检查 Cookie 是否已失效`);
+  const qualityOptions = playable.map((video, index) => ({
+    name: labelFor(video, index),
+    width: Number(video?.video_info?.width || 0),
+    height: heightOf(video),
+    bitrate: Number(video?.video_info?.bitrate || 0),
+    url: video.video_info.url
+  }));
   return {
     parse: 0,
     jx: 0,
     url: playbackURL,
+    quality: qualityOptions[0]?.name || "",
     header: quarkPlaybackHeaders(service, playbackURL, credentials[service.cookieField]),
-    qualityOptions: qualityVideos.map((video, index) => {
-      const resolution = String(video?.resolution || "").toLowerCase();
-      return {
-        name: qualityNames.get(resolution) || `线路${index + 1}`,
-        url: video.video_info.url
-      };
-    })
+    qualityOptions
   };
 }
 

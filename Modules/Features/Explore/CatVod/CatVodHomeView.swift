@@ -70,6 +70,8 @@ struct CatVodHomeView: View {
     @State private var activeSearchTerm: String?
     /// 详情页里最近点开播放的那一集，返回详情时高亮它。
     @State private var lastPlayedEpisodeID: String?
+    /// 有多档清晰度时先让用户选一次；nil 表示没有待选。
+    @State private var qualityPrompt: QualityPrompt?
 
     /// 渲染用的启用源快照。和设置页同样的理由：不把「导入后上面能不能看见」
     /// 押在 SwiftUI 对 @Observable 的自动追踪上，改为显式同步。
@@ -1198,10 +1200,29 @@ struct CatVodHomeView: View {
                 }
                 return
             }
+            // 网盘线路会给出多档清晰度（会员权限决定哪几档能播）。有多档就先问
+            // 一次，只有一档就直接播——非会员常常只有一档，多问一次纯属打扰。
+            if let options = resolved.qualityOptions, options.count > 1 {
+                await MainActor.run {
+                    qualityPrompt = QualityPrompt(title: "\(title) · \(episode.title)",
+                                                  episodeID: episode.id,
+                                                  options: options,
+                                                  headers: resolved.header ?? [:])
+                    isResolvingPlayback = false
+                    playingEpisodeID = nil
+                }
+                return
+            }
             await MainActor.run {
                 lastPlayedEpisodeID = episode.id
+                // 「画面为什么这么糊」必须有答案：网盘把原画/高清掐掉时，网关会
+                // 带回降级原因，这里翻成一句人话，跟着播放一起显示。
+                if let notice = resolved.playbackNotice {
+                    message = Self.playbackNoticeText(notice, quality: resolved.quality)
+                }
                 CatVodPlayerPresenter.present(url: target, headers: resolved.header ?? [:],
-                                              title: "\(title) · \(episode.title)")
+                                              title: QualityPrompt.displayTitle("\(title) · \(episode.title)",
+                                                                                quality: resolved.quality))
                 isResolvingPlayback = false
                 playingEpisodeID = nil
             }
@@ -1442,6 +1463,26 @@ struct CatVodHomeView: View {
             }
             .themedAppSurface(for: .explore)
         }
+        .confirmationDialog(
+            qualityPrompt?.title ?? localized("选择清晰度"),
+            isPresented: Binding(get: { qualityPrompt != nil },
+                                 set: { if !$0 { qualityPrompt = nil } }),
+            titleVisibility: .visible
+        ) {
+            if let prompt = qualityPrompt {
+                ForEach(prompt.options) { option in
+                    Button(option.name) {
+                        lastPlayedEpisodeID = prompt.episodeID
+                        CatVodPlayerPresenter.present(
+                            url: URL(string: option.url) ?? URL(string: "about:blank")!,
+                            headers: prompt.headers,
+                            title: QualityPrompt.displayTitle(prompt.title, quality: option.name))
+                        qualityPrompt = nil
+                    }
+                }
+            }
+            Button(localized("取消"), role: .cancel) { qualityPrompt = nil }
+        }
         // 这个弹层的主要任务是「选集」，半屏高度里放一行海报头 + 半截集数网格，
         // 每次都得往上拖一把才能点集。直接给整页。
         .presentationDetents([.large])
@@ -1551,5 +1592,35 @@ private struct CatVodGridSkeleton: View {
         }
         .padding(.horizontal)
         .accessibilityHidden(true)
+    }
+}
+
+
+/// 多档清晰度的待选状态。只在这一个页面用，放文件末尾避免污染模块命名空间。
+private struct QualityPrompt: Identifiable {
+    let id = UUID()
+    let title: String
+    let episodeID: String
+    let options: [CatVodQualityOption]
+    let headers: [String: String]
+
+    /// 播放器标题后面缀上当前清晰度——用户不必去猜「这一版是几 P」。
+    static func displayTitle(_ base: String, quality: String?) -> String {
+        guard let quality, !quality.isEmpty else { return base }
+        return "\(base) · \(quality)"
+    }
+}
+
+extension CatVodHomeView {
+    /// 网关的降级原因 → 一句人话。返回 nil 表示没有需要解释的事。
+    static func playbackNoticeText(_ notice: String, quality: String?) -> String? {
+        let label = quality.map { "（\($0)）" } ?? ""
+        if notice.hasSuffix("-original-size-limit") {
+            return String(format: localized("这个网盘账号取不到原画，已自动切到转码%@。原画需要该网盘的会员。"), label)
+        }
+        if notice.hasSuffix("-transcoded-container") {
+            return String(format: localized("这个文件是 MKV/AVI 容器，播放器只吃 MP4，已自动转码%@。"), label)
+        }
+        return String(format: localized("这条线路已自动切换到可播放的版本%@。"), label)
     }
 }

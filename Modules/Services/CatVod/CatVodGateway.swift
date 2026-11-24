@@ -162,6 +162,36 @@ final class CatVodGateway {
         return components.url
     }
 
+    /// 把 App 内 WebView 的登录态灌进这个 bundle 的 Cookie 池。
+    ///
+    /// Android 侧是 OkHttp 的全局 CookieJar：用户在 WebView 里登录/过完挑战，
+    /// 之后 spider 的每一个请求自动带上。iOS 没有这层，插件就等于每次都从
+    /// 游客态起步，于是「明明登录过了」仍然 403/缺少凭证。这里补的就是那一层。
+    @discardableResult
+    func pushCookies(bundleURL: String, items: [[String: String]]) async -> Int {
+        guard !items.isEmpty else { return 0 }
+        guard let base = baseURL ?? YueduNodeRuntime.listeningURL().flatMap(URL.init(string:)) else {
+            return 0
+        }
+        var request = URLRequest(url: base.appendingPathComponent("v1/cookies"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(authenticationToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 8
+        let body: [String: Any] = ["bundle": bundleURL, "items": items]
+        guard let payload = try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]) else {
+            return 0
+        }
+        request.httpBody = payload
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let raw = try? JSONSerialization.jsonObject(with: data),
+              let object = raw as? [String: Any] else {
+            return 0
+        }
+        return object["imported"] as? Int ?? 0
+    }
+
     /// Mirrors `playbackMediaKey` in `playback-proxy.mjs`: the media route cannot
     /// carry an Authorization header, so it accepts this derived value instead.
     private static func mediaKey(for token: String) -> String {

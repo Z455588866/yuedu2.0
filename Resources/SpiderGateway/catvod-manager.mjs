@@ -192,6 +192,8 @@ export class CatVodManager {
     );
     this.sweeper = setInterval(() => this.sweep(), Math.min(this.idleMs, 5_000));
     this.sweeper.unref();
+    /// bundle digest -> 还没送进进程的 cookie 列表（会话未启动时先存着）。
+    this.pendingCookies = new Map();
   }
 
   async catalog(artifact) {
@@ -210,6 +212,27 @@ export class CatVodManager {
     session.lastUsedAt = Date.now();
     const port = await session.waitForLoopback();
     return `http://127.0.0.1:${port}`;
+  }
+
+  /// 把宿主（WKWebView / 已登录账号）的 cookie 灌进这个 bundle 的 Cookie 池。
+  ///
+  /// 只灌给已经活着的会话：没有会话就没有进程内存可写，下次 spawn 时会由
+  /// `CATVOD_COOKIES` 环境变量带进去（见 #create），所以冷启动也不会丢。
+  async setCookies(artifact, items) {
+    const list = Array.isArray(items) ? items : [];
+    if (list.length === 0) return 0;
+    const session = this.sessions.get(artifact.digest);
+    if (!session || session.closed) {
+      this.pendingCookies.set(artifact.digest, list);
+      return 0;
+    }
+    try {
+      const result = await session.request({ type: "cookies", items: list }, 10_000);
+      return Number(result?.imported || 0);
+    } catch {
+      // A cookie push must never fail a playback; the jar simply stays as it was.
+      return 0;
+    }
   }
 
   async invoke(artifact, site, action, argumentsValue) {
@@ -321,6 +344,13 @@ export class CatVodManager {
         throw new GatewayError("CATVOD_STOPPED", "CatVod manager is stopped", 503);
       }
       this.sessions.set(artifact.digest, session);
+      // Cookie 可能在会话还没起来时就被推进来（例如 App 冷启动先把 WebView
+      // 的登录态灌进来）；会话起来后补一次，免得第一轮请求还是游客。
+      const queued = this.pendingCookies.get(artifact.digest);
+      if (queued && queued.length > 0) {
+        this.pendingCookies.delete(artifact.digest);
+        session.request({ type: "cookies", items: queued }, 10_000).catch(() => {});
+      }
       return session;
     } catch (error) {
       session.close();

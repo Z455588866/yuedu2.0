@@ -229,14 +229,32 @@ enum CatVodNetdiskEpisode {
     }
 }
 
+/// 一条可播的清晰度。网盘转码会给多档（4K/1080P/…），但只有会员权限内的档位
+/// 带真实地址，所以这份列表本身就是「你现在到底能看多清楚」的答案。
+struct CatVodQualityOption: Decodable, Sendable, Hashable, Identifiable {
+    var name: String
+    var url: String
+    var width: Int?
+    var height: Int?
+    var bitrate: Int?
+
+    var id: String { "\(name)@\(url)" }
+}
+
 /// Result of a `player` invocation.
 struct CatVodPlayback: Decodable, Sendable {
     var parse: Int?
     var url: String?
     var header: [String: String]?
+    /// 当前选用档位的名字（"1080P"、"流畅"、"原画"）。
+    var quality: String? = nil
+    /// 这条线路所有能播的档位，按清晰度从高到低。只有一个时不必给用户选。
+    var qualityOptions: [CatVodQualityOption]? = nil
+    /// 网关给出的降级说明（`quark-original-size-limit` 等），由界面翻成人话。
+    var playbackNotice: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case parse, url, header
+        case parse, url, header, quality, qualityOptions, playbackNotice
     }
 }
 

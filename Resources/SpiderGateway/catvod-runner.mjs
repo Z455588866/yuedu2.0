@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { readBoundedText } from "./bounded-response.mjs";
 import { installFetch, installReq } from "./fetch-polyfill.mjs";
 import { installTVBoxGlobals } from "./catvod-globals.mjs";
+import { sharedCookies } from "./cookie-jar.mjs";
 import { startParentWatchdog } from "./process-lifecycle.mjs";
 
 // nodejs-mobile has no global `fetch`. Bundles target Electron (Node 18+), so
@@ -679,6 +680,11 @@ export async function runCatVod(bundlePath, options = {}) {
         throw new Error("Unsupported runner method");
       }
       return await inject(method, route, message.payload);
+    }
+    if (message.type === "cookies") {
+      // 宿主把 WKWebView 里的登录态灌进来（等价于 OkHttp 的全局 CookieJar）。
+      // 插件后续的每一次 fetch 都会自动带上，不必自己拼 Cookie。
+      return { imported: sharedCookies.import(message.items), total: sharedCookies.size };
     }
     if (message.type === "catalog") {
       const config = await inject("get", "/config");

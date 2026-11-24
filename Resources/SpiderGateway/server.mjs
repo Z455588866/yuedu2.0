@@ -228,7 +228,7 @@ export function createGateway(config, dependencies = {}) {
         });
         return;
       }
-      if (request.method !== "POST" || !["/v1/spider/invoke", "/v1/catvod/catalog"].includes(url.pathname)) {
+      if (request.method !== "POST" || !["/v1/spider/invoke", "/v1/catvod/catalog", "/v1/cookies"].includes(url.pathname)) {
         throw new GatewayError("NOT_FOUND", "Route not found", 404);
       }
       if (!tokenMatches(request.headers.authorization, config.token)) {
@@ -236,6 +236,17 @@ export function createGateway(config, dependencies = {}) {
       }
 
       const body = await readJSON(request, config.requestBodyMaxBytes);
+      if (url.pathname === "/v1/cookies") {
+        // Swift 侧把 WKWebView 的登录态推给 bundle 的 Cookie 池（等价于 OkHttp
+        // CookieJar）。只接受当前配置里出现过的 bundle，避免被当成任意代码入口。
+        const bundle = String(body?.bundle || "").trim();
+        const items = Array.isArray(body?.items) ? body.items.slice(0, 300) : [];
+        if (!bundle) throw new GatewayError("INVALID_COOKIES", "bundle is required", 400);
+        const artifact = await nodeBundleCache.resolve(bundle);
+        const imported = await catVod.setCookies(artifact, items);
+        sendJSON(response, 200, { imported });
+        return;
+      }
       if (url.pathname === "/v1/catvod/catalog") {
         const catalog = validateCatalogRequest(body);
         const artifact = await nodeBundleCache.resolve(catalog.bundle);

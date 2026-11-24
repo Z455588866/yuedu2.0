@@ -38,6 +38,15 @@ final class WebViewCookieMirror: @unchecked Sendable {
         return mirroredCookies(for: host) ?? []
     }
 
+    /// 整个 jar 的快照。给「把浏览器登录态灌给非 WebView 的网络层」用
+    /// （CatVod 的 Node 网关就是这样共用一份 cookie 的）。
+    func allCookies() async -> [HTTPCookie] {
+        await primeIfNeeded()
+        lock.lock()
+        defer { lock.unlock() }
+        return isPrimed ? snapshot : []
+    }
+
     /// Mirror lookup. `nil` means "not primed yet" — distinct from "primed, and this
     /// host has no cookies", so a cold-launch caller knows to prime instead of
     /// silently sending no Cookie header (which turns an authenticated source into

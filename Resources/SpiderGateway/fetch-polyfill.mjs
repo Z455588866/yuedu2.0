@@ -2,6 +2,7 @@ import http from "node:http";
 import https from "node:https";
 import zlib from "node:zlib";
 import { appendFileSync } from "node:fs";
+import { sharedCookies } from "./cookie-jar.mjs";
 
 /// Minimal `fetch` for CatVod bundles.
 ///
@@ -254,9 +255,17 @@ async function fetchValue(input, init = {}) {
   }
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    // 宿主 Cookie 池：bundle 没自己指定时带上该域已存的 cookie，等价于 OkHttp
+    // 的 CookieJar。站点在前一跳 Set-Cookie、下一跳（含 302 之后）要用，这是
+    // 「登录过但还是 403/缺少凭证」最常见的成因。
+    if (!headers.has("cookie")) {
+      const jarred = sharedCookies.cookieHeaderFor(url);
+      if (jarred) headers.set("cookie", jarred);
+    }
     const response = await requestOnce(url, {
       method, headers, body, timeout, signal: request.signal
     });
+    sharedCookies.absorb(url, response.headers);
     const location = response.headers.get("location");
     const redirecting = [301, 302, 303, 307, 308].includes(response.status);
     if (!redirecting || !location || redirectMode === "manual") {
