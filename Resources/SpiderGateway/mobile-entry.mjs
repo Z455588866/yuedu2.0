@@ -47,6 +47,9 @@ export async function startMobileGateway(bridge, dependencies = {}) {
       nodeBundleCache.allowHTTP = current.nodeBundleAllowedURLs.some(url => url.startsWith('http://'));
       config.cloudConfig = current.cloudConfig || {};
       config.token = current.token;
+      // Python 是后台启动的，往往比网关晚几秒就绪；端口到了这里才算生效，
+      // 否则新端口要等到下次冷启动才被读到。
+      config.pythonSpiderPort = current.pythonSpiderPort || undefined;
     }
   });
   const address = await gateway.listen();
@@ -56,5 +59,12 @@ export async function startMobileGateway(bridge, dependencies = {}) {
 
 if (process.argv[1]?.endsWith('/mobile-entry.mjs')) {
   const bridge = process._linkedBinding('yuedu_mobile');
-  startMobileGateway(bridge).catch(() => bridge.failed());
+  // 启动失败必须把原因带出去。原来只调 `bridge.failed()`，Swift 侧拿不到
+  // startupError，只能干等到 20 秒超时，界面上就变成「引擎启动超时」——
+  // 真实原因（比如配置校验失败）被彻底吞掉，排查只能靠猜。
+  startMobileGateway(bridge).catch((error) => {
+    const reason = String(error?.message ?? error ?? 'unknown error');
+    console.error('gateway startup failed:', reason);
+    try { bridge.failed(reason); } catch { bridge.failed(); }
+  });
 }

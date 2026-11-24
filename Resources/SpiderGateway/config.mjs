@@ -73,7 +73,15 @@ export function loadConfig(overrides = {}) {
     throw new Error("CatVod checksum redirect setting must be a boolean");
   }
 
-  const pythonSpiderPort = overrides.pythonSpiderPort;
+  // 0 是 Swift 侧"Python 还没起来 / 这次不启用"的约定值，不是端口。
+  // 早先把它当端口校验会直接抛错，导致网关整个起不来（启动超时）；
+  // 这里先归一成 undefined，再对真实端口做范围检查。
+  const requestedPythonPort = overrides.pythonSpiderPort;
+  const pythonSpiderPort = (requestedPythonPort === undefined
+    || requestedPythonPort === null
+    || requestedPythonPort === 0)
+    ? undefined
+    : requestedPythonPort;
   if (pythonSpiderPort !== undefined
     && (!Number.isInteger(pythonSpiderPort) || pythonSpiderPort < 1 || pythonSpiderPort > 65535)) {
     throw new Error("Python spider port must be an integer between 1 and 65535");

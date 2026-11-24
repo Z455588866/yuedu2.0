@@ -138,7 +138,16 @@ final class CatVodGateway {
         activeAllowedURLs = replacingAllowlist ? requested : activeAllowedURLs.union(requested)
         try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
 
-        await startPythonRuntimeIfNeeded()
+        // Python 与 Node 互不阻塞：Python 慢或挂住，代价只能是"少几个 .py 源"，
+        // 不该把整个网关拖到 20 秒超时（那样连 JS 源一起用不了）。
+        // 先在后台起它，起来了再把端口推给已经跑着的引擎。
+        Task { [weak self] in
+            guard let self else { return }
+            await self.startPythonRuntimeIfNeeded()
+            guard self.pythonSpiderPort > 0, let json = try? self.configurationJSON() else { return }
+            YueduNodeRuntime.updateConfiguration(json)
+        }
+
         let json = try configurationJSON()
 
         YueduNodeRuntime.start(script: entryPoint.path,
