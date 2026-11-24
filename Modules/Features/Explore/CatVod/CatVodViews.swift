@@ -5,7 +5,14 @@ import UniformTypeIdentifiers
 /// Pushed from 模组 → 猫源: the user's imported CatVod interfaces. Nothing is built in; the list
 /// fills only by import (file / clipboard). Mirrors `DanmakuSourceSettingsView` in layout.
 struct CatVodSourceSettingsView: View {
-    @State private var store = CatVodSourceStore.shared
+    @ObservedObject private var store = CatVodSourceStore.shared
+    /// 渲染用快照，唯一真相仍在上面的 store。
+    ///
+    /// 直接 `ForEach(store.sources)` 依赖 SwiftUI 对 @Observable 的自动追踪；一旦
+    /// 某次赋值没被登记（跨隔离域写入、List 复用等），表现就是「提示已导入 N 个、
+    /// 列表一行不变」，重进页面才对。这里改成显式同步，导入/删除后立刻重算，
+    /// 不把正确性押在追踪机制上。
+    @State private var rows: [CatVodSource] = []
     @State private var showsImporter = false
     @State private var showsPaste = false
     @State private var pasteText = ""
@@ -15,7 +22,7 @@ struct CatVodSourceSettingsView: View {
 
     var body: some View {
         List {
-            if store.sources.isEmpty {
+            if rows.isEmpty {
                 Section {
                     VStack(spacing: 10) {
                         Image(systemName: "tv.and.hifispeaker.fill")
@@ -55,7 +62,7 @@ struct CatVodSourceSettingsView: View {
             }
 
             Section {
-                ForEach(store.sources) { source in
+                ForEach(rows) { source in
                     HStack(spacing: 12) {
                         Toggle(isOn: Binding(
                             get: { source.enabled },
@@ -124,9 +131,10 @@ struct CatVodSourceSettingsView: View {
                 } label: {
                     Label(localized("从剪贴板导入"), systemImage: "doc.on.clipboard")
                 }
-                if !store.sources.isEmpty {
+                if !rows.isEmpty {
                     Button(role: .destructive) {
                         store.removeAll()
+                        rows = store.sources
                         importMessage = localized("已清空猫源")
                     } label: {
                         Label(localized("清空猫源"), systemImage: "trash")
@@ -144,6 +152,9 @@ struct CatVodSourceSettingsView: View {
             }
         }
         .softScrollEdges()
+        .task { rows = store.sources }
+        // 兜底：其它入口（文件导入、猫元页、改名弹窗）改了 store 时也让列表跟上。
+        .onChange(of: store.sources) { _, next in rows = next }
         .navigationTitle(localized("猫源"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -184,6 +195,7 @@ struct CatVodSourceSettingsView: View {
                     let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !name.isEmpty { store.rename(id: source.id, to: name) }
                 }
+                rows = store.sources
                 renamingSource = nil
             }
         }
@@ -193,6 +205,7 @@ struct CatVodSourceSettingsView: View {
         let before = Set(store.sources.map(\.id))
         do {
             let result = try store.import(data)
+            rows = store.sources
             let total = store.sources.count
             if result.added == 0, result.updated > 0 {
                 // 点名是「哪几行」。只说「已导入 1 个」而列表不动，人只会得出
@@ -222,10 +235,11 @@ struct CatVodSourceSettingsView: View {
     }
 
     private func delete(at offsets: IndexSet) {
-        for index in offsets.reversed() {
-            guard index < store.sources.count else { continue }
-            store.remove(id: store.sources[index].id)
+        for index in offsets.sorted(by: >) {
+            guard index < rows.count else { continue }
+            store.remove(id: rows[index].id)
         }
+        rows = store.sources
     }
 
     private var pasteSheet: some View {

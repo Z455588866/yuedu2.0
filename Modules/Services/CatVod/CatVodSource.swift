@@ -1,5 +1,5 @@
 import Foundation
-import Observation
+import Combine
 
 /// One imported CatVod node bundle (a `.js` / `.js.md5` spider interface, e.g. the
 /// "二小 / 潇洒 / 豆儿" feeds). Only the address is stored; the bundle itself is downloaded,
@@ -71,7 +71,8 @@ struct CatVodSource: Codable, Identifiable, Hashable, Sendable {
         let raw = url.trimmingCharacters(in: .whitespacesAndNewlines)
         // Unwrap a mirror: the real address is everything from the second scheme on.
         var target = raw
-        if let second = raw.range(of: "https?://", options: .regularExpression,
+        if raw.count > 1,
+           let second = raw.range(of: "https?://", options: .regularExpression,
                                   range: raw.index(after: raw.startIndex)..<raw.endIndex) {
             target = String(raw[second.lowerBound...])
         }
@@ -108,15 +109,19 @@ struct CatVodSource: Codable, Identifiable, Hashable, Sendable {
 }
 
 /// Persists the user's CatVod sources. Mirrors `DanmakuSourceStore`: empty by default,
-/// import merges by id, same UserDefaults-backed `@Observable` pattern.
+/// import merges by id, UserDefaults-backed.
+///
+/// 用 `ObservableObject` 而不是 `@Observable`：这条链路上「导入成功但界面不刷新」
+/// 是实际发生过的故障（设置页提示已导入、列表一行不变），而 `ObservableObject` +
+/// `@Published` + `@ObservedObject` 是 SwiftUI 里最保守、不会漏通知的组合。
+/// 列表正确性不押在宏的自动追踪上。
 @MainActor
-@Observable
-final class CatVodSourceStore {
+final class CatVodSourceStore: ObservableObject {
     static let shared = CatVodSourceStore()
 
     private static let storageKey = "yd_catvod_sources"
 
-    private(set) var sources: [CatVodSource]
+    @Published private(set) var sources: [CatVodSource]
 
     private let defaults: UserDefaults
 

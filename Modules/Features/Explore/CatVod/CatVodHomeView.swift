@@ -8,7 +8,7 @@ struct CatVodHomeRoute: Hashable {}
 /// The "猫元" page: picks an imported interface + one of its sites, then browses categories,
 /// search and detail in a poster grid, reusing the app's full-screen player for playback.
 struct CatVodHomeView: View {
-    @State private var store = CatVodSourceStore.shared
+    @ObservedObject private var store = CatVodSourceStore.shared
     @State private var selectedSourceID: String?
     @State private var sites: [CatVodSite] = []
     @State private var selectedSite: CatVodSite?
@@ -71,7 +71,11 @@ struct CatVodHomeView: View {
     /// 详情页里最近点开播放的那一集，返回详情时高亮它。
     @State private var lastPlayedEpisodeID: String?
 
-    private var sources: [CatVodSource] { store.enabledSources }
+    /// 渲染用的启用源快照。和设置页同样的理由：不把「导入后上面能不能看见」
+    /// 押在 SwiftUI 对 @Observable 的自动追踪上，改为显式同步。
+    @State private var sourceRows: [CatVodSource] = []
+
+    private var sources: [CatVodSource] { sourceRows }
 
     private var columns: [GridItem] {
         // 上限 160：iPad 和 Plus 上铺满宽度时海报不会被拉成一条长条，
@@ -119,6 +123,7 @@ struct CatVodHomeView: View {
         .themedAppSurface(for: .explore)
         .task {
             loadSearchHistory()
+            sourceRows = store.enabledSources
             if selectedSourceID == nil { selectedSourceID = sources.first?.id }
         }
         // 从「管理猫源」导完返回时，`content` 的 task 不会重跑（视图一直在），
@@ -126,6 +131,7 @@ struct CatVodHomeView: View {
         // 「导入成功但上面什么都没有」。源列表一变就重新对齐当前接口。
         .onChange(of: store.sources) { _, list in
             let enabled = list.filter(\.enabled)
+            sourceRows = enabled
             guard !enabled.isEmpty else { return }
             if selectedSourceID == nil || !enabled.contains(where: { $0.id == selectedSourceID }) {
                 selectedSourceID = enabled.first?.id

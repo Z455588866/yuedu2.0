@@ -30,7 +30,7 @@ struct RuleModuleManagerView: View {
     @State private var subtitleStore = SubtitleStore.shared
     @State private var onlineSubtitleStore = OnlineSubtitleSourceStore.shared
     /// Imported CatVod interfaces, another category on 模组.
-    @State private var catVodSourceStore = CatVodSourceStore.shared
+    @ObservedObject private var catVodSourceStore = CatVodSourceStore.shared
     /// Once per visit: back from a repository's page, the indexes are not read again.
     @State private var hasLoaded = false
     @State private var pendingUnsubscription: RuleModuleRepositoryModel.Repository?
