@@ -146,19 +146,38 @@ enum BookshelfCoverStyle {
         sourceSize: CGSize?
     ) -> UIImage? {
         if let catalogImage { return catalogImage }
-        if let cover = book.coverUrl.flatMap({
-            BookCoverLoader.cachedImage(
-                for: $0,
-                session: BookCoverLoader.remoteSession(for: book)
+        // 首页/详情/搜索/探索等入口没有可见书卡，drawn 为 nil，走这里。
+        // 必须和书架卡片解析同一套封面：书架用 BookshelfCoverPlan.shelf →
+        // cachedArtwork（CoverImagePipeline 内存缓存，含 coverImagePath 保存的
+        // 封面与预设封面）；此前只查了 book.coverUrl 的 BookCoverLoader 缓存，
+        // 那是另一套缓存，本地封面根本查不到，动画于是退化成书名占位图。
+        let plan = BookshelfCoverPlan.shelf(for: book, colorScheme: colorScheme)
+        switch cachedArtwork(for: plan) {
+        case .bitmap(let image, _):
+            return image
+        case .catalog(let catalog):
+            // 目录封面：内存命中就用；否则按目录预设封面，再由 BookCoverImage 兜底。
+            if let cover = book.coverUrl.flatMap({
+                BookCoverLoader.cachedImage(
+                    for: $0,
+                    session: BookCoverLoader.remoteSession(for: book)
+                )
+            }) {
+                return cover
+            }
+            if let seed = catalog.defaultCoverSeed,
+               let defaultCover = DefaultCoverLibrary.cachedImage(seed: seed, colorScheme: colorScheme) {
+                return defaultCover
+            }
+            return generatedSnapshot(for: book, colorScheme: colorScheme, sourceSize: sourceSize)
+        case .pending, .generated:
+            // 封面尚未解码到内存：动画不能等，用生成封面兜底，避免灰色空卡。
+            return generatedSnapshot(
+                for: book,
+                colorScheme: colorScheme,
+                sourceSize: sourceSize
             )
-        }) {
-            return cover
         }
-        return generatedSnapshot(
-            for: book,
-            colorScheme: colorScheme,
-            sourceSize: sourceSize
-        )
     }
 
     /// Starts preparing the transition-size rendering of the bitmap the card is
