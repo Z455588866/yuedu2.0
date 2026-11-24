@@ -6,6 +6,7 @@ import SwiftUI
 struct CatVodCloudAccountView: View {
     @State private var store = CatVodCloudAccountStore.shared
     @State private var editing: CatVodCloudProvider?
+    @State private var scanning: CatVodCloudProvider?
 
     var body: some View {
         List {
@@ -18,30 +19,48 @@ struct CatVodCloudAccountView: View {
             Section {
                 ForEach(CatVodCloudProvider.allCases) { provider in
                     let credential = store.credential(for: provider)
-                    Button {
-                        editing = provider
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: provider.icon)
-                                .foregroundStyle(credential.primary.isEmpty ? DSColor.textSecondary : Color.accentColor)
-                                .frame(width: 24)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(provider.displayName)
-                                    .font(DSFont.subheadline.weight(.semibold))
-                                    .foregroundStyle(DSColor.textPrimary)
-                                Text(credential.primary.isEmpty
-                                     ? localized("未配置")
-                                     : String(format: localized("已配置 · %@"), masked(credential.primary)))
-                                    .font(DSFont.caption2)
-                                    .foregroundStyle(DSColor.textSecondary)
+                    HStack(spacing: 8) {
+                        Button {
+                            editing = provider
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: provider.icon)
+                                    .foregroundStyle(credential.primary.isEmpty ? DSColor.textSecondary : Color.accentColor)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(provider.displayName)
+                                        .font(DSFont.subheadline.weight(.semibold))
+                                        .foregroundStyle(DSColor.textPrimary)
+                                    Text(credential.primary.isEmpty
+                                         ? localized("未配置")
+                                         : String(format: localized("已配置 · %@"), masked(credential.primary)))
+                                        .font(DSFont.caption2)
+                                        .foregroundStyle(DSColor.textSecondary)
+                                }
+                                Spacer(minLength: 0)
                             }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(DSColor.textSecondary)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+
+                        if CatVodQRLogin.supports(provider) {
+                            Button {
+                                scanning = provider
+                            } label: {
+                                Label(localized("扫码"), systemImage: "qrcode.viewfinder")
+                                    .labelStyle(.iconOnly)
+                                    .font(.system(size: 17))
+                                    .frame(width: 34, height: 30)
+                            }
+                            .buttonStyle(.borderless)
+                            .tint(Color.accentColor)
+                            .accessibilityLabel(String(format: localized("扫描二维码登录%@"), provider.displayName))
+                        }
+
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(DSColor.textSecondary)
                     }
-                    .buttonStyle(.plain)
                 }
             } header: {
                 Text(localized("网盘平台"))
@@ -63,6 +82,9 @@ struct CatVodCloudAccountView: View {
         .themedAppSurface(for: .settings)
         .sheet(item: $editing) { provider in
             credentialSheet(provider)
+        }
+        .sheet(item: $scanning) { provider in
+            CatVodQRLoginView(provider: provider)
         }
     }
 
@@ -91,16 +113,30 @@ private struct CredentialEditView: View {
     @State private var primary = ""
     @State private var secondary = ""
     @State private var showsWebLogin = false
+    @State private var showsQRLogin = false
 
     var body: some View {
         NavigationStack {
             List {
+                if CatVodQRLogin.supports(provider) {
+                    Section {
+                        Button {
+                            showsQRLogin = true
+                        } label: {
+                            Label(localized("扫码登录（推荐）"), systemImage: "qrcode.viewfinder")
+                        }
+                    } footer: {
+                        Text(localized("用手机上的网盘 App 扫二维码并确认，登录态自动写入，不用复制 Cookie。"))
+                            .dsSectionFooter()
+                    }
+                }
+
                 if provider.webLoginURL != nil {
                     Section {
                         Button {
                             showsWebLogin = true
                         } label: {
-                            Label(localized("一键登录获取（推荐）"), systemImage: "person.badge.key")
+                            Label(localized("打开网页登录"), systemImage: "person.badge.key")
                         }
                     } footer: {
                         Text(localized("打开网盘官方网页，扫码、短信验证码或账号密码登录后点「完成」，会自动填入凭据，不用手动复制 Cookie。"))
@@ -169,6 +205,15 @@ private struct CredentialEditView: View {
                 // 登录拿到就立即落盘并推给网关，少一步手动保存。
                 store.set(provider: provider, primary: value, secondary: secondaryValue)
             }
+        }
+        .sheet(isPresented: $showsQRLogin) {
+            CatVodQRLoginView(provider: provider)
+                .onDisappear {
+                    // 扫码结果由登录页直接写进 store，这里把输入框对齐到最新值。
+                    let latest = store.credential(for: provider)
+                    primary = latest.primary
+                    secondary = latest.secondary
+                }
         }
     }
 }
