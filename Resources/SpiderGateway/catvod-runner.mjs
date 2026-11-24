@@ -29,6 +29,104 @@ export function siteBasePath(api) {
   return /^[\x20-\x7E]*$/.test(trimmed) ? trimmed : encodeURI(trimmed);
 }
 
+/// 宿主已登录的网盘账号 → 插件读的扁平路径表。
+/// 键名照 CatVod 生态的惯例：`/baidu` 下放 `baidu_cookie`，`/quark` 下放
+/// `quark_cookie`，`/115`、`/ali`、`/guangyapan` 同理。插件若只认自己的
+/// 存储结构，这里的值也会被它首次写入覆盖，不影响正常使用。
+function bundleAccounts() {
+  const raw = process.env.CATVOD_ACCOUNTS;
+  if (!raw) return {};
+  let value;
+  try { value = JSON.parse(raw) || {}; } catch { return {}; }
+  // 宿主存的是扁平字段（quarkCookie / baiduCookie…），插件读的是路径对象
+  // （`/baidu` 下的 `baidu_cookie`）。这里一次映射到位，两边都不用改格式。
+  const MAP = {
+    quarkCookie: ["/quark", ["quark_cookie", "cookie"]],
+    ucCookie: ["/uc", ["uc_cookie", "cookie"]],
+    baiduCookie: ["/baidu", ["baidu_cookie", "cookie"]],
+    aliyunToken: ["/ali", ["ali_token", "token"]],
+    pan115Cookie: ["/115", ["115_cookie", "cookie"]],
+    tianyiToken: ["/tianyi", ["tianyi_token", "token"]],
+    pan123Token: ["/123", ["123_token", "token"]],
+    guangyaToken: ["/guangyapan", ["guangya_token", "token"]]
+  };
+  const out = {};
+  for (const [field, [path, names]] of Object.entries(MAP)) {
+    const text = typeof value[field] === "string" ? value[field].trim() : "";
+    if (!text) continue;
+    out[path] = { ...(out[path] || {}) };
+    for (const name of names) out[path][name] = text;
+  }
+  return out;
+}
+
+function createHostDB(seed) {
+  const store = new Map();
+  const path = (value) => String(value || "").replace(/\/+$/, "") || "/";
+  const depthOf = (value) => path(value).split("/").filter(Boolean).length;
+  const put = (key, value) => {
+    // 深层键同时写进父对象，插件两种读法（`/baidu` 取整对象、`/baidu/x`
+    // 取单值）都能命中。
+    store.set(path(key), value);
+  };
+  for (const [key, value] of Object.entries(seed || {})) put(key, value);
+
+  const get = (key) => {
+    if (store.has(path(key))) return store.get(path(key));
+    // A parent object may carry the child as a property.
+    const parts = path(key).split("/").filter(Boolean);
+    for (let cut = parts.length - 1; cut > 0; cut -= 1) {
+      const parent = store.get("/" + parts.slice(0, cut).join("/"));
+      if (parent && typeof parent === "object") {
+        const child = parts.slice(cut).reduce((value, name) => (value == null ? value : value[name]), parent);
+        if (child !== undefined) return child;
+      }
+    }
+    return undefined;
+  };
+
+  const setDeep = (key, value) => {
+    const parts = path(key).split("/").filter(Boolean);
+    if (parts.length <= 1) { put(key, value); return; }
+    const parentKey = "/" + parts.slice(0, parts.length - 1).join("/");
+    const parent = get(parentKey);
+    const next = parent && typeof parent === "object" && !Array.isArray(parent) ? { ...parent } : {};
+    next[parts[parts.length - 1]] = value;
+    put(parentKey, next);
+    put(key, value);
+  };
+
+  return {
+    async getObjectDefault(key, fallback) {
+      const value = get(key);
+      return value === undefined ? fallback : value;
+    },
+    async getObject(key) { return get(key) ?? null; },
+    async getData(key) {
+      const value = get(key);
+      if (value === undefined) throw new Error(`db: ${key} not found`);
+      return value;
+    },
+    async has(key) { return get(key) !== undefined; },
+    async exists(key) { return get(key) !== undefined; },
+    push(key, value) { setDeep(key, value); },
+    async setObject(key, value) { setDeep(key, value); },
+    async delete(key) {
+      const parts = path(key).split("/").filter(Boolean);
+      const parentKey = "/" + parts.slice(0, Math.max(1, parts.length - 1)).join("/");
+      const parent = get(parentKey);
+      if (parent && typeof parent === "object") {
+        const next = { ...parent };
+        delete next[parts[parts.length - 1]];
+        put(parentKey, next);
+      }
+      store.delete(path(key));
+      return true;
+    },
+    snapshot() { return Object.fromEntries(store); }
+  };
+}
+
 export function actionRequest(site, action, args) {
   // A malformed catalog entry can carry a non-string api; never let `.replace`
   // throw an opaque "r.replace is not a function" deep inside the runner.
@@ -300,6 +398,11 @@ export async function runCatVod(bundlePath, options = {}) {
   // regex-based patch only matched one specific minified shape and failed on
   // every real-world bundle.
   let loopbackServer;
+  // Bundle 的账号页写的是 `request.server.db`：宿主必须在这个 server 对象上
+  // 提供 db，插件才会把 `/baidu`、`/quark` 这类路径读出来。以前这里没有任何
+  // db，插件永远读到空对象，于是每条网盘线路都回「Cookie 未填写」。
+  // 数据来自宿主已登录的账号（env），插件写入的值只在本进程内有效。
+  const hostDB = createHostDB(bundleAccounts());
   // 插件会按「自己请求的端口」拼播放地址（`…:9979/play?vid=…`），也会用局域网
   // IP 拼；而宿主为了不撞车把它绑到临时端口。地址交出去就是 connection
   // refused——源是好的，端口是旧的。tvbox-silicon 的做法是把回答里所有这类
@@ -316,6 +419,17 @@ export async function runCatVod(bundlePath, options = {}) {
       handler(request, response);
     };
     loopbackServer = http.createServer(served);
+    // 让插件的赋值覆盖不了宿主 db，同时记录它到底读没读：没有一次读取
+    // 说明它用的是自己的 app 对象，宿主注入这条路对该包无效。
+    let dbReads = 0;
+    Object.defineProperty(loopbackServer, "db", {
+      configurable: true,
+      get() { dbReads += 1; return hostDB; },
+      set() { /* keep the host implementation */ }
+    });
+    if (process.env.CATVOD_DEBUG_DB === "1") {
+      process.on("exit", () => process.stderr.write(`CATVOD_DB_READS=${dbReads}\n`));
+    }
     const originalListen = loopbackServer.listen.bind(loopbackServer);
     loopbackServer.listen = (...args) => {
       const first = args[0];
@@ -552,6 +666,20 @@ export async function runCatVod(bundlePath, options = {}) {
   }
 
   async function handle(message) {
+    // 宿主侧配置：插件把自己的账号接口挂在它自己的路由上
+    // （`PUT <base>/cookie`、`/setting`、`/login`），写进它读的 `server.db`。
+    // 这是唯一受支持的写入方式——直接改插件存储既不通用也不安全。
+    if (message.type === "request") {
+      const route = typeof message.route === "string" ? message.route : "";
+      if (!route.startsWith("/") || route.length > 512) {
+        throw new Error("Unsupported runner route");
+      }
+      const method = String(message.method || "POST").toLowerCase();
+      if (!["get", "post", "put", "delete"].includes(method)) {
+        throw new Error("Unsupported runner method");
+      }
+      return await inject(method, route, message.payload);
+    }
     if (message.type === "catalog") {
       const config = await inject("get", "/config");
       const sites = Array.isArray(config?.video?.sites) ? config.video.sites : [];

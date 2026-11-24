@@ -294,6 +294,10 @@ export class CatVodManager {
         LANG: "C.UTF-8",
         NODE_ENV: "development",
         NODE_PATH: runtimeDir,
+        // 已登录的网盘账号交给运行器，由它构造 `request.server.db`。读 db 的
+        // 插件（FongMi 系）因此能直接用上账号；不读 db 的包拿到的仍是空表，
+        // 行为与以前一致。
+        CATVOD_ACCOUNTS: this.accountsJSON,
         ...safeProxyEnvironment()
       }
     });
