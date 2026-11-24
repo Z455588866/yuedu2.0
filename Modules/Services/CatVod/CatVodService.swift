@@ -121,11 +121,12 @@ final class CatVodService {
         }
         let targets = ordered
         guard !targets.isEmpty else { return [] }
-        // 全源搜索动辄几十上百个站点。一次全放出去会把会话池挤爆（每个会话
-        // 串行、各自 16s 超时），最后是最慢的那个决定整页出现的时间。这里保持
-        // 8 路并发，并在 12s 后带着已有结果返回——先给能给的，比等到超时好。
-        let maximumConcurrent = 8
-        let budget: UInt64 = 12_000_000_000
+        // 全源搜索动辄几十上百个站点。实测这批新接口（豆儿/Lee/L佬）里，单个
+        // 站点的搜索要 7–17 秒才回话，12 秒的预算会在结果最好的站点回话前就
+        // 整批取消——用户看到的"搜不到"其实是搜到了但没等到。改成 28 秒并把
+        // 并发提到 10，让更多站点在预算内跑完；先回来的仍然先渲染。
+        let maximumConcurrent = 10
+        let budget: UInt64 = 28_000_000_000
         let started = DispatchTime.now().uptimeNanoseconds
         return await withTaskGroup(of: (CatVodSite, CatVodList?).self) { group in
             var next = 0

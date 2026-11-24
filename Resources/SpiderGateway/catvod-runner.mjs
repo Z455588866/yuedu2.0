@@ -469,11 +469,20 @@ export async function runCatVod(bundlePath, options = {}) {
       // slow mobile network and fails fast enough for 重试 or another site to feel
       // like a choice rather than a hang. Detail keeps a little more because some
       // bundles resolve their provider before they list episodes.
-      const fallbackMs = Number(options.injectTimeoutMs) > 0 ? Number(options.injectTimeoutMs) : 16000;
-      const timeoutMs = route.includes("/search") ? Math.min(fallbackMs, 16000)
-        : route.includes("/play") ? Math.min(fallbackMs, 60000)
-        : route.includes("/detail") ? Math.min(fallbackMs, 18000)
-        : route.includes("/category") || route.includes("/home") ? Math.min(fallbackMs, 12000)
+      // Measured on the current node bundle generation (二小/潇洒/雪乃/豆儿/
+      // L佬/Lee/Austin, 0.6–10MB each): a single site's 推荐 answers in 0.4–2.5s
+      // on a fast host, but 分类 on the pan-search sites takes 8–17s and one
+      // search took 17.4s before answering. The old 12s/16s budgets therefore
+      // reported healthy-but-slow sites as failures on a phone, which is slower
+      // than this host — the user reads that as "this interface cannot be used".
+      // Play keeps a long budget because a signed-out netdisk line waits for its
+      // own poll, and a bundle that hands back a loopback stream keeps the
+      // request open while it resolves.
+      const fallbackMs = Number(options.injectTimeoutMs) > 0 ? Number(options.injectTimeoutMs) : 30000;
+      const timeoutMs = route.includes("/search") ? Math.min(fallbackMs, 25000)
+        : route.includes("/play") ? Math.min(fallbackMs, 90000)
+        : route.includes("/detail") ? Math.min(fallbackMs, 25000)
+        : route.includes("/category") || route.includes("/home") ? Math.min(fallbackMs, 20000)
         : fallbackMs;
       req.setTimeout(timeoutMs, () => {
         fail(new Error(`CatVod request timed out for ${route}`));
@@ -551,7 +560,13 @@ export async function runCatVod(bundlePath, options = {}) {
   const lines = readline.createInterface({ input: options.input || process.stdin, crlfDelay: Infinity });
   const active = new Set();
   const enqueueSiteRequest = createSiteRequestQueue();
-  const maximumConcurrentRequests = 6;
+  // A full-bundle search fans out to every searchable site at once (the app
+  // asks 10 in parallel). With 6 slots the tail of that fan-out sat in the queue
+  // and hit its own timeout before it ever reached the bundle — measured on
+  // 豆儿/Lee: 22 of 74 sites answered "timed out for /search" while the sites
+  // themselves were fine. The bundle serializes per-route state internally, so
+  // more slots only let independent routes overlap.
+  const maximumConcurrentRequests = 12;
   for await (const line of lines) {
     const task = (async () => {
       let message;
