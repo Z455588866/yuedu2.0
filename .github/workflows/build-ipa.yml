@@ -134,6 +134,14 @@ jobs:
             exit 1
           fi
 
+      # Python.xcframework 与标准库不进 git（Packages/PythonRuntime/Vendor/ 在
+      # .gitignore 里），checkout 出来是空目录。包清单里 binaryTarget 指向它，
+      # 少了这份产物 resolve 会直接报 “does not contain a binary artifact”。
+      # Codemagic 那条链在 ci_codemagic.sh 里做同一件事，两边必须一致。
+      - name: Fetch Python runtime (pyspider host)
+        run: |
+          bash scripts/fetch_python_runtime.sh
+
       - name: Resolve Swift packages (with retry)
         run: |
           for i in 1 2 3; do
