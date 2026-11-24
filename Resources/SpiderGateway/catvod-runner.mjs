@@ -771,8 +771,32 @@ export async function runCatVod(bundlePath, options = {}) {
     if (active.size >= maximumConcurrentRequests) await Promise.race(active);
   }
   await Promise.allSettled(active);
-  messagesServer.close();
-  await globalThis.__catvodExports.stop?.();
+  // 让 worker 的 libuv loop 真正变空，worker 才能自然退出。之前只关
+  // messagesServer、把 loopbackServer 交给 bundle 的 stop() 去关，但多数 bundle
+  // 不关宿主传进去的 server —— loop 仍持有监听 handle，父进程等不到 exit，
+  // 5s 后 terminate() 在 uv__io_poll 轮询途中强杀 → SIGABRT 带崩整个 App。
+  const closeServer = (server) => {
+    if (!server || typeof server.listening !== "boolean" || !server.listening) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; resolve(); } };
+      try { server.close(finish); } catch { return finish(); }
+      // keep-alive 连接会拖住 close()；到期强制断开（Node 18.2+ 才有此 API）。
+      try { server.closeAllConnections?.(); } catch { /* 旧版没有该方法 */ }
+      setTimeout(finish, 2000).unref?.();
+    });
+  };
+  await closeServer(messagesServer);
+  try {
+    // bundle 的 stop() 可能卡住或抛错，都不能阻止 server 被清理。
+    await Promise.race([
+      Promise.resolve(globalThis.__catvodExports?.stop?.()).catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 1500))
+    ]);
+  } catch { /* stop 出错也要继续关 server */ }
+  await closeServer(loopbackServer);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {

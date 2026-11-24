@@ -100,9 +100,13 @@ export function createMobileCatVodProcess({ bundlePath, runtimeDir, maxLineBytes
   // iOS the worker shares the OS process with native code, so that abort kills
   // the whole app. Ask it to close gracefully instead: stdin.end() already
   // posts {close:true} (see result.stdin.final), the runner drains its queue,
-  // closes the loopback server and stops its provider before the thread ends.
-  // terminate() stays only as a last-resort safety net, delayed well past a
-  // graceful shutdown so a normally-exiting worker is never cut mid-cleanup.
+  // then closes BOTH servers and stops its provider before the thread ends.
+  //
+  // The 5s safety net was still firing during a real shutdown: closing two
+  // listening servers plus a bundle's async stop() can take longer than 5s,
+  // so terminate() hit uv__io_poll mid-loop and aborted the process. Extend it
+  // well past any cooperative path and re-check the exit before using it —
+  // a worker that is already winding down must never be cut.
   let terminateTimer = null;
   result.kill = () => {
     if (closed) return;
@@ -113,7 +117,7 @@ export function createMobileCatVodProcess({ bundlePath, runtimeDir, maxLineBytes
       if (!closed) {
         try { void worker.terminate(); } catch { /* already gone */ }
       }
-    }, 5_000);
+    }, 30_000);
     terminateTimer.unref();
   };
   worker.once('exit', () => {
