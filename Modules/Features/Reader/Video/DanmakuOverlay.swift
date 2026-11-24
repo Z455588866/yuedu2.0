@@ -99,7 +99,11 @@ private final class ClockTicker: NSObject {
     }
 
     @objc func step() {
-        MainActor.assumeIsolated { clock?.step() }
+        // 先在闭包外取出弱引用：把 self（非 Sendable 的 NSObject）送进 @Sendable
+        // 闭包会触发 Swift 6 的 "sending self risks causing data races"。
+        // 局部常量是 @MainActor 隔离的引用，可安全跨闭包边界。
+        let target = clock
+        MainActor.assumeIsolated { target?.step() }
     }
 }
 
