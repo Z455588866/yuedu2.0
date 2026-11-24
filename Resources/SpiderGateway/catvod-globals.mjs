@@ -5,14 +5,28 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
-/// HTML 选择器用的 cheerio，打成了单文件放在 `vendor/`。1.3 MB，只在脚本第一次
-/// 调 `pdfh` / `pdfa` / `pd` 时才 require —— 纯 JSON 源的启动开销不受影响。
+/// HTML 选择器用的 cheerio，打成了单文件。1.3 MB，只在脚本第一次调
+/// `pdfh` / `pdfa` / `pd` 时才 require —— 纯 JSON 源的启动开销不受影响。
+///
+/// 路径要两种都试：仓库里它放在 `vendor/` 子目录，但 App 的 Resources 是
+/// **拍平**打进 .app 的（Xcode 对同步资源组不做目录保留），到手机上它就躺在
+/// 脚本同级。只写 `./vendor/...` 会在真机上抛 Cannot find module，
+/// 而 `pdfh` 恰恰是绝大多数 HTML 类猫源的入口。
 let cheerioModule = null;
 function cheerio() {
   if (cheerioModule) return cheerioModule;
   const require = createRequire(import.meta.url);
-  cheerioModule = require("./vendor/cheerio.cjs");
-  return cheerioModule;
+  const candidates = ["./vendor/cheerio.cjs", "./cheerio.cjs"];
+  let failure = null;
+  for (const candidate of candidates) {
+    try {
+      cheerioModule = require(candidate);
+      return cheerioModule;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure ?? new Error("cheerio not found");
 }
 
 /// The rest of the TVBox script globals, ported from tvbox-silicon's

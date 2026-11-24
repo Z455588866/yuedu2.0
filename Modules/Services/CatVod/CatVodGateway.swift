@@ -17,6 +17,8 @@ final class CatVodGateway {
     private var pythonSpiderPort = 0
     /// 只尝试启动一次：失败后每次进猫源都重试会白白多等几秒。
     private var pythonStartupAttempted = false
+    /// 引擎启动进行中。并发的 ensureStarted 只应该有一个真正去 start。
+    private var startInFlight = false
 
     /// 用户放进来的 .py 源。Documents 已对「文件」App 开放，拖进去就能用。
     private var pythonSourcesDirectory: URL {
@@ -148,6 +150,18 @@ final class CatVodGateway {
             YueduNodeRuntime.updateConfiguration(json)
         }
 
+        // 引擎已经在跑：直接把地址给它，别重复 start（那会把正在服务的引擎重启一次，
+        // 已经在跑的请求全断）。allowlist 上面已经更新过了。
+        if let ready = baseURL, YueduNodeRuntime.listeningURL() != nil {
+            return ready
+        }
+        // 另一个调用方正在启动中：跟它一起等，不抢着重启。
+        if startInFlight {
+            return try await waitUntilListening()
+        }
+        startInFlight = true
+        defer { startInFlight = false }
+
         let json = try configurationJSON()
 
         YueduNodeRuntime.start(script: entryPoint.path,
@@ -155,6 +169,12 @@ final class CatVodGateway {
                                runtimeDirectory: cacheDirectory.path,
                                configuration: json)
 
+        return try await waitUntilListening()
+    }
+
+    /// 等引擎报出监听地址。抽出来是因为「首次启动」和「跟在别人后面等」
+    /// 必须用同一套判据（startupError 优先、20 秒上限、可取消）。
+    private func waitUntilListening() async throws -> URL {
         let deadline = ContinuousClock.now.advanced(by: .seconds(20))
         while ContinuousClock.now < deadline {
             try Task.checkCancellation()

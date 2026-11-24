@@ -42,11 +42,28 @@ export async function startMobileGateway(bridge, dependencies = {}) {
   const gateway = createGateway(config, {
     nodeBundleCache, catVod, ...dependencies,
     beforeRequest() {
-      const current = JSON.parse(bridge.configuration());
-      nodeBundleCache.allowedURLs = current.nodeBundleAllowedURLs;
-      nodeBundleCache.allowHTTP = current.nodeBundleAllowedURLs.some(url => url.startsWith('http://'));
-      config.cloudConfig = current.cloudConfig || {};
-      config.token = current.token;
+      // 这个函数跑在**每个请求**前面。配置读坏了（空串、进程正在退出、
+      // 序列化失败）不能让所有请求一起 500——那样界面看起来就是"引擎挂了"。
+      // 出错就沿用上一份已知可用的配置。
+      let current;
+      try {
+        current = JSON.parse(bridge.configuration());
+      } catch {
+        return;
+      }
+      // JSON.parse("null") 不抛错但会给出 null，直接取字段就是 TypeError。
+      if (!current || typeof current !== 'object' || Array.isArray(current)) return;
+      const allowed = Array.isArray(current.nodeBundleAllowedURLs)
+        ? current.nodeBundleAllowedURLs
+        : null;
+      if (allowed) {
+        nodeBundleCache.allowedURLs = allowed;
+        nodeBundleCache.allowHTTP = allowed.some(url => typeof url === 'string' && url.startsWith('http://'));
+      }
+      if (current.cloudConfig && typeof current.cloudConfig === 'object' && !Array.isArray(current.cloudConfig)) {
+        config.cloudConfig = current.cloudConfig;
+      }
+      if (typeof current.token === 'string') config.token = current.token;
       // Python 是后台启动的，往往比网关晚几秒就绪；端口到了这里才算生效，
       // 否则新端口要等到下次冷启动才被读到。
       config.pythonSpiderPort = current.pythonSpiderPort || undefined;
