@@ -121,6 +121,20 @@ struct CatVodHomeView: View {
             loadSearchHistory()
             if selectedSourceID == nil { selectedSourceID = sources.first?.id }
         }
+        // 从「管理猫源」导完返回时，`content` 的 task 不会重跑（视图一直在），
+        // 于是顶部接口菜单已经能看到新源，站点却还停在上一个接口上——看着就是
+        // 「导入成功但上面什么都没有」。源列表一变就重新对齐当前接口。
+        .onChange(of: store.sources) { _, list in
+            let enabled = list.filter(\.enabled)
+            guard !enabled.isEmpty else { return }
+            if selectedSourceID == nil || !enabled.contains(where: { $0.id == selectedSourceID }) {
+                selectedSourceID = enabled.first?.id
+                selectedSite = nil
+                currentCategory = nil
+                activeSearchTerm = nil
+                Task { await loadCatalogAndHome() }
+            }
+        }
         .sheet(item: $detailItem, onDismiss: {
             isLoadingDetail = false
             playingEpisodeID = nil

@@ -39,24 +39,64 @@ struct CatVodSource: Codable, Identifiable, Hashable, Sendable {
     }
 
     /// Stable id derived from the URL so re-importing the same link replaces rather than duplicates.
+    ///
+    /// Deliberately NOT `Hasher`: Swift seeds `Hasher` randomly per process, so the same
+    /// address produced a different id on every launch. The id is persisted and compared
+    /// across launches (selection, rename, delete), which made a freshly imported source
+    /// look like a different row — and "import again" add a duplicate next to it.
+    /// FNV-1a is byte-exact and stable forever.
     static func id(from url: String) -> String {
-        var hasher = Hasher()
-        hasher.combine(url.trimmingCharacters(in: .whitespacesAndNewlines))
-        return String(format: "catvod-%016llx", UInt64(bitPattern: Int64(hasher.finalize())))
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in url.trimmingCharacters(in: .whitespacesAndNewlines).utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return String(format: "catvod-%016llx", hash)
     }
 
     /// A readable default name from the URL host/path when the import has no explicit name.
     ///
+    /// Two shapes have to be handled, because both are what people actually paste:
+    ///   1. `https://host/path/index.js.md5`          — plain address
+    ///   2. `https://ghfast.top/https://raw.github…`  — a mirror in front of the real address
+    /// For (2) the outer host is just an accelerator (ghfast.top, gh-proxy.com, …), so naming
+    /// the row after it turned every mirrored feed into "ghfast.top (2)", "ghfast.top (3)".
+    /// The inner address is unwrapped first and the row is named after the repository the
+    /// bundle lives in — "LeeCatPaw", "catvod/smdl", "xptv/jstv" — which is what a person
+    /// recognises from the feed list they copied it out of.
+    ///
     /// Deliberately short: the picker draws this in a menu row, and "host · index.js.md5"
-    /// wrapped onto two lines and read as an address rather than a name. The file name is
-    /// dropped entirely when it is the generic CatVod entry point, and the host is used
-    /// alone — uniqueness is enforced by `CatVodSourceStore` (see `uniqueName`).
+    /// wrapped onto two lines and read as an address rather than a name.
     static func name(from url: String) -> String {
-        guard let components = URLComponents(string: url), var host = components.host else {
-            return String(url.suffix(24))
+        let raw = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Unwrap a mirror: the real address is everything from the second scheme on.
+        var target = raw
+        if let second = raw.range(of: "https?://", options: .regularExpression,
+                                  range: raw.index(after: raw.startIndex)..<raw.endIndex) {
+            target = String(raw[second.lowerBound...])
+        }
+        guard let components = URLComponents(string: target), var host = components.host else {
+            return String(raw.suffix(24))
         }
         if host.hasPrefix("www.") { host.removeFirst(4) }
-        let last = (components.path as NSString).lastPathComponent
+        let parts = (components.path as NSString).pathComponents.filter { $0 != "/" && !$0.isEmpty }
+        let last = parts.last ?? ""
+
+        if host == "raw.githubusercontent.com" || host == "github.com" {
+            // owner/repo/[refs/heads/branch]/[subdir]/file → repo[/subdir]
+            let pieces = parts
+            if pieces.count >= 2 {
+                let repo = pieces[1]
+                var rest = Array(pieces.dropFirst(2))
+                if rest.count >= 3, rest[0] == "refs", rest[1] == "heads" {
+                    rest = Array(rest.dropFirst(3))
+                }
+                if !rest.isEmpty { rest.removeLast() }  // drop the file name
+                let tail = rest.filter { !$0.isEmpty && $0 != "main" && $0 != "master" }
+                return tail.isEmpty ? repo : "\(repo)/\(tail.joined(separator: "/"))"
+            }
+        }
+
         let generic: Set<String> = ["index.js.md5", "index.js", "index.md5", "config.js", "api.js"]
         guard !last.isEmpty, !generic.contains(last.lowercased()) else { return host }
         return "\(host) · \(last)"
@@ -84,14 +124,44 @@ final class CatVodSourceStore {
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.storageKey),
            let decoded = try? JSONDecoder().decode([CatVodSource].self, from: data) {
-            sources = Self.dedupeNames(decoded)
-            // Older builds stored the same interface several times under one display
-            // name ("ghfast.top · index.js.md5" x5), which made the picker a list of
-            // identical rows. Persist the suffix once so the fix survives relaunch.
-            if sources.map(\.name) != decoded.map(\.name) { persist() }
+            sources = Self.dedupeNames(Self.refreshAutoNames(Self.renumber(decoded)))
+            // 旧版本用 `Hasher` 生成 id（每次启动种子不同），存下来的 id 这次启动已经
+            // 对不上了；名字也可能是 "ghfast.top (3)" 这种。算出来的和存的不一致就
+            // 立刻回写一次，让下一轮启动不再重复计算。
+            if sources != decoded { persist() }
         } else {
             sources = []
         }
+    }
+
+    /// 把“明显是自动生成的、且已经不可读”的名字换成新规则算出的名字。
+    /// 只处理名字里带地址 host 的那一类（旧版自动名都是 `ghfast.top · index.js.md5`），
+    /// 人手动改过的名字原样保留。
+    private static func refreshAutoNames(_ list: [CatVodSource]) -> [CatVodSource] {
+        list.map { source in
+            guard let host = URLComponents(string: source.url)?.host, !host.isEmpty,
+                  source.name.contains(host) else { return source }
+            var updated = source
+            updated.name = CatVodSource.name(from: source.url)
+            return updated
+        }
+    }
+
+    /// 用当前规则重算每条的 id，并按 id 合并。老版本留下的 id 与本次启动算出的
+    /// 不一致，选择/改名/删除都会“找不到这一条”，表现为点了没反应。
+    private static func renumber(_ list: [CatVodSource]) -> [CatVodSource] {
+        var result: [CatVodSource] = []
+        var indexByID: [String: Int] = [:]
+        for var source in list {
+            source.id = CatVodSource.id(from: source.url)
+            if let existing = indexByID[source.id] {
+                result[existing] = source
+            } else {
+                indexByID[source.id] = result.count
+                result.append(source)
+            }
+        }
+        return result
     }
 
     /// Suffixes duplicated display names so every row in the picker is distinguishable.
@@ -150,6 +220,9 @@ final class CatVodSourceStore {
         guard !incoming.isEmpty else { return ImportResult(added: 0, updated: 0) }
         var next = sources
         var added = 0, updated = 0
+        // 新导入的放在最上面：列表长了以后追加到末尾要滚半天，人往往只看到
+        // 「已导入 1 个」却找不到那一行，就以为导入没生效。批量粘贴时按原顺序插。
+        var prepend: [CatVodSource] = []
         for var source in incoming {
             let defaultName = CatVodSource.name(from: source.url)
             if let index = next.firstIndex(where: { $0.id == source.id || $0.url == source.url }) {
@@ -159,13 +232,13 @@ final class CatVodSourceStore {
                 updated += 1
             } else {
                 if source.name == defaultName {
-                    source.name = uniqueName(defaultName, in: next)
+                    source.name = uniqueName(defaultName, in: next + prepend)
                 }
-                next.append(source)
+                prepend.append(source)
                 added += 1
             }
         }
-        sources = next
+        sources = prepend + next
         persist()
         return ImportResult(added: added, updated: updated)
     }
