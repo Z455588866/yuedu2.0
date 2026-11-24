@@ -369,8 +369,17 @@ export function createGateway(config, dependencies = {}) {
       }
       if (url.pathname === "/v1/catvod/catalog") {
         const catalog = validateCatalogRequest(body);
-        const artifact = await nodeBundleCache.resolve(catalog.bundle);
-        const result = await catVod.catalog(artifact);
+        // JS 接口的 bundle 下载/校验失败时，整个 catalog 以前直接抛错——连本机
+        // 的 py 源和内置网盘站点一起消失，表现就是「导入 py 后一个源都看不到」。
+        // py 源（callPythonSite）和内置网盘站点根本不依赖这个 bundle，改为降级：
+        // JS 站点为空，但仍把独立可用的站点返回给界面。
+        let result = { sites: [] };
+        try {
+          const artifact = await nodeBundleCache.resolve(catalog.bundle);
+          result = await catVod.catalog(artifact);
+        } catch {
+          // 静默降级：独立站点照常返回，JS 站点这一轮为空。
+        }
         // Some bundles (e.g. the "配置"/config pseudo-site) declare `api` as an
         // object or omit it. Downstream requires a string route, so drop those
         // malformed entries here rather than letting `site.api.replace()` throw

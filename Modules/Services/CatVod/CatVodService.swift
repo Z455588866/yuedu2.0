@@ -476,9 +476,18 @@ final class CatVodService {
             throw CatVodError.http(-6, localized("这条线路给的是网盘分享页，不是可播放的视频流。换一条线路，或先把分享转存到自己的网盘再播放。"))
         }
 
-        // Relative URLs are meaningless against the gateway loopback; spider URLs
-        // are always absolute, so a missing scheme means the source is malformed.
-        guard let finalURL = URL(string: resolvedURL), finalURL.scheme != nil else {
+        // 网盘线路常把中文文件名/空格直接拼进 URL（录屏里的「4K AAC2026...」），
+        // URL(string:) 遇到未编码的中文/空格会返回 nil，于是 player ok 之后抛
+        // emptyPlayerURL——表现就是点了没反应。按 RFC 3986 对非法字符做百分号
+        // 编码后再解析；结构符（:/?#[]@!$&'()*+,;=%）原样保留，避免破坏 query。
+        let finalURL: URL
+        if let direct = URL(string: resolvedURL), direct.scheme != nil {
+            finalURL = direct
+        } else if let encoded = Self.percentEncodeURL(resolvedURL),
+                  let recovered = URL(string: encoded), recovered.scheme != nil {
+            finalURL = recovered
+        } else {
+            AppLogger.error("[CatVod] player url 无法解析 site=\(site.key) raw=\(resolvedURL.prefix(120))", level: .error)
             throw CatVodError.emptyPlayerURL
         }
         // Many CDNs answer 403 ("你没有访问所请求的资源的许可") to a bare request.
@@ -583,6 +592,25 @@ final class CatVodService {
             }
         }
         return ""
+    }
+
+    /// 把网盘 spider 给的「带中文/空格的原始 URL」编码成合法 URL。
+    /// 逐字符处理：已有 `%XX` 转义、scheme/分隔符、查询结构符全部保留，只对
+    /// 真正的非法字符（中文、空格、控制符等）按 UTF-8 做 `%XX` 编码。
+    private static func percentEncodeURL(_ raw: String) -> String? {
+        // RFC 3986 保留字符 + 已在使用的 % 都原样放过。
+        let allowed = CharacterSet(charactersIn: ":/?#[]@!$&'()*+,;=%-._~")
+        var out = ""
+        for scalar in raw.unicodeScalars {
+            if allowed.contains(scalar) || (scalar.value >= 0x21 && scalar.value <= 0x7E) {
+                out.unicodeScalars.append(scalar)
+            } else if let utf8 = String(scalar).addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+                out += utf8
+            } else {
+                return nil
+            }
+        }
+        return out
     }
 
     /// player 返回空 url 时，从整个响应里再找一遍可播地址。网盘/聚合源的字段

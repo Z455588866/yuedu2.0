@@ -694,8 +694,9 @@ struct CatVodHomeView: View {
         // Cold start: paint the site list and the last 推荐 from disk before the
         // gateway has downloaded (or verified) and booted the bundle. Without this
         // the whole page is one spinner for the length of the process start.
-        if let cachedSites = CatVodService.shared.cachedCatalog(bundleURL: bundle),
-           let firstSite = CatVodSourceHealth.shared.arranged(cachedSites, bundleURL: bundle).first {
+        let cachedArranged = CatVodService.shared.cachedCatalog(bundleURL: bundle)
+            .map { CatVodSourceHealth.shared.arranged($0, bundleURL: bundle) } ?? []
+        if let firstSite = cachedArranged.first(where: { !$0.key.hasPrefix("py-") }) ?? cachedArranged.first {
             let cachedList = CatVodService.shared.cachedHome(bundleURL: bundle, site: firstSite)
             await MainActor.run {
                 guard token == loadToken else { return }
@@ -720,7 +721,10 @@ struct CatVodHomeView: View {
             let ordered = CatVodSourceHealth.shared.arranged(loaded, bundleURL: bundle)
             await MainActor.run {
                 sites = ordered
-                selectedSite = ordered.first
+                // py 源响应动辄 1-2 分钟（search/category 实测 150s），若被选成
+                // 默认首页，切任何接口都要先卡一轮超时，看着就是「一直加载中」。
+                // 默认站点永远挑在线站点；py 源仍留在列表里，想用再手动点。
+                selectedSite = ordered.first { !$0.key.hasPrefix("py-") } ?? ordered.first
                 currentCategory = nil
                 filterChoices = [:]
                 allFilters = [:]
