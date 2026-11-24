@@ -371,6 +371,7 @@
 				3D3ACA9A6DDE978E3B91280C /* YueduCoreTextTypography */,
 				FF544FB3AA8924E26745E485 /* YueduCoreText */,
 				EC30E8EE1B7F4DA83ADB8821 /* CLexbor */,
+				C1A7B2D3E4F5061728394A13 /* YueduPythonRuntime */,
 			);
 			productName = "yuedu app";
 			productReference = 460D36592F51C5B8006E774C /* YueduReader.app */;
@@ -498,6 +499,7 @@
 				C1A7B2D3E4F5061728394A02 /* XCLocalSwiftPackageReference "Packages/CatVodNodeRuntime" */,
 				9E73816D0186A1DA34077B88 /* XCLocalSwiftPackageReference "Packages/SwiftSoup" */,
 				BBBB2222BBBB2222BBBB0003 /* XCLocalSwiftPackageReference "Packages/LNPopupUI" */,
+				C1A7B2D3E4F5061728394A12 /* XCLocalSwiftPackageReference "Packages/PythonRuntime" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 460D365A2F51C5B8006E774C /* Products */;
@@ -1466,6 +1468,7 @@
 		};
 		C1A7B2D3E4F5061728394A13 /* YueduPythonRuntime */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = C1A7B2D3E4F5061728394A12 /* XCLocalSwiftPackageReference "Packages/PythonRuntime" */;
 			productName = YueduPythonRuntime;
 		};
 		FF544FB3AA8924E26745E485 /* YueduCoreText */ = {
