@@ -43,6 +43,7 @@
 		6B865095660449D830AF13C4 /* iosMath in Frameworks */ = {isa = PBXBuildFile; productRef = 3F2758F4003B483DCE6CFC1C /* iosMath */; };
 		6E860399818D270C801E7519 /* CLexbor in Frameworks */ = {isa = PBXBuildFile; productRef = EC30E8EE1B7F4DA83ADB8821 /* CLexbor */; };
 		C1A7B2D3E4F5061728394A01 /* YueduNodeRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = C1A7B2D3E4F5061728394A03 /* YueduNodeRuntime */; };
+		C1A7B2D3E4F5061728394A14 /* YueduPythonRuntime in Frameworks */ = {isa = PBXBuildFile; productRef = C1A7B2D3E4F5061728394A13 /* YueduPythonRuntime */; };
 		8A11B0E32F9A1C7300A1B001 /* ReadiumFuzi in Frameworks */ = {isa = PBXBuildFile; productRef = 8A11B0E22F9A1C7300A1B001 /* ReadiumFuzi */; };
 		9345BAE6E7C14A44A078A749 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = E661223F57364063B509666C /* GoogleService-Info.plist */; };
 		AAAA1111AAAA1111AAAA0001 /* Nuke in Frameworks */ = {isa = PBXBuildFile; productRef = AAAA1111AAAA1111AAAA0002 /* Nuke */; };
@@ -208,6 +209,7 @@
 				605CA89FF5C9882A68E236F3 /* YueduCoreText in Frameworks */,
 				6E860399818D270C801E7519 /* CLexbor in Frameworks */,
 				C1A7B2D3E4F5061728394A01 /* YueduNodeRuntime in Frameworks */,
+				C1A7B2D3E4F5061728394A14 /* YueduPythonRuntime in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -317,6 +319,7 @@
 			buildPhases = (
 				460D36552F51C5B8006E774C /* Sources */,
 				460D36562F51C5B8006E774C /* Frameworks */,
+				C1A7B2D3E4F5061728394A15 /* Copy Python Runtime */,
 				460D36572F51C5B8006E774C /* Resources */,
 				5FFE0D9ED24A85A7ACED161A /* Embed Foundation Extensions */,
 				46C7A511D5F0480000000001 /* Crashlytics Upload Symbols */,
@@ -554,6 +557,22 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		C1A7B2D3E4F5061728394A15 /* Copy Python Runtime */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Python Runtime";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nSRC=\"${SRCROOT}/Packages/PythonRuntime\"\n# Xcode 把 Resources/ 里的文件平铺拷进 .app，而 Python 需要目录结构（vendor/ 一整个包），\n# 所以这两个目录自己拷，保留层级。\nif [ -d \"$SRC/PythonSpider\" ]; then\n  rm -rf \"$DEST/PythonSpider\"\n  cp -R \"$SRC/PythonSpider\" \"$DEST/PythonSpider\"\nfi\nif [ -d \"$SRC/Vendor/python\" ]; then\n  rm -rf \"$DEST/Python\"\n  cp -R \"$SRC/Vendor/python\" \"$DEST/Python\"\nelse\n  echo \"warning: 没有 Python 标准库（先跑 scripts/fetch_python_runtime.sh），Python 源将不可用\"\nfi\n";
+		};
+
 		46C7A511D5F0480000000001 /* Crashlytics Upload Symbols */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -1202,6 +1221,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/CatVodNodeRuntime;
 		};
+		C1A7B2D3E4F5061728394A12 /* XCLocalSwiftPackageReference "Packages/PythonRuntime" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/PythonRuntime;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -1440,6 +1463,10 @@
 		C1A7B2D3E4F5061728394A03 /* YueduNodeRuntime */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = YueduNodeRuntime;
+		};
+		C1A7B2D3E4F5061728394A13 /* YueduPythonRuntime */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = YueduPythonRuntime;
 		};
 		FF544FB3AA8924E26745E485 /* YueduCoreText */ = {
 			isa = XCSwiftPackageProductDependency;

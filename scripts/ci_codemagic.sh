@@ -108,6 +108,14 @@ if [ "${#FINAL}" != "39" ]; then
 fi
 
 echo ""
+echo "===== Python 运行时（猫源 .py 插件）====="
+# 预编译的 CPython，不进 git；离线可用 PYTHON_SUPPORT_ARCHIVE 指定本地包。
+if ! bash scripts/fetch_python_runtime.sh; then
+  echo "::error::Python 运行时准备失败；要么修好网络重试，要么先去掉 Packages/PythonRuntime 这个本地包"
+  exit 1
+fi
+
+echo ""
 echo "===== Resolve Swift packages (with retry) ====="
 for i in 1 2 3; do
   echo "===== 依赖解析尝试 $i ====="

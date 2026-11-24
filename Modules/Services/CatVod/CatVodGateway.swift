@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import YueduNodeRuntime
+import YueduPythonRuntime
 
 /// Owns the single in-process Node.js engine that runs CatVod spider bundles.
 /// Adapted from the mobile gateway validated in tvbox-Swift iOS build 28: the engine listens on
@@ -12,6 +13,15 @@ final class CatVodGateway {
     private let resourcesDirectory: URL
     private let entryPoint: URL
     private let cacheDirectory: URL
+    /// 内嵌 Python 服务的端口；0 表示这个包没有 Python 运行时（构建时没链框架）。
+    private var pythonSpiderPort = 0
+
+    /// 用户放进来的 .py 源。Documents 已对「文件」App 开放，拖进去就能用。
+    private var pythonSourcesDirectory: URL {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return documents.appendingPathComponent("PythonSources", isDirectory: true)
+    }
+
     /// Per-launch token the Node gateway requires on every spider request.
     /// Read by `CatVodService` to build the `Authorization: Bearer` header.
     let authenticationToken = UUID().uuidString + UUID().uuidString
@@ -64,13 +74,34 @@ final class CatVodGateway {
             "cloudConfig": cloudConfig,
             "cacheRoot": cacheDirectory.path,
             "nodeBundleAllowedURLs": activeAllowedURLs.sorted(),
-            "nodeBundleAllowChecksumRedirects": true
+            "nodeBundleAllowChecksumRedirects": true,
+            // Python 源由本机 Python 服务答话；没起 Python 时网关不会并进目录。
+            "pythonSpiderPort": pythonSpiderPort
         ]
         let data = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
         guard data.count <= 64 * 1024, let json = String(data: data, encoding: .utf8) else {
             throw CatVodError.invalidConfiguration
         }
         return json
+    }
+
+    /// 拉起内嵌 Python。它和 Node 引擎一样是"启动一次就一直在"，
+    /// 失败只会让 Python 源不出现，不影响其它源。
+    private func startPythonRuntimeIfNeeded() {
+        guard pythonSpiderPort == 0 else { return }
+        let fileManager = FileManager.default
+        try? fileManager.createDirectory(at: pythonSourcesDirectory, withIntermediateDirectories: true)
+        let root = Bundle.main.bundleURL.path
+        let cache = cacheDirectory.appendingPathComponent("Python", isDirectory: true).path
+        try? fileManager.createDirectory(atPath: cache, withIntermediateDirectories: true)
+        // 解释器初始化要一两秒（要解压标准库），别占着主线程。
+        let port = YueduPythonRuntime.start(root: root, cache: cache, scan: pythonSourcesDirectory.path)
+        pythonSpiderPort = port
+        if port > 0 {
+            AppLogger.info("[CatVod] Python 源服务已启动，端口 \(port)", level: .notice)
+        } else if let reason = YueduPythonRuntime.startupError() {
+            AppLogger.info("[CatVod] Python 源不可用：\(reason)", level: .notice)
+        }
     }
 
     /// Pushes updated netdisk credentials into the already-running engine. The
@@ -98,6 +129,7 @@ final class CatVodGateway {
         activeAllowedURLs = replacingAllowlist ? requested : activeAllowedURLs.union(requested)
         try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
 
+        startPythonRuntimeIfNeeded()
         let json = try configurationJSON()
 
         YueduNodeRuntime.start(script: entryPoint.path,

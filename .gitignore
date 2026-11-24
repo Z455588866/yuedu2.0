@@ -70,3 +70,8 @@ legado-E/
 
 # Node gateway runtime cache (bundles, session dirs) created at run time.
 Resources/SpiderGateway/spider-gateway/
+
+# 预编译的 CPython（117MB 框架 + 28MB 标准库），由 scripts/fetch_python_runtime.sh 在构建前准备
+Packages/PythonRuntime/Vendor/
+__pycache__/
+*.pyc

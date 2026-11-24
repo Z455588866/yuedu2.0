@@ -15,7 +15,7 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "Resources", "PythonSpider"))
+sys.path.insert(0, os.path.join(ROOT, "Packages", "PythonRuntime", "PythonSpider"))
 
 import bridge as pybridge  # noqa: E402
 
