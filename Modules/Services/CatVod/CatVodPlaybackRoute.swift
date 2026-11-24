@@ -26,6 +26,10 @@ enum CatVodPlaybackRoute: Sendable, Equatable {
         if vlcOnlyExtensions.contains(ext) {
             return .vlc(reason: ext.uppercased())
         }
+        // HLS 与裸 TS 是 AVPlayer 的强项，直播走这条路；不必为一个 m3u8 再读一次文件头。
+        if ["m3u8", "m3u", "ts", "mpd"].contains(ext) {
+            return .system
+        }
         if let kind = await sniff(url: url, headers: headers), vlcOnlyExtensions.contains(kind) {
             return .vlc(reason: kind.uppercased())
         }

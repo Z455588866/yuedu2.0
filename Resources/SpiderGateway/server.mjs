@@ -24,8 +24,33 @@ function sendJSON(response, status, value) {
   response.end(body);
 }
 
-function tokenMatches(header, expected) {
-  if (!expected) return true;
+/// Config 里的 `lives`：TVBox 各家写法不一样，统一成
+/// `{ name, url, type, epg, ua, playerType }`，只保留有地址的项。
+/// `url` 可以是字符串，也可以是 `urls: [{name, url}]`（多线路）。
+function normaliseLives(value) {
+  if (!Array.isArray(value)) return [];
+  const lives = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const urls = Array.isArray(item.urls) ? item.urls : [];
+    const declared = typeof item.url === "string" ? item.url.trim() : "";
+    const list = declared ? [declared] : urls.map((entry) => String(entry?.url || "").trim());
+    for (const url of list) {
+      if (!url) continue;
+      lives.push({
+        name: String(item.name ?? item.title ?? "直播").slice(0, 120),
+        url,
+        type: Number.isFinite(Number(item.type)) ? Number(item.type) : 0,
+        epg: typeof item.epg === "string" ? item.epg : "",
+        ua: typeof item.ua === "string" ? item.ua : (typeof item.userAgent === "string" ? item.userAgent : ""),
+        playerType: Number.isFinite(Number(item.playerType)) ? Number(item.playerType) : 0
+      });
+    }
+  }
+  return lives.slice(0, 200);
+}
+
+function tokenMatches(header, expected) {  if (!expected) return true;
   const prefix = "Bearer ";
   if (typeof header !== "string" || !header.startsWith(prefix)) return false;
   const actualBuffer = Buffer.from(header.slice(prefix.length));
@@ -287,7 +312,11 @@ export function createGateway(config, dependencies = {}) {
         if (!sites.some((site) => isCloudFilesSite(site))) {
           sites = [...sites, { ...cloudFilesSite, jar: catalog.bundle }];
         }
-        sendJSON(response, 200, { sites });
+        // 直播源：TVBox 的 `lives` 一直是 config 的顶层字段，以前直接丢掉了。
+        // 形状各家不同（url 字符串 / urls 数组 / type+playerType），这里只做最基本
+        // 的规整，真正的 M3U/TXT 解析在 Swift 侧（离线也能解析、能单测）。
+        const lives = normaliseLives(result?.lives);
+        sendJSON(response, 200, { sites, lives });
         return;
       }
 

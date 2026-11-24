@@ -48,6 +48,29 @@ final class CatVodService {
         return parsed
     }
 
+    /// Live playlists this bundle declares (`lives` in its config). Most JavaScript
+    /// spiders have none — an empty array means "no live", not an error.
+    func liveSources(bundleURL: String) async throws -> [CatVodLiveSource] {
+        let base = try await CatVodGateway.shared.ensureStarted(allowedBundleURL: bundleURL)
+        let endpoint = base.appendingPathComponent("/v1/catvod/catalog")
+        let object = try await post(endpoint, body: ["bundle": bundleURL])
+        guard let lives = object["lives"] as? [[String: Any]], !lives.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: lives) else { return [] }
+        let sources = (try? decoder.decode([CatVodLiveSource].self, from: data)) ?? []
+        if !sources.isEmpty {
+            CatVodDiskCache.store(data, key: CatVodDiskCache.key(["lives", bundleURL]))
+        }
+        return sources
+    }
+
+    /// Last launch's live list, so the live screen draws its list before the bundle boots.
+    func cachedLiveSources(bundleURL: String) -> [CatVodLiveSource]? {
+        guard let data = CatVodDiskCache.load(key: CatVodDiskCache.key(["lives", bundleURL])),
+              let sources = try? decoder.decode([CatVodLiveSource].self, from: data),
+              !sources.isEmpty else { return nil }
+        return sources
+    }
+
     /// Site list from the previous launch. Lets the browse screen draw its site
     /// picker and category bar before the gateway has downloaded and booted the
     /// bundle, instead of showing one spinner for the whole cold start.
