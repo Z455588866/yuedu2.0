@@ -137,7 +137,10 @@ final class CatVodGateway {
         let isLoopback = ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host)
         var spec: [String: Any]
         if isLoopback {
-            var path = url.percentEncodedPath
+            // Same spelling the rest of the project uses; `URL.percentEncodedPath`
+            // needs a newer deployment target than the app declares.
+            var path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath
+                ?? url.path
             if let query = url.query, !query.isEmpty { path += "?" + query }
             spec = ["j": bundleURL, "p": path.isEmpty ? "/" : path]
         } else if headers.isEmpty {
