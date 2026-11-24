@@ -1,4 +1,10 @@
 import { playQuarkSourceEpisode } from "./cloud-pan.mjs";
+import {
+  directPlaybackFromEpisode,
+  shareURLFromEpisode,
+  fileIDFromEpisode,
+  playBaiduShare
+} from "./cloud-share.mjs";
 import { GatewayError } from "./errors.mjs";
 
 function invalidEpisode() {
@@ -61,31 +67,54 @@ const CLOUD_PROVIDERS = {
 };
 
 function unsupportedProvider(providerID) {
-  const name = CLOUD_PROVIDERS[providerID];
+  const name = CLOUD_PROVIDERS[providerID] || "该网盘";
   return new GatewayError("CLOUD_PROVIDER_UNSUPPORTED",
-    `这条线路是${name}，App 内置网关还没有接入它的播放（目前只内置夸克）。`
-    + "换普通影视线路，或在网盘账号里改用夸克分享的资源", 422);
+    `这条线路是${name}，它的分享解析还没有接完（夸克、百度已接入）。`
+    + "可以先换这条资源的其他线路；自己盘里的文件可以在「我的网盘」里直接播。", 422);
 }
 
 export async function resolveCatVodCloudPlayer(argumentsValue, credentials, fetchValue) {
   const descriptor = decodeCatVodEpisode(argumentsValue.id);
   const providerID = String(descriptor?.providerId || "").toLowerCase();
+
+  // 夸克：分享/转码的完整解析（最早接的一家）。
+  if (providerID === "quark") {
+    const episode = parseCatVodQuarkEpisode(argumentsValue.id);
+    if (!episode) return null;
+    if (!credentials.quarkCookie) {
+      throw new GatewayError("CLOUD_AUTH_REQUIRED",
+        "请先在「猫源 → 网盘账号配置」里保存夸克 Cookie", 401);
+    }
+    try {
+      return await playQuarkSourceEpisode(episode.file, credentials, fetchValue, episode.mode === "original");
+    } catch (error) {
+      const authentication = error?.code === "CLOUD_AUTH_REQUIRED";
+      throw new GatewayError(authentication ? "CLOUD_AUTH_REQUIRED" : "CLOUD_PLAYBACK_FAILED",
+        authentication ? "夸克登录已失效，请在网盘账号配置里更新 Cookie"
+          : "夸克播放地址解析失败，请重新打开资源详情或稍后重试", authentication ? 401 : 502);
+    }
+  }
+
+  if (!descriptor) return null;
+
+  // 分享页：需要账号的走解析。百度已接，其余先看能不能退到直链。
+  const share = shareURLFromEpisode(descriptor);
+  if (share) {
+    if (providerID === "baidu" || /pan\.baidu\.com|yun\.baidu\.com/i.test(share)) {
+      return await playBaiduShare(share, credentials, fetchValue,
+        fileIDFromEpisode(descriptor, providerID));
+    }
+    const fallback = directPlaybackFromEpisode(descriptor);
+    if (fallback) return fallback;
+    throw unsupportedProvider(providerID || "unknown");
+  }
+
+  // 已经解析好的 CDN 直链，或插件自己起的本地代理：带对头就能播。
+  const direct = directPlaybackFromEpisode(descriptor);
+  if (direct) return direct;
+
   if (providerID && providerID !== "quark" && providerID in CLOUD_PROVIDERS) {
     throw unsupportedProvider(providerID);
   }
-  const episode = parseCatVodQuarkEpisode(argumentsValue.id);
-  if (!episode) return null;
-  if (!credentials.quarkCookie) {
-    throw new GatewayError("CLOUD_AUTH_REQUIRED", "请先在 TVBox“设置 → 网盘设置”中保存夸克 Cookie", 401);
-  }
-  // Prefer the source's requested mode. Original-file size restrictions may
-  // use a transcode with a UI notice. Credentials stay in the trusted parent.
-  try {
-    return await playQuarkSourceEpisode(episode.file, credentials, fetchValue, episode.mode === "original");
-  } catch (error) {
-    const authentication = error?.code === "CLOUD_AUTH_REQUIRED";
-    throw new GatewayError(authentication ? "CLOUD_AUTH_REQUIRED" : "CLOUD_PLAYBACK_FAILED",
-      authentication ? "夸克登录已失效，请在 TVBox 网盘设置中更新 Cookie"
-        : "夸克播放地址解析失败，请重新打开资源详情或稍后重试", authentication ? 401 : 502);
-  }
+  return null;
 }
