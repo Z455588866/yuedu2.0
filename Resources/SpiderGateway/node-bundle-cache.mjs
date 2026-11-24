@@ -27,6 +27,9 @@ function parseBundleURL(value, allowCredentials = false) {
     throw new GatewayError("INVALID_BUNDLE_URL", "CatVod bundle must be an HTTP or HTTPS URL", 400);
   }
   url.hash = "";
+  // 共用的规范化：`…/index.js.md5/` 与 `…/cat/` 这种结尾斜杠一律去掉。
+  // 否则同一个地址带不带斜杠会被当成两条不同 URL，白名单对不上就 403。
+  url.pathname = url.pathname.replace(/\/+$/, "") || "/";
   if (!["http:", "https:"].includes(url.protocol)) {
     throw new GatewayError("INVALID_BUNDLE_URL", "CatVod bundle must be an HTTP or HTTPS URL", 400);
   }
@@ -139,22 +142,40 @@ export class NodeBundleCache {
   }
 
   async #resolve(parsed, cacheKey) {
-    const requestedURL = parsed.url;
+    // 粘贴来的地址常常带尾斜杠（`/cat/index.js.md5/`），也有大小写不一致的。
+    // 旧代码直接 `endsWith(".js")`，这类地址被判成「不是脚本」，用户只看到一句
+    // 英文的「必须以 .js 结尾」，既不知道错在哪条源、也不知道该怎么改。
+    const requestedURL = new URL(parsed.url.toString());
+    requestedURL.pathname = requestedURL.pathname.replace(/\/+$/, "") || "/";
+    const lowerPath = requestedURL.pathname.toLowerCase();
     let bundleURL = requestedURL;
     let expectedMD5 = null;
     let manifestStale = false;
-    if (requestedURL.pathname.endsWith(".js.md5")) {
+    if (lowerPath.endsWith(".js.md5")) {
       const manifest = await this.#manifest(requestedURL, cacheKey, parsed.authorization);
       expectedMD5 = manifest.md5;
       // A cached-but-expired manifest still lets an on-disk bundle run while the
       // manifest host is unreachable. Only a fresh manifest may invalidate it.
       manifestStale = manifest.fromCache === "stale";
-      bundleURL = new URL(requestedURL);
-      bundleURL.pathname = bundleURL.pathname.slice(0, -4);
+      bundleURL = new URL(requestedURL.toString());
+      bundleURL.pathname = requestedURL.pathname.slice(0, -4);
       assertAllowedURL(bundleURL, this.allowedURLs, this.allowHTTP);
     }
-    if (!bundleURL.pathname.endsWith(".js")) {
-      throw new GatewayError("INVALID_BUNDLE_URL", "CatVod bundle URL must end with .js or .js.md5", 400);
+    let assumedIndex = false;
+    if (!bundleURL.pathname.toLowerCase().endsWith(".js")) {
+      // 只给了目录（仓库地址、`https://host/cat` 这类）时按 CatVod 惯例补
+      // index.js。补出来的地址必须在白名单里——导入时 Swift 侧已按同样规则
+      // 登记，所以这里不会放宽信任范围。
+      const candidate = new URL(requestedURL.toString());
+      candidate.pathname = `${requestedURL.pathname === "/" ? "" : requestedURL.pathname}/index.js`;
+      try {
+        assertAllowedURL(candidate, this.allowedURLs, this.allowHTTP);
+        bundleURL = candidate;
+        assumedIndex = true;
+      } catch {
+        throw new GatewayError("INVALID_BUNDLE_URL",
+          `这个地址不是猫源脚本（需要以 .js 或 .js.md5 结尾）：${requestedURL.toString()}`, 400);
+      }
     }
 
     await mkdir(this.cacheDir, { recursive: true, mode: 0o700 });
@@ -186,6 +207,11 @@ export class NodeBundleCache {
         bundleURL, cacheKey, parsed.authorization);
     } catch (error) {
       await unlink(temporaryPath).catch(() => {});
+      if (assumedIndex && error.code === "BUNDLE_DOWNLOAD_FAILED") {
+        throw new GatewayError("INVALID_BUNDLE_URL",
+          `这个地址下没有找到猫源脚本（应在 ${bundleURL.toString()}，需要以 .js 或 .js.md5 结尾）：`
+          + requestedURL.toString(), 400);
+      }
       throw error;
     }
   }

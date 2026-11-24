@@ -130,8 +130,21 @@ final class CatVodGateway {
         components.password = nil
         components.fragment = nil
         if let value = components.url?.absoluteString { values.append(value) }
-        if components.percentEncodedPath.lowercased().hasSuffix(".js.md5") {
+        // 粘贴的地址带尾斜杠（`…/index.js.md5/`）时 node 侧会先规范化再下载，
+        // 规范化后的字符串也必须登记，否则会被白名单挡成 403。
+        var path = components.percentEncodedPath
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        components.percentEncodedPath = path.isEmpty ? "/" : path
+        if let value = components.url?.absoluteString { values.append(value) }
+        let lowerPath = components.percentEncodedPath.lowercased()
+        if lowerPath.hasSuffix(".js.md5") {
             components.percentEncodedPath = String(components.percentEncodedPath.dropLast(4))
+            if let value = components.url?.absoluteString { values.append(value) }
+        } else if !lowerPath.hasSuffix(".js") {
+            // 只给了目录（如 `https://host/cat`）时按 index.js 补全，与 node
+            // 侧的兜底规则保持一致。
+            let base = components.percentEncodedPath
+            components.percentEncodedPath = (base.hasSuffix("/") ? base : base + "/") + "index.js"
             if let value = components.url?.absoluteString { values.append(value) }
         }
         return Array(Set(values)).sorted()
@@ -197,6 +210,12 @@ enum CatVodError: LocalizedError {
                 return localized("源站连不上（源自己的问题，不是 App 坏了）。稍后重试，或者换一个站点")
             }
             return String(format: localized("源站返回错误：%@"), text.isEmpty ? localized("未知原因") : text)
+        }
+        // 地址本身不是猫源脚本：这是导入时粘错了，不是网络问题。原样抛出网关
+        // 已经写好的中文说明，再补一句该去哪儿改，否则「请求失败（400）」只会
+        // 让人以为软件坏了。
+        if text.contains("不是猫源脚本") || text.contains("没有找到猫源脚本") {
+            return "\(text)。去「管理猫源」删掉这条，或换成以 .js / .js.md5 结尾的地址"
         }
         if code == 401 || code == 403 {
             return String(format: localized("源站拒绝访问（%ld），可能需要登录或 Cookie 已失效：%@"), code, text)

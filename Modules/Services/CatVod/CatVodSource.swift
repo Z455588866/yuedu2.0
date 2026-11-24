@@ -103,8 +103,24 @@ struct CatVodSource: Codable, Identifiable, Hashable, Sendable {
         return "\(host) · \(last)"
     }
 
+    /// `index.js` → `index.js.md5` 的清单地址。
+    ///
+    /// 判断和拼接都只看路径：粘贴的地址常带尾斜杠或查询串，
+    /// `…/index.js.md5/` 曾被拼成 `…/index.js.md5/.md5`，落到网关里就是
+    /// 「地址必须以 .js 或 .js.md5 结尾」——报错指向一个根本看不出错的地址。
     var checksumURL: String {
-        url.hasSuffix(".md5") ? url : url + ".md5"
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: trimmed) else {
+            return trimmed.lowercased().hasSuffix(".md5") ? trimmed : trimmed + ".md5"
+        }
+        var path = components.percentEncodedPath
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        if path.lowercased().hasSuffix(".md5") {
+            components.percentEncodedPath = path
+            return components.string ?? trimmed
+        }
+        components.percentEncodedPath = path + ".md5"
+        return components.string ?? (trimmed + ".md5")
     }
 }
 

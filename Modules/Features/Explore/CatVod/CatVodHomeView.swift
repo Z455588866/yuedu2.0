@@ -669,9 +669,16 @@ struct CatVodHomeView: View {
             if loaded.isEmpty { return }
             await loadHome()
         } catch {
+            // 「这个接口加载失败」比「猫源请求失败（400）」有用得多：列表里常有
+            // 好几条源，人得先知道是哪一个出问题才谈得上改或删。
+            let failure = error.localizedDescription
+            let currentName = await MainActor.run {
+                sources.first(where: { $0.id == selectedSourceID })?.name
+            }
             await MainActor.run {
                 if token == loadToken {
-                    message = error.localizedDescription
+                    message = currentName.map { String(format: localized("接口「%@」加载失败：%@"), $0, failure) }
+                        ?? failure
                     isLoading = false
                 }
             }
