@@ -209,6 +209,9 @@ final class CatVodSourceStore {
     struct ImportResult: Sendable {
         let added: Int
         let updated: Int
+        /// 判为“已存在”的那几条当前显示名。导入后提示里点名，人才知道是
+        /// 哪一行重复了——只说「已导入 1 个」而列表不动，会被当成没生效。
+        var updatedNames: [String] = []
         var total: Int { added + updated }
     }
 
@@ -223,12 +226,14 @@ final class CatVodSourceStore {
         // 新导入的放在最上面：列表长了以后追加到末尾要滚半天，人往往只看到
         // 「已导入 1 个」却找不到那一行，就以为导入没生效。批量粘贴时按原顺序插。
         var prepend: [CatVodSource] = []
+        var updatedNames: [String] = []
         for var source in incoming {
             let defaultName = CatVodSource.name(from: source.url)
             if let index = next.firstIndex(where: { $0.id == source.id || $0.url == source.url }) {
                 // Re-importing the same address must not wipe a name the person typed.
                 if source.name == defaultName { source.name = next[index].name }
                 next[index] = source
+                updatedNames.append(next[index].name)
                 updated += 1
             } else {
                 if source.name == defaultName {
@@ -240,7 +245,7 @@ final class CatVodSourceStore {
         }
         sources = prepend + next
         persist()
-        return ImportResult(added: added, updated: updated)
+        return ImportResult(added: added, updated: updated, updatedNames: updatedNames)
     }
 
     /// Convenience for a URL typed/pasted on its own.

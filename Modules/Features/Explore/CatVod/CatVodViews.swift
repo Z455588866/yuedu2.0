@@ -195,7 +195,12 @@ struct CatVodSourceSettingsView: View {
             let result = try store.import(data)
             let total = store.sources.count
             if result.added == 0, result.updated > 0 {
-                importMessage = String(format: localized("这 %d 个接口已经在列表里（已刷新，共 %d 个）"), result.updated, total)
+                // 点名是「哪几行」。只说「已导入 1 个」而列表不动，人只会得出
+                // 「导入没生效」；名字一亮出来，就能判断是自己早就导过、还是
+                // 地址认错了。
+                let names = result.updatedNames.joined(separator: "、")
+                importMessage = String(format: localized("这 %d 个地址已经在列表里：%@（已刷新，共 %d 个）"),
+                                       result.updated, names, total)
             } else if result.updated > 0 {
                 importMessage = String(format: localized("已导入 %d 个猫源，%d 个已存在并更新（共 %d 个）"), result.added, result.updated, total)
             } else {
