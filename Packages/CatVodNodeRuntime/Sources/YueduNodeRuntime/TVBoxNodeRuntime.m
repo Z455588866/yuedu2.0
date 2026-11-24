@@ -111,11 +111,22 @@ static napi_value initializeBridge(napi_env env, napi_value exports) {
                     strcpy(cursor, arguments[index].UTF8String);
                     cursor += strlen(cursor) + 1;
                 }
+                // 侧载安装的 App 连不上 Xcode，引擎一死就只剩界面上一句话。
+                // 把 V8/网关的 stdout+stderr 落到运行目录，用户能导出、我们也
+                // 能拿到真实堆栈。放在 chdir 之后，路径不受 cwd 影响。
+                NSString *logPath = [directory stringByAppendingPathComponent:@"gateway.log"];
+                freopen(logPath.fileSystemRepresentation, "a", stderr);
+                freopen(logPath.fileSystemRepresentation, "a", stdout);
                 node_start((int)arguments.count, argv);
                 free(argv); free(storage);
                 @synchronized (self) {
                     listeningURL = nil;
-                    startupError = @"手机内置脚本引擎已停止，请重新启动 App";
+                    // JS 侧已经通过 bridge.failed() 报了真实原因（配置校验失败、
+                    // 端口被占…）。这里再无条件覆盖成「已停止」，等于把最有用的
+                    // 一行线索擦掉，界面上只剩一句让用户重启 App 的空话。
+                    if (startupError.length == 0) {
+                        startupError = @"手机内置脚本引擎已停止，请重新启动 App";
+                    }
                 }
             }
         }];

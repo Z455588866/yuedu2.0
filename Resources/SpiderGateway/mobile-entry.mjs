@@ -76,12 +76,25 @@ export async function startMobileGateway(bridge, dependencies = {}) {
 
 if (process.argv[1]?.endsWith('/mobile-entry.mjs')) {
   const bridge = process._linkedBinding('yuedu_mobile');
-  // 启动失败必须把原因带出去。原来只调 `bridge.failed()`，Swift 侧拿不到
-  // startupError，只能干等到 20 秒超时，界面上就变成「引擎启动超时」——
-  // 真实原因（比如配置校验失败）被彻底吞掉，排查只能靠猜。
-  startMobileGateway(bridge).catch((error) => {
-    const reason = String(error?.message ?? error ?? 'unknown error');
-    console.error('gateway startup failed:', reason);
+  // 起来之前失败 = 引擎没服务，必须把原因带出去；起来之后的异常 = 单个请求
+  // 的疏漏，只记日志，不能让整个引擎跟着陪葬。
+  let serving = false;
+  const report = (error) => {
+    const reason = String(error?.stack ?? error?.message ?? error ?? 'unknown error');
+    console.error('gateway failure:', reason);
+    if (serving) return;
     try { bridge.failed(reason); } catch { bridge.failed(); }
+  };
+  // 之前这里什么都没兜：一个未接的 promise 或 throw 就直接把 V8 进程带走，
+  // Swift 侧只看到线程结束，界面显示「手机内置脚本引擎已停止」，真实原因
+  // （哪个请求、什么错）全丢，用户除了重启 App 没有任何办法。
+  // Node 的默认行为是 unhandledRejection 直接退出进程，网关是长驻服务，
+  // 这个默认值对它就是致命的。
+  process.on('uncaughtException', report);
+  process.on('unhandledRejection', report);
+  startMobileGateway(bridge).then(() => { serving = true; }).catch((error) => {
+    report(error);
+    // 留出窗口让 Swift 那侧（25ms 轮询）读到 startupError 再退出。
+    setTimeout(() => process.exit(1), 1500);
   });
 }
