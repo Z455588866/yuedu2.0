@@ -19,6 +19,10 @@ struct CatVodHomeView: View {
     @State private var message: String?
     @State private var detailItem: CatVodMedia?
     @State private var detailGroups: [CatVodGroup] = []
+    /// The source answered the detail request with nothing (豆瓣-style rows carry a
+    /// poster and a rating but no episode list). Shown inside the sheet instead of
+    /// closing it — a sheet that disappears on its own reads as a crash.
+    @State private var detailMissing = false
     /// Filter groups from the last `home` response, keyed by category id. Kept
     /// separately from `list` because `category` responses do not carry filters.
     @State private var allFilters: [String: [CatVodFilter]] = [:]
@@ -730,6 +734,7 @@ struct CatVodHomeView: View {
             // signals that the episodes are being refreshed in the background.
             isLoadingDetail = true
             message = nil
+            detailMissing = false
             detailSite = site
             detailItem = item
             return false
@@ -748,31 +753,24 @@ struct CatVodHomeView: View {
                 isOpeningDetail = false
             }
         } catch {
-            // 源对这一条什么都没返回：不要停在一张空白的详情页上，直接拿片名
-            // 去全网搜一遍。用户点的是「这部剧」，不是「这个源的这一条记录」。
+            // 源对这一条什么都没返回。以前这里会 `detailItem = nil` 再自动跳到全网
+            // 搜索：弹层在加载动画之后自己消失，看起来就是「点开一部剧就闪退」。
+            // 现在留在弹层里说清楚，把「换源搜」交给用户点。
             var missing = false
             if let catError = error as? CatVodError, case .emptyResponse = catError { missing = true }
-            let fallback = missing && !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             await MainActor.run {
                 if detailItem?.id == item.id {
                     // Keep the cached episodes visible: a failed refresh is worth a
                     // line of text, not wiping the list the person can still play.
-                    message = error.localizedDescription
+                    message = missing
+                        ? localized("这个源没有返回这部剧的详细信息")
+                        : error.localizedDescription
+                    // Whatever the cause, ending with no episodes needs an exit that the
+                    // person can see. `missing` only changes the wording.
+                    detailMissing = true
                     isLoadingDetail = false
                 }
                 isOpeningDetail = false
-                if fallback { detailItem = nil }
-            }
-            if fallback {
-                await MainActor.run { keyword = item.name }
-                await search()
-                // 结果替换的是主列表，得说清为什么：不然会以为刚点的那部剧
-                // 自己变成了另一堆封面。
-                await MainActor.run {
-                    if !list.media.isEmpty {
-                        message = String(format: localized("「%@」在当前源没有条目，以下是全网搜索结果"), item.name)
-                    }
-                }
             }
         }
     }
@@ -920,28 +918,59 @@ struct CatVodHomeView: View {
                         .padding(.vertical, 30)
                     } else if detailGroups.isEmpty {
                         VStack(spacing: 8) {
-                            Image(systemName: "film.stack")
+                            Image(systemName: detailMissing ? "magnifyingglass" : "film.stack")
                                 .font(.system(size: 30))
                                 .foregroundStyle(DSColor.textSecondary)
-                            Text(localized("没有可播放的剧集"))
+                            Text(detailMissing
+                                 ? localized("没拿到这部剧的剧集")
+                                 : localized("没有可播放的剧集"))
                                 .font(DSFont.caption)
                                 .foregroundStyle(DSColor.textSecondary)
                             // Netdisk/Alist rows often carry a title and a size
                             // ("6.6GB") but no episode list until an account is
                             // signed in — that is why this sheet looked empty
                             // for cloud titles while ordinary ones worked.
-                            Text(localized("这个条目只有简介，没有剧集列表。网盘或 Alist 资源需要先在网盘账号里登录；也可能是源站只给了分享链接、没有可播放地址。"))
+                            Text(detailMissing
+                                 ? localized("这一条只有简介（豆瓣类条目常见），或者刚刚请求超时了。可以重试，也可以换到已启用的其它源里搜这部剧。")
+                                 : localized("这个条目只有简介，没有剧集列表。网盘或 Alist 资源需要先在网盘账号里登录；也可能是源站只给了分享链接、没有可播放地址。"))
                                 .font(DSFont.caption2)
                                 .foregroundStyle(DSColor.textSecondary)
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 24)
-                            NavigationLink {
-                                CatVodCloudAccountView()
-                            } label: {
-                                Text(localized("网盘账号配置")).font(DSFont.caption)
+                            if detailMissing {
+                                HStack(spacing: 10) {
+                                    Button {
+                                        Task { await openDetail(item) }
+                                    } label: {
+                                        Label(localized("重试"), systemImage: "arrow.clockwise")
+                                            .font(DSFont.caption)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    Button {
+                                        let name = item.name
+                                        // Closing the sheet is now something the person
+                                        // asks for, not something that happens to them.
+                                        detailItem = nil
+                                        Task {
+                                            keyword = name
+                                            await search()
+                                        }
+                                    } label: {
+                                        Label(localized("全网搜索"), systemImage: "magnifyingglass")
+                                            .font(DSFont.caption)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
+                                .padding(.top, 2)
+                            } else {
+                                NavigationLink {
+                                    CatVodCloudAccountView()
+                                } label: {
+                                    Text(localized("网盘账号配置")).font(DSFont.caption)
+                                }
+                                .buttonStyle(.bordered)
+                                .padding(.top, 2)
                             }
-                            .buttonStyle(.bordered)
-                            .padding(.top, 2)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 30)
