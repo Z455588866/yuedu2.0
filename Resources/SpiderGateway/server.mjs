@@ -27,26 +27,33 @@ async function pythonCatalog(config, bundle) {
   const base = pythonBase(config);
   if (!base) return [];
   try {
-    const response = await fetch(`${base}/v1/pyspider/sites`, { signal: AbortSignal.timeout(5000) });
+    const response = await fetch(`${base}/v1/pyspider/sites`, { signal: AbortSignal.timeout(1500) });
     if (!response.ok) return [];
     const body = await response.json();
     const sites = Array.isArray(body?.sites) ? body.sites : [];
     return sites
-      .filter((site) => site && typeof site.key === "string" && site.key !== "")
       .map((site) => {
-        const key = PYTHON_SITE_PREFIX + String(site.key).replace(/[^\w-]/gu, "");
+        // token 是 Python 侧给的哈希；源名多是中文，直接清洗名字会得到空串，
+        // 多个源就撞成同一个 key、全部指到最后一个。旧版服务没有 token 时
+        // 退回从 api（/py/<token>）里截。
+        const raw = String(site?.token ?? (String(site?.api ?? "").split("/py/")[1] ?? ""));
+        const token = raw.split("/")[0].replace(/[^\w-]/gu, "");
+        if (!token) return null;
+        const key = PYTHON_SITE_PREFIX + token;
         return {
           key,
-          name: String(site.name ?? site.key),
+          name: String(site.name ?? site.key ?? token),
           // 形状和 JS 源一致，界面不用为它做特判；jar 只是过校验用，
           // 因为 py 站点在下面就被拦下，不会进 CatVod 运行时。
           api: `/spider/${encodeURIComponent(key)}/4`,
           type: 4,
           jar: bundle,
           ext: String(site.ext ?? ""),
+          searchable: true,
           py: true
         };
-      });
+      })
+      .filter(Boolean);
   } catch {
     return [];
   }

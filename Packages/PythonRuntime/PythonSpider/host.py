@@ -263,6 +263,10 @@ class Session:
             elif action == "play":
                 result = spider.playerContent(args.get("flag") or "", args.get("id") or "",
                                               args.get("flags") or [])
+                # 老插件用 playUrl 而不是 url；TVBox 现在两个都认，这里统一成 url。
+                if isinstance(result, dict) and not result.get("url") and result.get("playUrl"):
+                    result = dict(result)
+                    result["url"] = result["playUrl"]
             else:
                 raise ValueError("不认识的动作：%s" % action)
         if result in (None, "", {}):

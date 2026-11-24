@@ -42,14 +42,25 @@ enum CatVodPlaybackRoute: Sendable, Equatable {
         var request = URLRequest(url: url)
         // 两个字节就够判 RIFF/EBML，但要读满 12 才能确认 AVI。范围小，源站不会因此传整个文件。
         request.setValue("bytes=0-15", forHTTPHeaderField: "Range")
-        request.timeoutInterval = 5
+        request.timeoutInterval = 3
         let isLoopback = ["127.0.0.1", "localhost", "::1"].contains(url.host ?? "")
         if !isLoopback {
             for (field, value) in headers where field.lowercased() != "range" {
                 request.setValue(value, forHTTPHeaderField: field)
             }
         }
-        guard let (data, response) = try? await URLSession.shared.data(for: request) else { return nil }
+        // 只读前 16 字节就断开。用 data(for:) 会把整个响应读进内存——遇到
+        // 不认 Range 的服务（Python 源的 localProxy 就是），那就是几百 MB。
+        guard let (stream, response) = try? await URLSession.shared.bytes(for: request) else { return nil }
+        var data = Data()
+        do {
+            for try await byte in stream {
+                data.append(byte)
+                if data.count >= 16 { break }
+            }
+        } catch {
+            // 读到一半断开也算拿到指纹；一个字节没读到就交给系统播放器。
+        }
         if let kind = container(of: data) { return kind }
         // 指纹认不出来时再看 MIME：有些源站把 MKV 直接标成 video/x-matroska。
         if let mime = (response as? HTTPURLResponse)?.mimeType?.lowercased() {

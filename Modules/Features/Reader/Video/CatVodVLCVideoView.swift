@@ -35,6 +35,10 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
     private var player: VLCMediaPlayer?
     private var tickTask: Task<Void, Never>?
     private var pendingSeek: Double = 0
+    /// 播完之后要能重来一遍：VLC 停在 `.ended` 时再调 `play()` 不会动，
+    /// 必须换一个新的 media 对象。
+    private var sourceURL: URL?
+    private var sourceHeaders: [String: String] = [:]
 
     var isLive: Bool { duration <= 0 }
 
@@ -43,6 +47,8 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         failure = nil
         isPreparing = true
         pendingSeek = startAt
+        sourceURL = url
+        sourceHeaders = headers
 
         // 与系统播放器相同的取舍：少丢帧、按音频时钟走，避免网盘流忽快忽慢时画面抖。
         let player = VLCMediaPlayer(options: ["--no-drop-late-frames", "--no-skip-frames"])
@@ -50,6 +56,13 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         player.drawable = drawable
         self.player = player
 
+        player.media = makeMedia(url: url, headers: headers)
+        player.play()
+        startTicker()
+    }
+
+    /// 这个容器要带 Referer/Cookie/UA 才拿得到数据；字段名大小写不固定，统一小写比对。
+    private func makeMedia(url: URL, headers: [String: String]) -> VLCMedia {
         let media = VLCMedia(url: url)
         // 缓存给足一点：网盘 CDN 的握手和首包经常要几秒，缓存太小会刚播就卡。
         var options: [String: Any] = [
@@ -58,7 +71,6 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
             "file-caching": 1000,
             "http-reconnect": 1,
         ]
-        // 源站按 Referer/Cookie/UA 发链，缺一个就是 403。字段名大小写不固定，统一小写比对。
         var cookie: [String] = []
         for (field, value) in headers {
             switch field.lowercased() {
@@ -79,20 +91,33 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         }
         options["http-user-agent"] = options["http-user-agent"] ?? Self.safariUserAgent
         media.addOptions(options)
-
-        player.media = media
-        player.play()
-        startTicker()
+        return media
     }
 
     func togglePlayPause() {
         guard let player else { return }
+        // 播完停在 `.ended`：直接 play() 不会动，得换一个 media 从头来。
+        if player.state == .ended {
+            replay()
+            return
+        }
         if player.isPlaying {
             player.pause()
         } else {
             player.play()
         }
         isPlaying = player.isPlaying
+    }
+
+    private func replay() {
+        guard let player, let url = sourceURL else { return }
+        failure = nil
+        isPreparing = true
+        pendingSeek = 0
+        time = 0
+        player.stop()
+        player.media = makeMedia(url: url, headers: sourceHeaders)
+        player.play()
     }
 
     func seek(to seconds: Double) {

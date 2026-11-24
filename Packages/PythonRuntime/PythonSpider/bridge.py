@@ -154,16 +154,22 @@ class Registry:
                 log("close failed", oldest, error)
 
     def catalog(self, base):
-        """给网关的站点清单：api 指向本服务的 /py/<key>。"""
+        """给网关的站点清单。
+
+        `token` 必须显式给出：源名多半是中文（`file:韩小圈`），网关要拿它
+        拼站点 key，直接清洗名字会得到空串、多个源互相覆盖；哈希后的 token
+        是纯 ASCII 且唯一。`api` 也用它，网关会原样转发到 /py/<token>。
+        """
         return [
             {
                 "key": source["key"],
+                "token": token,
                 "name": source["name"],
                 "type": 4,
                 "api": "%s/py/%s" % (base, token),
-                "searchable": 1,
-                "filterable": 1,
-                "quickSearch": 0,
+                "searchable": True,
+                "filterable": True,
+                "quickSearch": False,
                 "ext": source["ext"],
             }
             for token, source in self.sources.items()

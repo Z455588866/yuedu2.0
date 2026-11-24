@@ -173,7 +173,10 @@ struct CatVodLiveView: View {
 
     private var list: some View {
         List {
-            if model.selectedGroup == nil, !model.favoriteChannels.isEmpty {
+            // 收藏是快捷入口，跟当前选的分组无关。以前这里要求
+            // `selectedGroup == nil`，但加载时就会选中第一个分组，所以收藏区
+            // 永远不出现。
+            if !model.favoriteChannels.isEmpty {
                 Section(localized("收藏")) {
                     ForEach(model.favoriteChannels) { channel in row(channel) }
                 }

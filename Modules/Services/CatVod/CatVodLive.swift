@@ -89,6 +89,14 @@ enum CatVodLivePlaylist {
                 if let value = value(of: "http-referrer", in: body) { current.headers["Referer"] = value }
                 if let value = value(of: "http-cookie", in: body) { current.headers["Cookie"] = value }
                 pending = current
+            } else if line.hasPrefix("#EXTGRP:") {
+                // 国内 IPTV 列表常用 `#EXTGRP:央视` 单独给下一批频道分组
+                // （而不是写在 EXTINF 的 group-title 上）。
+                guard var current = pending else { continue }
+                let value = String(line.dropFirst("#EXTGRP:".count))
+                    .trimmingCharacters(in: .whitespaces)
+                if !value.isEmpty { current.group = value }
+                pending = current
             } else if line.hasPrefix("#") {
                 continue
             } else if let current = pending {

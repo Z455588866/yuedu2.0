@@ -53,7 +53,9 @@ export function validateInvokeRequest(body) {
     ext: optionalExt(body.site.ext, "site.ext"),
     quickSearch: body.site.quickSearch === true,
     // Python 源：由本机 Python 服务答话，不进 CatVod 的 JS 运行时。
-    py: body.site.py === true
+    // 光看客户端传的 py 标记不够——App 回传站点时只带 key/api/jar/ext，
+    // 所以同时按 key 前缀认（目录接口给 Python 源统一加了 py- 前缀）。
+    py: body.site.py === true || /^py-[\w-]+$/.test(String(body.site.key ?? ""))
   };
   if (!site.api.startsWith("csp_") && !CATVOD_API.test(site.api)) {
     throw new GatewayError("UNSUPPORTED_API", "site.api must be csp_* or a valid /spider/<key>/<type> path", 400);

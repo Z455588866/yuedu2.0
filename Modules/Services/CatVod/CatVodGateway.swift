@@ -15,6 +15,8 @@ final class CatVodGateway {
     private let cacheDirectory: URL
     /// 内嵌 Python 服务的端口；0 表示这个包没有 Python 运行时（构建时没链框架）。
     private var pythonSpiderPort = 0
+    /// 只尝试启动一次：失败后每次进猫源都重试会白白多等几秒。
+    private var pythonStartupAttempted = false
 
     /// 用户放进来的 .py 源。Documents 已对「文件」App 开放，拖进去就能用。
     private var pythonSourcesDirectory: URL {
@@ -87,15 +89,22 @@ final class CatVodGateway {
 
     /// 拉起内嵌 Python。它和 Node 引擎一样是"启动一次就一直在"，
     /// 失败只会让 Python 源不出现，不影响其它源。
-    private func startPythonRuntimeIfNeeded() {
-        guard pythonSpiderPort == 0 else { return }
+    private func startPythonRuntimeIfNeeded() async {
+        guard pythonSpiderPort == 0, !pythonStartupAttempted else { return }
+        pythonStartupAttempted = true
         let fileManager = FileManager.default
         try? fileManager.createDirectory(at: pythonSourcesDirectory, withIntermediateDirectories: true)
         let root = Bundle.main.bundleURL.path
         let cache = cacheDirectory.appendingPathComponent("Python", isDirectory: true).path
         try? fileManager.createDirectory(atPath: cache, withIntermediateDirectories: true)
-        // 解释器初始化要一两秒（要解压标准库），别占着主线程。
-        let port = YueduPythonRuntime.start(root: root, cache: cache, scan: pythonSourcesDirectory.path)
+        let scan = pythonSourcesDirectory.path
+        // 解释器初始化要一两秒（解压标准库 + 起本地服务），而这个类是 @MainActor，
+        // 同步调用会把启动画面卡住。丢到后台，等它好了再回来写端口。
+        let port = await withCheckedContinuation { (continuation: CheckedContinuation<Int, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: YueduPythonRuntime.start(root: root, cache: cache, scan: scan))
+            }
+        }
         pythonSpiderPort = port
         if port > 0 {
             AppLogger.info("[CatVod] Python 源服务已启动，端口 \(port)", level: .notice)
@@ -129,7 +138,7 @@ final class CatVodGateway {
         activeAllowedURLs = replacingAllowlist ? requested : activeAllowedURLs.union(requested)
         try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
 
-        startPythonRuntimeIfNeeded()
+        await startPythonRuntimeIfNeeded()
         let json = try configurationJSON()
 
         YueduNodeRuntime.start(script: entryPoint.path,
@@ -162,11 +171,17 @@ final class CatVodGateway {
     /// keeps the bundle identity instead of the dead port, re-attaches headers on
     /// every hop and rewrites HLS playlists. Mature CatVod hosts do the same.
     func playbackProxyURL(for url: URL, bundleURL: String, headers: [String: String]) -> URL? {
+        let host = url.host?.lowercased() ?? ""
+        let isLoopback = ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host)
+        // Python 源自己的 localProxy 就挂在内嵌 Python 服务的端口上，那个路径
+        // 属于 Python 进程，不是 JS bundle 的，转给网关只会 404。它本来就在本机、
+        // 自己会补 Referer/Cookie，原样交给播放器。
+        if isLoopback, let port = url.port, port == pythonSpiderPort, pythonSpiderPort > 0 {
+            return url
+        }
         guard let base = baseURL ?? YueduNodeRuntime.listeningURL().flatMap(URL.init(string:)) else {
             return nil
         }
-        let host = url.host?.lowercased() ?? ""
-        let isLoopback = ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host)
         var spec: [String: Any]
         if isLoopback {
             // Same spelling the rest of the project uses; `URL.percentEncodedPath`
