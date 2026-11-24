@@ -28,6 +28,8 @@ struct CatVodHomeView: View {
     @State private var allFilters: [String: [CatVodFilter]] = [:]
     /// Chosen filter values for the current category, keyed by filter key.
     @State private var filterChoices: [String: String] = [:]
+    /// 多组筛选默认只露第一组，其余收进「更多筛选」。
+    @State private var filtersExpanded = false
     /// Reverse episode order within every group (影匣's 倒序 switch).
     @State private var episodesReversed = false
     @State private var searchHistory: [String] = []
@@ -63,11 +65,19 @@ struct CatVodHomeView: View {
     @State private var detailSite: CatVodSite?
     /// media id → the site it came from, for search results only.
     @State private var resultSites: [String: CatVodSite] = [:]
+    /// 当前网格是「全网搜索结果」而不是某个分类；非空时顶部会显示一条说明，
+    /// 让人知道自己在看什么、以及怎么退回分类浏览。
+    @State private var activeSearchTerm: String?
+    /// 详情页里最近点开播放的那一集，返回详情时高亮它。
+    @State private var lastPlayedEpisodeID: String?
 
     private var sources: [CatVodSource] { store.enabledSources }
 
     private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: 104), spacing: 12)]
+        // 上限 160：iPad 和 Plus 上铺满宽度时海报不会被拉成一条长条，
+        // 下限 104 保证 iPhone mini 上还是四列。原来固定 104 宽，在宽屏上
+        // 每列右边缘留一条不等的缝，看起来像排版没做完。
+        [GridItem(.adaptive(minimum: 104, maximum: 160), spacing: 12)]
     }
 
     private static let searchHistoryKey = "yd_catvod_search_history"
@@ -124,6 +134,7 @@ struct CatVodHomeView: View {
                 selectedSite = site
                 currentCategory = nil
                 filterChoices = [:]
+                filtersExpanded = false
                 Task { await loadHome() }
             }
         }
@@ -157,58 +168,125 @@ struct CatVodHomeView: View {
     // MARK: - Picker header
 
     private var sourcePicker: some View {
-        HStack(spacing: 10) {
-            Picker(localized("接口"), selection: Binding(
-                get: { selectedSourceID ?? sources.first?.id ?? "" },
-                set: { selectedSourceID = $0 }
-            )) {
+        HStack(spacing: 8) {
+            // 接口用 Menu 而不是 Picker(.menu)：Picker 在胶囊样式下无法显示
+            // 当前项的对勾，接口一多就分不清自己在哪一个里。
+            Menu {
                 ForEach(sources) { source in
-                    Text(source.name)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .tag(source.id)
+                    Button {
+                        selectedSourceID = source.id
+                    } label: {
+                        if source.id == (selectedSourceID ?? sources.first?.id) {
+                            Label(source.name, systemImage: "checkmark")
+                        } else {
+                            Text(source.name)
+                        }
+                    }
                 }
+            } label: {
+                headerPill(icon: "square.stack.3d.up.fill",
+                           title: currentSource?.name ?? localized("接口"),
+                           showsChevron: true)
             }
-            .pickerStyle(.menu)
-            .frame(maxWidth: .infinity)
 
-            if sites.count > 1 {
-                // 几十上百个站点用菜单选不动：没有搜索，名字必被截断，也看不出
-                // 哪个最近连不上。换成可搜索的列表。
+            // 只有一个站点时也显示，让人知道当前在用哪个；只是不可切换。
+            if !sites.isEmpty {
                 Button {
                     showsSitePicker = true
                 } label: {
-                    HStack(spacing: 4) {
-                        Text(selectedSite?.name ?? localized("选择站点"))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Image(systemName: "chevron.down")
-                            .font(DSFont.caption2)
-                    }
-                    .frame(maxWidth: .infinity)
+                    headerPill(icon: "antenna.radiowaves.left.and.right",
+                               title: selectedSite?.name ?? localized("选择站点"),
+                               showsChevron: sites.count > 1)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(.plain)
+                .disabled(sites.count <= 1)
                 .accessibilityLabel(localized("选择站点"))
             }
+
+            Spacer(minLength: 0)
         }
-        .onChange(of: selectedSourceID) { _, _ in Task { await loadCatalogAndHome() } }
+        .padding(.horizontal)
+        .onChange(of: selectedSourceID) { old, _ in
+            // 首次由 `.task` 赋值时不重复加载，那一次由 content 的 task 负责。
+            guard old != nil else { return }
+            Task { await loadCatalogAndHome() }
+        }
+    }
+
+    private var currentSource: CatVodSource? {
+        sources.first { $0.id == selectedSourceID } ?? sources.first
+    }
+
+    private func headerPill(icon: String, title: String, showsChevron: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(DSFont.caption2)
+                .foregroundStyle(DSColor.textSecondary)
+            Text(title)
+                .font(DSFont.caption.weight(.medium))
+                .foregroundStyle(DSColor.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if showsChevron {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(DSColor.textSecondary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(DSColor.surfaceTertiary, in: Capsule())
+        .contentShape(Capsule())
     }
 
     private var searchBar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                TextField(localized("搜索全部站点片名"), text: $keyword)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($searchFocused)
-                    .onSubmit { Task { await search() } }
-                Button { Task { await search() } } label: {
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
+                        .font(DSFont.caption)
+                        .foregroundStyle(DSColor.textSecondary)
+                    TextField(localized("搜索全部站点片名"), text: $keyword)
+                        .textFieldStyle(.plain)
+                        .font(DSFont.subheadline)
+                        .focused($searchFocused)
+                        .submitLabel(.search)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .onSubmit { Task { await search() } }
+                    if !keyword.isEmpty {
+                        Button {
+                            keyword = ""
+                            activeSearchTerm = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(DSFont.caption)
+                                .foregroundStyle(DSColor.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(localized("清空"))
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
+                .background(DSColor.surfaceTertiary,
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                Button { Task { await search() } } label: {
+                    if isLoading && activeSearchTerm == nil {
+                        ProgressView().scaleEffect(0.8).frame(width: 44)
+                    } else {
+                        Text(localized("搜索"))
+                            .font(DSFont.subheadline.weight(.semibold))
+                    }
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
                 .disabled(keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            if !searchHistory.isEmpty && keyword.isEmpty {
+
+            // 搜索历史只在输入框聚焦时空出来，否则会永久占一行、把网格往下压。
+            if searchFocused && !searchHistory.isEmpty && keyword.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         Image(systemName: "clock.arrow.circlepath")
@@ -232,32 +310,47 @@ struct CatVodHomeView: View {
                 }
             }
         }
+        .padding(.horizontal)
     }
 
     private var categoryBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                categoryChip(title: localized("推荐"), selected: currentCategory == nil) {
-                    currentCategory = nil
-                    Task { await loadHome() }
-                }
-                ForEach(Array(displayCategories.enumerated()), id: \.offset) { _, category in
-                    categoryChip(title: category.name, selected: currentCategory?.id == category.id) {
-                        currentCategory = category
-                        filterChoices = [:]
-                        Task { await loadCategory(category) }
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    categoryChip(title: localized("推荐"), selected: currentCategory == nil) {
+                        currentCategory = nil
+                        Task { await loadHome() }
+                    }
+                    .id(Self.homeCategoryID)
+                    ForEach(Array(displayCategories.enumerated()), id: \.offset) { _, category in
+                        categoryChip(title: category.name, selected: currentCategory?.id == category.id) {
+                            currentCategory = category
+                            filterChoices = [:]
+                            filtersExpanded = false
+                            Task { await loadCategory(category) }
+                        }
+                        .id(category.id)
                     }
                 }
+                .padding(.horizontal)
             }
-            .padding(.horizontal)
+            // 一个接口常有二三十个分类，选中的那个经常在屏幕外——尤其是从搜索结果
+            // 回来或者切了站点之后。选中项自动滚到中间，不用再横着扒半天。
+            .onChange(of: currentCategory?.id) { _, next in
+                withAnimation(.snappy(duration: 0.25)) {
+                    proxy.scrollTo(next ?? Self.homeCategoryID, anchor: .center)
+                }
+            }
         }
     }
+
+    private static let homeCategoryID = "__catvod_home__"
 
     /// Filter chip row shown under the category bar when the current category
     /// declares filters. Selecting a value reloads the category with `extend`.
     private var filterBar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(currentFilters.enumerated()), id: \.offset) { _, filter in
+            ForEach(Array(visibleFilters.enumerated()), id: \.offset) { _, filter in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(filter.name)
                         .font(DSFont.caption2.weight(.semibold))
@@ -290,8 +383,31 @@ struct CatVodHomeView: View {
                     }
                 }
             }
+
+            if currentFilters.count > 1 {
+                Button {
+                    withAnimation(.snappy(duration: 0.25)) { filtersExpanded.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(filtersExpanded
+                             ? localized("收起筛选")
+                             : localized("更多筛选") + "（\(currentFilters.count - 1)）")
+                        Image(systemName: filtersExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .font(DSFont.caption2)
+                    .foregroundStyle(DSColor.accent)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 52)
+            }
         }
         .padding(.horizontal)
+    }
+
+    /// 展开时给全部筛选，收起时只给第一组。
+    private var visibleFilters: [CatVodFilter] {
+        filtersExpanded ? currentFilters : Array(currentFilters.prefix(1))
     }
 
     private func categoryChip(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -310,96 +426,127 @@ struct CatVodHomeView: View {
     // MARK: - Content
 
     private var content: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                sourcePicker
-                searchBar
+        VStack(spacing: 10) {
+            // 接口 / 站点、分类、筛选固定在顶部。原来它们都在 ScrollView 里，
+            // 往下翻两屏之后想换个分类或看看别的站点，必须先滚回顶——这是这种
+            // 影视壳最影响手感的地方，也是「用起来像网页」的主要来源。
+            sourcePicker
+            searchBar
+            if !list.categories.isEmpty { categoryBar }
 
-                // Category and filter chips live outside the grid branch on
-                // purpose: an empty 推荐 page used to hide the whole category
-                // bar, so a source whose home is blank could never be browsed
-                // at all — exactly the "暂无内容 and nothing else" screen.
-                if !list.categories.isEmpty { categoryBar }
-                if !currentFilters.isEmpty { filterBar }
-
-                if isLoading && list.media.isEmpty {
-                    HStack { Spacer(); ProgressView(); Spacer() }.padding(.vertical, 40)
-                } else if list.media.isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: "film.stack")
-                            .font(.system(size: 36))
-                            .foregroundStyle(DSColor.textSecondary)
-                        Text(localized("暂无内容")).font(DSFont.subheadline)
-                        // An empty page is not always a dead end: netdisk/Alist
-                        // sources answer nothing until an account is configured,
-                        // and a slow source can simply have timed out. Say which
-                        // case it is instead of leaving a blank grid.
-                        Text(message ?? localized("这个分类没有返回内容。换一个分类，或点重试再看看。"))
-                            .font(DSFont.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
-                        if message == nil {
-                            Text(localized("网盘或 Alist 站点需要先在「管理猫源 → 网盘账号」里登录。"))
-                                .font(DSFont.caption2)
-                                .foregroundStyle(.tertiary)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 32)
-                        }
-                        HStack(spacing: 12) {
-                            Button {
-                                Task { await reloadCurrent() }
-                            } label: {
-                                Text(localized("重试")).font(DSFont.caption)
-                            }
-                            .buttonStyle(.bordered)
-                            NavigationLink {
-                                CatVodSourceSettingsView()
-                            } label: {
-                                Text(localized("管理猫源")).font(DSFont.caption)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        .padding(.top, 4)
-                    }
-                    .frame(maxWidth: .infinity).padding(.vertical, 40)
-                } else {
-                    LazyVGrid(columns: columns, spacing: 16) {
-                        // Position identity: even if a source returns duplicate/empty
-                        // vod_id, SwiftUI never crashes on duplicate Identifiable ids.
-                        ForEach(Array(list.media.enumerated()), id: \.offset) { _, item in
-                            Button { if !isOpeningDetail { Task { await openDetail(item, from: resultSites[item.id]) } } } label: {
-                                CatVodPosterCard(item: item)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal)
-
-                    if list.page < list.pageCount {
-                        Button { Task { await loadMore() } } label: {
-                            if isLoading { ProgressView() }
-                            else { Text(localized("加载更多")).font(DSFont.subheadline) }
-                        }
-                        .frame(maxWidth: .infinity).padding(.vertical)
-                    }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    // 筛选跟着内容滚：有的源一次给五六组筛选，全固定在顶部会
+                    // 把网格挤到屏幕外。默认只露第一组，其余收在「更多筛选」里。
+                    if !currentFilters.isEmpty { filterBar }
+                    gridBody
                 }
-
-                if let message, !list.media.isEmpty {
-                    Text(message).font(DSFont.caption).foregroundStyle(.secondary).padding(.horizontal)
-                }
+                .padding(.top, 2)
             }
-            .padding(.top, 8)
+            .refreshable { await loadHome() }
         }
-        // The inline navigation bar is translucent, so a grid that starts flush with the
-        // scroll view's top edge has its first row of posters half under the title. An
-        // explicit content margin keeps that row readable while still letting the posters
-        // scroll under the bar afterwards.
-        .contentMargins(.top, 6, for: .scrollContent)
-        .refreshable { await loadHome() }
+        .padding(.top, 8)
         .task {
             await loadCatalogAndHome()
             warmUpOtherSources()
+        }
+    }
+
+    @ViewBuilder
+    private var gridBody: some View {
+        if let term = activeSearchTerm {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(DSFont.caption2)
+                    .foregroundStyle(DSColor.textSecondary)
+                Text(String(format: localized("「%@」的搜索结果 %ld 条"), term, list.media.count))
+                    .font(DSFont.caption)
+                    .foregroundStyle(DSColor.textSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Button {
+                    keyword = ""
+                    activeSearchTerm = nil
+                    Task { await reloadCurrent() }
+                } label: {
+                    Text(localized("清除"))
+                        .font(DSFont.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(DSColor.accent)
+            }
+            .padding(.horizontal)
+        }
+
+        if list.media.isEmpty && isLoading {
+            // 空白的网格 + 屏幕中央一个菊花，看不出是「在加载」还是「没内容」。
+            // 用和真实卡片同尺寸的占位，加载完成时是原地替换，不会整页跳一下。
+            CatVodGridSkeleton()
+        } else if list.media.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: "film.stack")
+                    .font(.system(size: 36))
+                    .foregroundStyle(DSColor.textSecondary)
+                Text(localized("暂无内容")).font(DSFont.subheadline)
+                // An empty page is not always a dead end: netdisk/Alist
+                // sources answer nothing until an account is configured,
+                // and a slow source can simply have timed out. Say which
+                // case it is instead of leaving a blank grid.
+                Text(message ?? localized("这个分类没有返回内容。换一个分类，或点重试再看看。"))
+                    .font(DSFont.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                if message == nil {
+                    Text(localized("网盘或 Alist 站点需要先在「管理猫源 → 网盘账号」里登录。"))
+                        .font(DSFont.caption2)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
+                HStack(spacing: 12) {
+                    Button {
+                        Task { await reloadCurrent() }
+                    } label: {
+                        Text(localized("重试")).font(DSFont.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    NavigationLink {
+                        CatVodSourceSettingsView()
+                    } label: {
+                        Text(localized("管理猫源")).font(DSFont.caption)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(.top, 4)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 40)
+        } else {
+            LazyVGrid(columns: columns, spacing: 16) {
+                // Position identity: even if a source returns duplicate/empty
+                // vod_id, SwiftUI never crashes on duplicate Identifiable ids.
+                ForEach(Array(list.media.enumerated()), id: \.offset) { _, item in
+                    Button { if !isOpeningDetail { Task { await openDetail(item, from: resultSites[item.id]) } } } label: {
+                        CatVodPosterCard(item: item)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal)
+
+            // 「推荐」页由 home 返回，本来就只有一页；给它显示「加载更多」点了
+            // 也只会重新拉一遍第一页。只在真的分页的分类里给这个按钮。
+            if currentCategory != nil, list.page < list.pageCount {
+                Button { Task { await loadMore() } } label: {
+                    if isLoading { ProgressView() }
+                    else { Text(localized("加载更多")).font(DSFont.subheadline) }
+                }
+                .frame(maxWidth: .infinity).padding(.vertical)
+            }
+        }
+
+        if let message, !list.media.isEmpty {
+            Text(message).font(DSFont.caption).foregroundStyle(.secondary).padding(.horizontal)
         }
     }
 
@@ -445,8 +592,10 @@ struct CatVodHomeView: View {
     // MARK: - Data
 
     private var currentBundleURL: String? {
-        guard let id = selectedSourceID, let source = store.source(id: id) else { return nil }
-        return source.url
+        if let id = selectedSourceID, let source = store.source(id: id) { return source.url }
+        // 首帧 `selectedSourceID` 还是 nil：直接用第一个启用的接口，免得为了
+        // 赋值再触发一次 onChange 之外的重复加载。
+        return sources.first?.url
     }
 
     private func loadCatalogAndHome() async {
@@ -532,7 +681,7 @@ struct CatVodHomeView: View {
                 resultSites = [:]
             }
         }
-        await MainActor.run { isLoading = true; message = nil }
+        await MainActor.run { isLoading = true; message = nil; activeSearchTerm = nil }
         do {
             let result = try await CatVodService.shared.home(bundleURL: bundle, site: site)
             // An interface whose first site is a 豆瓣-style aggregator answers the home
@@ -607,7 +756,7 @@ struct CatVodHomeView: View {
                 resultSites = [:]
             }
         }
-        await MainActor.run { isLoading = true; message = nil }
+        await MainActor.run { isLoading = true; message = nil; activeSearchTerm = nil }
         do {
             let result = try await CatVodService.shared.category(bundleURL: bundle, site: site,
                                                                 categoryID: category.id, page: 1,
@@ -645,6 +794,8 @@ struct CatVodHomeView: View {
             await MainActor.run { isLoading = false }
             return
         }
+        // 「推荐」来自 home，没有分页；调它只会拿到同一页。
+        guard currentCategory != nil else { return }
         let next = list.page + 1
         guard next <= list.pageCount else { return }
         let token = await MainActor.run { loadToken += 1; return loadToken }
@@ -661,9 +812,11 @@ struct CatVodHomeView: View {
             await MainActor.run {
                 guard token == loadToken else { return }
                 var merged = list
-                var seen = Set(merged.media.map(\.id))
-                for item in result.media where !seen.contains(item.id) {
-                    merged.media.append(item); seen.insert(item.id)
+                // 只按 vod_id 去重会误伤：有的源整页 id 都是空串或同一个值，
+                // 第二页就会被整页吞掉。带上片名才是「同一条」的可靠判据。
+                var seen = Set(merged.media.map { "\($0.id)|\($0.name)" })
+                for item in result.media where !seen.contains("\(item.id)|\(item.name)") {
+                    merged.media.append(item); seen.insert("\(item.id)|\(item.name)")
                 }
                 merged.page = result.page
                 merged.pageCount = result.pageCount
@@ -720,14 +873,47 @@ struct CatVodHomeView: View {
         }
 
         // 搜整个接口下的所有站点，而不是当前选中的那一个。
+        // 当前站点先搜一遍：一个请求通常亚秒级，先把第一屏结果放出来，再让
+        // 全网搜索在后台补齐。等十几秒才出现第一条，跟「点了没反应」没区别。
+        let preferred = selectedSite ?? pool.first
+        var prefetched: [CatVodMedia] = []
+        var prefetchedSite: CatVodSite?
+        if let preferred,
+           let quick = try? await CatVodService.shared.search(bundleURL: bundle, site: preferred, keyword: term),
+           !quick.media.isEmpty {
+            prefetched = quick.media
+            prefetchedSite = preferred
+            await MainActor.run {
+                guard token == searchToken else { return }
+                var map: [String: CatVodSite] = [:]
+                for item in quick.media { map[item.id] = preferred }
+                resultSites = map
+                list = CatVodList(categories: list.categories, media: quick.media,
+                                  page: 1, pageCount: 1)
+                activeSearchTerm = term
+            }
+        }
+
         let targets = pool
-        let hits = await CatVodService.shared.searchAll(bundleURL: bundle, sites: targets, keyword: term)
+        let hits = await CatVodService.shared.searchAll(bundleURL: bundle, sites: targets,
+                                                        keyword: term, preferring: preferred?.key)
+        // 闭包捕获用不可变副本，避免 Swift 6 对「捕获可变量」的并发诊断。
+        let seed = prefetched
+        let seedSite = prefetchedSite
 
         await MainActor.run {
             guard token == searchToken else { return }
             var merged: [CatVodMedia] = []
             var sitesByID: [String: CatVodSite] = [:]
             var seenKeys = Set<String>()
+            // 先放当前站点那批：它已经上过屏，合并时保持在前，避免结果重排。
+            for item in seed {
+                let key = "\(item.name)|\(item.year)|\(item.remark)"
+                if seenKeys.contains(key) { continue }
+                seenKeys.insert(key)
+                if let seedSite { sitesByID[item.id] = seedSite }
+                merged.append(item)
+            }
             for (site, result) in hits {
                 for item in result.media {
                     // 同一部片常同时出现在多个站点，保留第一个，避免同一张封面重复三行。
@@ -748,8 +934,10 @@ struct CatVodHomeView: View {
                 message = hits.isEmpty
                     ? String(format: localized("「%@」的 %ld 个站点都没有响应，可能是源站在维护，换一个接口或稍后再试"), term, targets.count)
                     : String(format: localized("在「%@」的所有站点里都没有找到结果"), term)
+                activeSearchTerm = nil
             } else {
                 message = nil
+                activeSearchTerm = term
             }
             saveSearchTerm(term)
         }
@@ -794,6 +982,8 @@ struct CatVodHomeView: View {
             isOpeningDetail = true
             if let known { detailCache[cacheKey] = known }
             detailGroups = known ?? []
+            // 换了一部剧就清掉上一部的高亮；同一部重开时保留。
+            if detailItem?.id != item.id { lastPlayedEpisodeID = nil }
             // With a stored copy on screen the spinner must not cover it; it only
             // signals that the episodes are being refreshed in the background.
             isLoadingDetail = true
@@ -902,6 +1092,7 @@ struct CatVodHomeView: View {
                 return
             }
             await MainActor.run {
+                lastPlayedEpisodeID = episode.id
                 CatVodPlayerPresenter.present(url: target, headers: resolved.header ?? [:],
                                               title: "\(title) · \(episode.title)")
                 isResolvingPlayback = false
@@ -957,6 +1148,32 @@ struct CatVodHomeView: View {
                             .font(DSFont.caption)
                             .foregroundStyle(DSColor.textSecondary)
                             .lineLimit(4)
+                    }
+
+                    // 主要动作放最显眼的位置。原来只有下面的集数网格，几十集里
+                    // 找「上次看到哪」全靠翻——给一个直接开播的按钮。
+                    if let episode = preferredEpisode {
+                        Button {
+                            if !isResolvingPlayback { Task { await play(episode, title: item.name) } }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if playingEpisodeID == episode.id {
+                                    ProgressView().tint(.white)
+                                } else {
+                                    Image(systemName: "play.fill")
+                                }
+                                Text(lastPlayedEpisodeID == nil
+                                     ? localized("播放第一集")
+                                     : localized("继续播放") + " · " + episodeTitle(episode.title))
+                                    .font(DSFont.subheadline.weight(.semibold))
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(isResolvingPlayback)
                     }
 
                     if isLoadingDetail && detailGroups.isEmpty {
@@ -1051,8 +1268,11 @@ struct CatVodHomeView: View {
                                         .font(DSFont.caption2)
                                         .foregroundStyle(DSColor.textSecondary)
                                 }
-                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 10)], spacing: 10) {
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 10)], spacing: 10) {
                                     ForEach(episodes(for: group)) { episode in
+                                        // 回到详情页时把刚看过的那一集标出来：几十集的
+                                        // 列表里，光靠记忆找「上次看到哪」是不现实的。
+                                        let isLastPlayed = lastPlayedEpisodeID == episode.id
                                         Button { if !isResolvingPlayback { Task { await play(episode, title: item.name) } } } label: {
                                             ZStack {
                                                 if playingEpisodeID == episode.id {
@@ -1060,8 +1280,8 @@ struct CatVodHomeView: View {
                                                         .scaleEffect(0.7)
                                                 } else {
                                                     Text(episodeTitle(episode.title))
-                                                        .font(DSFont.caption)
-                                                        .foregroundStyle(DSColor.textPrimary)
+                                                        .font(DSFont.caption.weight(isLastPlayed ? .semibold : .regular))
+                                                        .foregroundStyle(isLastPlayed ? DSColor.accent : DSColor.textPrimary)
                                                         .lineLimit(2)
                                                         .minimumScaleFactor(0.7)
                                                         .multilineTextAlignment(.center)
@@ -1069,7 +1289,14 @@ struct CatVodHomeView: View {
                                             }
                                             .frame(maxWidth: .infinity, minHeight: 44)
                                             .padding(.horizontal, 4)
-                                            .background(DSColor.surfaceTertiary, in: RoundedRectangle(cornerRadius: 8))
+                                            .background(isLastPlayed ? DSColor.accent.opacity(0.14) : DSColor.surfaceTertiary,
+                                                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                            .overlay {
+                                                if isLastPlayed {
+                                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                        .strokeBorder(DSColor.accent.opacity(0.55), lineWidth: 1)
+                                                }
+                                            }
                                         }
                                         .buttonStyle(.plain)
                                     }
@@ -1108,11 +1335,24 @@ struct CatVodHomeView: View {
             }
             .themedAppSurface(for: .explore)
         }
-        .presentationDetents([.medium, .large])
+        // 这个弹层的主要任务是「选集」，半屏高度里放一行海报头 + 半截集数网格，
+        // 每次都得往上拖一把才能点集。直接给整页。
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
     }
 
     private func episodes(for group: CatVodGroup) -> [CatVodEpisode] {
         episodesReversed ? Array(group.episodes.reversed()) : group.episodes
+    }
+
+    /// 「继续播放」指向的那一集：上次真播过的那集，没有就给第一条线路的第一集。
+    private var preferredEpisode: CatVodEpisode? {
+        if let id = lastPlayedEpisodeID {
+            for group in detailGroups {
+                if let hit = group.episodes.first(where: { $0.id == id }) { return hit }
+            }
+        }
+        return detailGroups.first?.episodes.first
     }
 
     /// Episode tiles are narrow (72pt at 5 columns). A title like
@@ -1135,10 +1375,13 @@ private struct CatVodPosterCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // 宽度交给网格列，高度按 2:3 自己算。固定 104×148 时，宽屏上每列
+            // 右边缘都会空出几像素，看起来像对齐没做。2:3 也是海报的标准比例，
+            // 源给的图大多是这个形状，裁切最少。
             CatVodCoverImage(url: item.cover)
-                .frame(width: 104, height: 148)
-                .clipped()
-                .cornerRadius(10)
+                .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             Text(item.name)
                 .font(DSFont.caption.weight(.semibold))
@@ -1151,6 +1394,35 @@ private struct CatVodPosterCard: View {
                     .lineLimit(1)
             }
         }
-        .frame(width: 104, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+}
+
+/// 首次加载时的占位网格：和真实卡片同尺寸、同圆角，加载完成是原地替换。
+private struct CatVodGridSkeleton: View {
+    private let columns = [GridItem(.adaptive(minimum: 104, maximum: 160), spacing: 12)]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 16) {
+            ForEach(0..<9, id: \.self) { index in
+                VStack(alignment: .leading, spacing: 6) {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(DSColor.surfaceTertiary)
+                        .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(DSColor.surfaceTertiary)
+                        .frame(height: 11)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(DSColor.surfaceTertiary.opacity(0.55))
+                        .frame(width: 46, height: 9)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // 轻微错落，避免九块灰砖排得太整齐反而像内容已经出来了。
+                .opacity(index % 3 == 0 ? 0.85 : 1)
+            }
+        }
+        .padding(.horizontal)
+        .accessibilityHidden(true)
     }
 }

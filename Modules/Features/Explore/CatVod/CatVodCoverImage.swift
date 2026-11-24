@@ -52,7 +52,12 @@ final class CatVodCoverStore {
                 if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                     return nil
                 }
-                return UIImage(data: data)
+                // 解码放在后台并做降采样：`UIImage(data:)` 本身是惰性的，真正的
+                // 解码发生在第一次上屏那一帧的主线程上。海报网格一屏十几张、
+                // 一滚就是几十张，全都挤在渲染前解码，滚动就掉帧。这里直接
+                // 用 ImageIO 生成thumbnail，既在后台完成解码，又只保留网格
+                // 需要的那点像素（原图常是 1000×1500，实际只画 130×190）。
+                return await Task.detached(priority: .utility) { Self.downsample(data) }.value
             } catch {
                 return nil
             }
@@ -65,6 +70,26 @@ final class CatVodCoverStore {
             images.setObject(image, forKey: url as NSString, cost: Int(pixels) * 4)
         }
         return image
+    }
+
+    /// ImageIO 降采样：在后台线程完成解码，只产出网格实际需要的像素量。
+    /// 失败时退回 `UIImage(data:)`——某些源给的是 webp 之外的怪格式，
+    /// ImageIO 认不出，但 UIKit 认得。
+    nonisolated static func downsample(_ data: Data, maxPixel: CGFloat = 900) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+            return UIImage(data: data)
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return UIImage(data: data)
+        }
+        return UIImage(cgImage: cgImage)
     }
 }
 

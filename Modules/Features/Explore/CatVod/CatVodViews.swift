@@ -28,6 +28,26 @@ struct CatVodSourceSettingsView: View {
                             .font(DSFont.caption)
                             .foregroundStyle(DSColor.textSecondary)
                             .multilineTextAlignment(.center)
+                        // 空态就是起点：把导入动作直接放在这里，不要让人先
+                        // 读完一段说明再往下滚去找按钮。
+                        VStack(spacing: 8) {
+                            Button {
+                                showsImporter = true
+                            } label: {
+                                Label(localized("从文件导入"), systemImage: "square.and.arrow.down")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            Button {
+                                pasteText = UIPasteboard.general.string ?? ""
+                                showsPaste = true
+                            } label: {
+                                Label(localized("从剪贴板导入"), systemImage: "doc.on.clipboard")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .padding(.top, 6)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 20)
@@ -126,6 +146,26 @@ struct CatVodSourceSettingsView: View {
         .softScrollEdges()
         .navigationTitle(localized("猫源"))
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button {
+                        showsImporter = true
+                    } label: {
+                        Label(localized("从文件导入"), systemImage: "square.and.arrow.down")
+                    }
+                    Button {
+                        pasteText = UIPasteboard.general.string ?? ""
+                        showsPaste = true
+                    } label: {
+                        Label(localized("从剪贴板导入"), systemImage: "doc.on.clipboard")
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel(localized("导入猫源"))
+            }
+        }
         .themedAppSurface(for: .settings)
         .fileImporter(isPresented: $showsImporter, allowedContentTypes: [.plainText, .json]) { result in
             guard let url = try? result.get(), url.startAccessingSecurityScopedResource() else { return }

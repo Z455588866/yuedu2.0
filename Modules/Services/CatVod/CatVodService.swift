@@ -109,14 +109,23 @@ final class CatVodService {
     ///
     /// 返回 `(站点, 结果)`，调用方必须保留站点信息：点进详情时要打回**命中它的
     /// 那个站点**，否则用别的站点去查 id 必然查不到。
-    func searchAll(bundleURL: String, sites: [CatVodSite], keyword: String) async -> [(CatVodSite, CatVodList)] {
-        let targets = sites.filter { $0.searchable != false }
+    func searchAll(bundleURL: String, sites: [CatVodSite], keyword: String,
+                   preferring preferredKey: String? = nil) async -> [(CatVodSite, CatVodList)] {
+        // 当前站点排第一、支持快搜的排前面：`for await` 是按完成顺序收集的，
+        // 而一旦到了时间预算就整批取消。把「最可能立刻回话」的站点放在队首，
+        // 决定的是 14 秒里到底能收到几个站点的结果。
+        let ordered = sites.filter { $0.searchable != false }.sorted { lhs, rhs in
+            if lhs.key == preferredKey { return true }
+            if rhs.key == preferredKey { return false }
+            return lhs.quickSearch == true && rhs.quickSearch != true
+        }
+        let targets = ordered
         guard !targets.isEmpty else { return [] }
         // 全源搜索动辄几十上百个站点。一次全放出去会把会话池挤爆（每个会话
         // 串行、各自 16s 超时），最后是最慢的那个决定整页出现的时间。这里保持
-        // 6 路并发，并在 14s 后带着已有结果返回——先给能给的，比等到超时好。
-        let maximumConcurrent = 6
-        let budget: UInt64 = 14_000_000_000
+        // 8 路并发，并在 12s 后带着已有结果返回——先给能给的，比等到超时好。
+        let maximumConcurrent = 8
+        let budget: UInt64 = 12_000_000_000
         let started = DispatchTime.now().uptimeNanoseconds
         return await withTaskGroup(of: (CatVodSite, CatVodList?).self) { group in
             var next = 0
