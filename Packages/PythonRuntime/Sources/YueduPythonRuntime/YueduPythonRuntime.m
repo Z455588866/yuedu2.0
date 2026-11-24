@@ -69,10 +69,12 @@ static PyObject *bridgeService;
         return 0;
     }
 
-    // 参数用 JSON 传进去再解析，省得在 C 字符串里跟路径中的引号较劲。
+    // literal: 生成的是 Python 单引号字典字面量（转义用的也是单引号 \'），
+    // 直接赋值即可；json.loads 只认双引号 JSON，传单引号字典会抛
+    // JSONDecodeError，导致整个 Python 服务起不来、.py 源一个都不出现。
     NSString *script = [NSString stringWithFormat:
-        @"import sys, json\n"
-         "paths = json.loads(%@)\n"
+        @"import sys\n"
+         "paths = %@\n"
          "sys.path.insert(0, paths['spiders'])\n"
          "sys.path.append(paths['spiders'] + '/vendor')\n"
          "sys.path.append(paths['spiders'] + '/shims')\n"
