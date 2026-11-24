@@ -695,13 +695,130 @@ function pan115File(item) {
   return { id: folder, name, isFolder: true, size: 0 };
 }
 
+// ---------------------------------------------------------------- 光雅云盘
+
+const GUANGYA = {
+  api: "https://api.guangyapan.com",
+  accountAPI: "https://account.guangyapan.com",
+  clientID: "aMe-8VSlkrbQXpUR",
+  userAgent: BROWSER_UA,
+  referer: "https://www.guangyapan.com/",
+  pageSize: 100
+};
+
+/// A saved sign-in: either an access token alone, or the JSON the account
+/// service answers with. An access token is short-lived, so the refresh token
+/// is what is kept and exchanged when a request is turned down.
+const guangyaTokens = new Map();
+
+function guangyaAccount(raw) {
+  const value = text(raw);
+  if (!value) return null;
+  if (value.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(value);
+      return { access: text(parsed.accessToken || parsed.access_token), refresh: text(parsed.refreshToken || parsed.refresh_token) };
+    } catch { return null; }
+  }
+  // A pasted `access|refresh` pair, or a bare refresh token.
+  if (value.includes("|")) {
+    const [access, refresh] = value.split("|");
+    return { access: access.trim(), refresh: refresh.trim() };
+  }
+  return { access: "", refresh: value };
+}
+
+async function guangyaRefresh(refresh) {
+  const response = await fetch(`${GUANGYA.accountAPI}/v1/auth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": GUANGYA.userAgent },
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refresh, client_id: GUANGYA.clientID }).toString()
+  });
+  const answer = await readJSON(response);
+  const access = text(answer.access_token);
+  if (!access) throw new Error(`光雅云盘登录已失效（${text(answer.error_description) || text(answer.error) || "刷新 token 失败"}），请重新填写`);
+  const account = { access, refresh: text(answer.refresh_token) || refresh };
+  guangyaTokens.set(refresh, account);
+  return account;
+}
+
+async function guangyaCall(rawToken, path, body) {
+  let account = guangyaAccount(rawToken);
+  if (!account) throw new Error("还没有填写光雅云盘 Token");
+  if (!account.access) {
+    account = guangyaTokens.get(account.refresh) || await guangyaRefresh(account.refresh);
+  }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch(`${GUANGYA.api}${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${account.access}`,
+        "Content-Type": "application/json",
+        "User-Agent": GUANGYA.userAgent,
+        Referer: GUANGYA.referer
+      },
+      body: JSON.stringify(body || {})
+    });
+    const answer = await readJSON(response);
+    const code = number(answer.code ?? 0);
+    const message = text(answer.message) || text(answer.msg);
+    if ((response.ok && code === 0) || (response.ok && answer.data)) return answer;
+    if ([401, 403].includes(response.status) || code === 117) {
+      if (attempt === 0 && account.refresh) {
+        account = await guangyaRefresh(account.refresh);
+        continue;
+      }
+      throw new Error(`光雅云盘登录已失效（${message || `HTTP ${response.status}`}），请重新填写 Token`);
+    }
+    throw new Error(`光雅云盘：${message || `HTTP ${response.status}`}`);
+  }
+  throw new Error("光雅云盘登录已失效，请重新填写 Token");
+}
+
+const guangya = {
+  key: "guangya",
+  name: "光雅云盘",
+  credentialField: "guangyaToken",
+  root: "0",
+  async list(token, folder = "0") {
+    const files = [];
+    for (let page = 0; page < 100; page += 1) {
+      const answer = await guangyaCall(token, "/nd.bizuserres.s/v1/file/get_file_list", {
+        parentId: folder === "0" ? "" : folder,
+        page, pageSize: GUANGYA.pageSize, orderBy: 3, sortType: 1
+      });
+      const data = answer.data || {};
+      const items = Array.isArray(data.list) ? data.list : [];
+      files.push(...items.map((item) => {
+        const id = text(item.fileId);
+        const name = text(item.fileName);
+        if (!id || !name) return null;
+        return { id, name, isFolder: number(item.resType) === 2, size: number(item.fileSize) };
+      }).filter(Boolean));
+      const total = number(data.total);
+      if (items.length < GUANGYA.pageSize || (total > 0 && files.length >= total)) break;
+    }
+    return files;
+  },
+  async link(token, file) {
+    const answer = await guangyaCall(token, "/nd.bizuserres.s/v1/get_res_download_url", { fileId: file.id });
+    const data = answer.data || {};
+    const address = text(data.signedURL) || text(data.downloadUrl);
+    if (!address) throw new Error("光雅云盘没有返回这个文件的地址");
+    const headers = { "User-Agent": GUANGYA.userAgent, Referer: GUANGYA.referer };
+    const resolved = await followLink(address, headers);
+    return { ...resolved, headers };
+  }
+};
+
 export const panDrives = {
   tianyi,
   baidu,
   quark: quarkDrive("quark"),
   uc: quarkDrive("uc"),
   pan123,
-  pan115
+  pan115,
+  guangya
 };
 
 export function driveFor(key) {
@@ -710,7 +827,7 @@ export function driveFor(key) {
 
 /// Drives the person has signed in to, in the order they are offered.
 export function signedInDrives(credentials = {}) {
-  const order = ["quark", "uc", "pan115", "tianyi", "baidu", "pan123"];
+  const order = ["quark", "uc", "pan115", "tianyi", "baidu", "pan123", "guangya"];
   return order.map(driveFor).filter((drive) => drive && text(credentials[drive.credentialField]).length > 0);
 }
 
