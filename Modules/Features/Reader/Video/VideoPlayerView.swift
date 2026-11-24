@@ -21,6 +21,19 @@ struct VideoPlayerView: View {
 
     let content: Content
     let onClose: () -> Void
+    /// 片源自带弹幕的加载器（猫源 `playerContent.danmaku`）。有就优先用它，
+    /// 没有才按标题去弹幕站搜——两者不能同时跑，否则同一条弹幕会叠两遍。
+    ///
+    /// 做成异步闭包而不是现成的数组：拉弹幕要几秒到十几秒，不能在播放前等。
+    private let sourceDanmaku: (@MainActor () async -> [DanmakuItem]?)?
+
+    init(content: Content,
+         danmaku: (@MainActor () async -> [DanmakuItem]?)? = nil,
+         onClose: @escaping () -> Void) {
+        self.content = content
+        self.sourceDanmaku = danmaku
+        self.onClose = onClose
+    }
 
     @EnvironmentObject private var store: BookStore
     @Environment(\.scenePhase) private var scenePhase
@@ -35,6 +48,8 @@ struct VideoPlayerView: View {
     @State private var showsEpisodes = false
     /// Danmaku state: source, toggle, loaded track. Driven by the playing video's title.
     @State private var danmaku = DanmakuController()
+    /// 片源弹幕的加载任务：同一集只拉一次，切集要能取消。
+    @State private var danmakuLoadTask: Task<Void, Never>?
     @State private var danmakuSources = DanmakuSourceStore.shared
     /// Subtitle state: toggle, active local entry or online source. Driven by the video's title.
     @State private var subtitle = SubtitleController()
@@ -129,6 +144,8 @@ struct VideoPlayerView: View {
         .onChange(of: controller?.phase) { _, phase in
             if phase == nil {
                 clock.detach()
+                danmakuLoadTask?.cancel()
+                danmakuLoadTask = nil
                 danmaku.stop()
                 subtitle.stop()
             }
@@ -203,6 +220,24 @@ struct VideoPlayerView: View {
 
     /// Feeds the danmaku matcher the current video's name and episode number.
     private func attachDanmaku(_ controller: VideoPlaybackController) {
+        // 片源自带弹幕优先：猫源的标题常常搜不到条目，走在线匹配只会显示「没匹配到」。
+        if let sourceDanmaku {
+            guard danmakuLoadTask == nil else { return }
+            danmakuLoadTask = Task { [weak controller] in
+                let items = await sourceDanmaku()
+                guard !Task.isCancelled else { return }
+                if let items, !items.isEmpty {
+                    let title = controller?.book.title ?? ""
+                    danmaku.adopt(items, title: title, sourceName: localized("片源自带"))
+                } else if let controller {
+                    // 源那边没取到（接口挂了 / 这集没弹幕），退回按标题搜，
+                    // 至少不会因为「片源没给」就一条都没有。
+                    let number = DanmakuEpisodeNumber.from(controller.episodeTitle)
+                    danmaku.attach(title: controller.book.title, episodeNumber: number)
+                }
+            }
+            return
+        }
         let number = DanmakuEpisodeNumber.from(controller.episodeTitle)
         danmaku.attach(title: controller.book.title, episodeNumber: number)
     }

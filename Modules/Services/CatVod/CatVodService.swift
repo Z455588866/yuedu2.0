@@ -418,6 +418,9 @@ final class CatVodService {
         let playbackNotice = object["playbackNotice"] as? String
         let qualityName = object["quality"] as? String
         let qualityChoices = Self.qualityOptions(object["qualityOptions"])
+        // 片源自带弹幕（红果这类）。放在这里解析，是因为下面每一条返回路径都要把它带上：
+        // 切清晰度、parse=1 嗅探都会重建 `CatVodPlayback`，漏一处弹幕就没了。
+        let danmakuPayload = Self.danmakuPayload(object["danmaku"])
 
         // A spider may hand back an episode id that is itself a direct media URL.
         // The runner already normalises this, but keep a fallback for gateways that
@@ -441,6 +444,7 @@ final class CatVodService {
             || resolvedURL.hasPrefix("json:") {
             if let sniffed = await Self.sniffPlaybackPage(resolvedURL, headers: headers) {
                 return Self.proxiedPlayback(url: sniffed, headers: headers, bundleURL: bundleURL,
+                                            danmaku: danmakuPayload,
                                             notice: playbackNotice)
             }
             throw CatVodError.parseUnsupported
@@ -475,6 +479,7 @@ final class CatVodService {
         }
         return Self.proxiedPlayback(url: finalURL, headers: finalHeaders, bundleURL: bundleURL,
                                     quality: qualityName, options: qualityChoices,
+                                    danmaku: danmakuPayload,
                                     notice: playbackNotice)
     }
 
@@ -490,6 +495,7 @@ final class CatVodService {
                                         bundleURL: String,
                                         quality: String? = nil,
                                         options: [CatVodQualityOption] = [],
+                                        danmaku: CatVodDanmakuPayload? = nil,
                                         notice: String? = nil) -> CatVodPlayback {
         // 每一档都要走同一个代理：转码地址同样校验 Referer/Cookie，直接把原始
         // CDN 地址交给 AVPlayer 会 403。代理不可用时退回原地址。
@@ -507,18 +513,32 @@ final class CatVodService {
             return CatVodPlayback(parse: 0, url: proxied.absoluteString, header: [:],
                                   quality: quality,
                                   qualityOptions: proxiedOptions.isEmpty ? nil : proxiedOptions,
-                                  playbackNotice: notice)
+                                  playbackNotice: notice,
+                                  danmaku: danmaku)
         }
         return CatVodPlayback(parse: 0, url: url.absoluteString, header: headers,
                               quality: quality,
                               qualityOptions: proxiedOptions.isEmpty ? nil : proxiedOptions,
-                              playbackNotice: notice)
+                              playbackNotice: notice,
+                              danmaku: danmaku)
+    }
+
+    /// `playerContent.danmaku` 既可能是行数组，也可能是一个地址（B 站 XML）。
+    /// 解不出来就返回 nil：弹幕坏了不能连带把能播的片子变成不能播。
+    private static func danmakuPayload(_ value: Any?) -> CatVodDanmakuPayload? {
+        guard let value else { return nil }
+        if let text = value as? String {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : CatVodDanmakuPayload(link: trimmed)
+        }
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
+        return try? JSONDecoder().decode(CatVodDanmakuPayload.self, from: data)
     }
 
     /// 网关的清晰度列表解码成模型；字段缺失或类型异常时返回空表而不是抛错——
     /// 播放地址才是必需项，清晰度只是附加信息。
-    private static func qualityOptions(_ value: Any?) -> [CatVodQualityOption] {
-        guard let list = value as? [[String: Any]] else { return [] }
+    private static func qualityOptions(_ value: Any?) -> [CatVodQualityOption] {        guard let list = value as? [[String: Any]] else { return [] }
         return list.compactMap { entry in
             guard let name = entry["name"] as? String, !name.isEmpty,
                   let url = entry["url"] as? String, !url.isEmpty else { return nil }

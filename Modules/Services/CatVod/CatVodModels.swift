@@ -241,6 +241,79 @@ struct CatVodQualityOption: Decodable, Sendable, Hashable, Identifiable {
     var id: String { "\(name)@\(url)" }
 }
 
+/// 猫源自带的一条弹幕。TVBox 的 `danmaku` 数组就是这个形状：`{time, type, color, text}`，
+/// `time` 是从片头算的秒数（可以是整数、小数或字符串——各家插件写法不一致）。
+struct CatVodDanmakuItem: Decodable, Sendable {
+    var time: Double
+    var text: String
+    var type: Int?
+    var color: Int?
+
+    enum CodingKeys: String, CodingKey { case time, text, type, color }
+
+    init(time: Double, text: String, type: Int? = nil, color: Int? = nil) {
+        self.time = time
+        self.text = text
+        self.type = type
+        self.color = color
+    }
+
+    /// 手写解码：任何一个字段写坏了都只影响这一条，不连累整条播放结果。
+    /// 之前用合成解码，一个源把 `time` 写成 `"12.5"` 就会让整个 `player` 响应解不出来，
+    /// 表现是「点播放没反应」。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let value = try? container.decodeIfPresent(Double.self, forKey: .time) {
+            time = value
+        } else if let text = try? container.decodeIfPresent(String.self, forKey: .time),
+                  let value = Double(text) {
+            time = value
+        } else {
+            time = 0
+        }
+        text = (try? container.decodeIfPresent(String.self, forKey: .text)) ?? ""
+        type = try? container.decodeIfPresent(Int.self, forKey: .type)
+        color = try? container.decodeIfPresent(Int.self, forKey: .color)
+    }
+}
+
+/// TVBox 还有一种约定：`danmaku` 里放的是**弹幕源列表**（`[{name, url}]`），url 指向
+/// 一个返回 B 站 XML 的地址。红果就是这种——它在插件进程里开了个 `/hg_dm` 路由。
+struct CatVodDanmakuSource: Decodable, Sendable {
+    var name: String?
+    var url: String?
+}
+
+/// `playerContent.danmaku` 的三种形态：行数组、单个地址、弹幕源列表。
+/// 解码时永不抛错——弹幕只是锦上添花，不能因为它把能播的片子变成不能播。
+struct CatVodDanmakuPayload: Decodable, Sendable {
+    var items: [CatVodDanmakuItem] = []
+    var link: String?
+    var sources: [CatVodDanmakuSource] = []
+
+    init(items: [CatVodDanmakuItem] = [], link: String? = nil,
+         sources: [CatVodDanmakuSource] = []) {
+        self.items = items
+        self.link = link
+        self.sources = sources
+    }
+
+    init(from decoder: Decoder) throws {
+        guard let container = try? decoder.singleValueContainer() else { return }
+        if let text = try? container.decode(String.self) {
+            link = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return
+        }
+        // 先按「弹幕行」解：有 text 才是行，没有 text 的是 {name, url} 源列表。
+        if let rows = try? container.decode([CatVodDanmakuItem].self),
+           rows.contains(where: { !$0.text.isEmpty }) {
+            items = rows
+            return
+        }
+        sources = (try? container.decode([CatVodDanmakuSource].self)) ?? []
+    }
+}
+
 /// Result of a `player` invocation.
 struct CatVodPlayback: Decodable, Sendable {
     var parse: Int?
@@ -252,9 +325,11 @@ struct CatVodPlayback: Decodable, Sendable {
     var qualityOptions: [CatVodQualityOption]? = nil
     /// 网关给出的降级说明（`quark-original-size-limit` 等），由界面翻成人话。
     var playbackNotice: String? = nil
+    /// 片源自带的弹幕。红果这类插件会在 `playerContent` 里直接给出整集弹幕。
+    var danmaku: CatVodDanmakuPayload? = nil
 
     enum CodingKeys: String, CodingKey {
-        case parse, url, header, quality, qualityOptions, playbackNotice
+        case parse, url, header, quality, qualityOptions, playbackNotice, danmaku
     }
 }
 

@@ -1228,7 +1228,8 @@ struct CatVodHomeView: View {
                     qualityPrompt = QualityPrompt(title: "\(title) · \(episode.title)",
                                                   episodeID: episode.id,
                                                   options: options,
-                                                  headers: resolved.header ?? [:])
+                                                  headers: resolved.header ?? [:],
+                                                  danmaku: resolved.danmaku)
                     isResolvingPlayback = false
                     playingEpisodeID = nil
                 }
@@ -1243,7 +1244,8 @@ struct CatVodHomeView: View {
                 }
                 CatVodPlayerPresenter.present(url: target, headers: resolved.header ?? [:],
                                               title: QualityPrompt.displayTitle("\(title) · \(episode.title)",
-                                                                                quality: resolved.quality))
+                                                                                quality: resolved.quality),
+                                              danmaku: resolved.danmaku)
                 isResolvingPlayback = false
                 playingEpisodeID = nil
             }
@@ -1497,7 +1499,8 @@ struct CatVodHomeView: View {
                         CatVodPlayerPresenter.present(
                             url: URL(string: option.url) ?? URL(string: "about:blank")!,
                             headers: prompt.headers,
-                            title: QualityPrompt.displayTitle(prompt.title, quality: option.name))
+                            title: QualityPrompt.displayTitle(prompt.title, quality: option.name),
+                            danmaku: prompt.danmaku)
                         qualityPrompt = nil
                     }
                 }
@@ -1624,6 +1627,8 @@ private struct QualityPrompt: Identifiable {
     let episodeID: String
     let options: [CatVodQualityOption]
     let headers: [String: String]
+    /// 选完档位再开播，弹幕不能在这一步丢掉。
+    var danmaku: CatVodDanmakuPayload? = nil
 
     /// 播放器标题后面缀上当前清晰度——用户不必去猜「这一版是几 P」。
     static func displayTitle(_ base: String, quality: String?) -> String {

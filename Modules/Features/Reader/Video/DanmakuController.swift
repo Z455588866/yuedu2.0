@@ -121,6 +121,25 @@ final class DanmakuController {
         }
     }
 
+    /// 采用片源自带的弹幕，跳过在线匹配。
+    ///
+    /// 猫源（红果那类）在 `playerContent` 里直接带整集弹幕，标题还未必能在弹幕站搜到，
+    /// 走 `attach` 只会白跑一次搜索再显示「没匹配到」。这里直接落地。
+    ///
+    /// 开关只在**从未设置过**时自动打开：用户手动关过弹幕，就不能因为换了个源又替他打开。
+    func adopt(_ items: [DanmakuItem], title: String, sourceName: String) {
+        loadTask?.cancel()
+        guard !items.isEmpty else { return }
+        track = DanmakuTrack(items: items.sorted { $0.time < $1.time },
+                             episodeTitle: title,
+                             animeTitle: title,
+                             sourceName: sourceName)
+        status = "\(sourceName) · \(items.count) 条"
+        if defaults.object(forKey: Keys.enabled) == nil {
+            enabled = true
+        }
+    }
+
     /// Loads an episode the person picked by hand, bypassing title matching.
     ///
     /// Auto-match is a guess; this is what replaces the guess when it is wrong. The chosen

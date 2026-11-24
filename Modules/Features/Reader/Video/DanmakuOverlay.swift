@@ -9,12 +9,20 @@ import UIKit
 /// timeline can keep firing while `currentTime()` stays pinned to one value. Publishing the time
 /// through an `@Observable` object on the main queue guarantees a redraw on every tick, so
 /// scrolling stays smooth and tracks seeks and rate changes.
+///
+/// VLC 内核走另一条路：`VLCMediaPlayer.time` 只有 250–500ms 的粒度，直接拿来画弹幕会
+/// 一跳一跳。`attach(ticker:)` 每帧采样一次，用两次采样之间的墙钟时间补差值。
 @MainActor
 @Observable
 final class PlaybackClock {
     private(set) var time: Double = 0
     private var observer: Any?
     private weak var player: AVPlayer?
+    private var displayLink: CADisplayLink?
+    private var ticker: ClockTicker?
+    private var provider: (@MainActor () -> (time: Double, playing: Bool))?
+    private var lastRaw: Double = -1
+    private var lastWall: CFTimeInterval = 0
 
     func attach(to player: AVPlayer) {
         guard self.player !== player || observer == nil else { return }
@@ -32,10 +40,66 @@ final class PlaybackClock {
         }
     }
 
+    /// 非 AVPlayer 内核（VLC）。闭包每帧被调用一次，返回播放器当前报告的时间和是否在播。
+    /// 时间向前跳超过一个采样周期（seek、片头 loading）就重新锚定，避免预测值越跑越远。
+    func attach(ticker provider: @escaping @MainActor () -> (time: Double, playing: Bool)) {
+        detach()
+        self.provider = provider
+        lastRaw = -1
+        // 用 CADisplayLink + selector 而不是 Timer 的闭包：Swift 6 的 `@Sendable`
+        // 闭包里捕获 `@MainActor` 的 self 会直接编译失败，selector 没有这个限制。
+        let helper = ClockTicker(clock: self)
+        let link = CADisplayLink(target: helper, selector: #selector(ClockTicker.step))
+        // .common：拖动进度条时 runloop 进 tracking 模式，默认模式下屏幕刷新回调会停，
+        // 弹幕就会卡住不动。
+        link.add(to: .main, forMode: .common)
+        ticker = helper
+        displayLink = link
+        step()
+    }
+
+    fileprivate func step() {
+        guard let provider else { return }
+        let sample = provider()
+        let now = CACurrentMediaTime()
+        let raw = sample.time
+        guard raw.isFinite, raw >= 0 else { return }
+        if abs(raw - lastRaw) > 0.01 {
+            lastRaw = raw
+            lastWall = now
+        }
+        guard sample.playing else {
+            time = raw
+            return
+        }
+        // 补偿最多 0.6s：VLC 卡住不报新时间时，弹幕也不该无限往前跑。
+        let extra = min(max(0, now - lastWall), 0.6)
+        time = raw + extra
+    }
+
     func detach() {
         if let observer, let player { player.removeTimeObserver(observer) }
         observer = nil
         player = nil
+        displayLink?.invalidate()
+        displayLink = nil
+        ticker = nil
+        provider = nil
+        lastRaw = -1
+    }
+}
+
+/// CADisplayLink 的 target 必须是 NSObject 子类；`PlaybackClock` 是 `@Observable`，
+/// 挂不了 `@objc` 方法。
+private final class ClockTicker: NSObject {
+    weak var clock: PlaybackClock?
+
+    init(clock: PlaybackClock) {
+        self.clock = clock
+    }
+
+    @objc func step() {
+        MainActor.assumeIsolated { clock?.step() }
     }
 }
 

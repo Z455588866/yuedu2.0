@@ -46,6 +46,14 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
 
     var isLive: Bool { duration <= 0 }
 
+    /// 给弹幕时钟采样用。`time` 是 500ms 采一次的发布值，画弹幕太粗；
+    /// 这里每次问 VLC 要最新的毫秒值，由 `PlaybackClock` 负责插值。
+    var rawTime: Double {
+        guard let player else { return time }
+        let seconds = Double(player.time.intValue) / 1000
+        return seconds.isFinite && seconds >= 0 ? seconds : time
+    }
+
     func open(url: URL, headers: [String: String], startAt: Double) {
         guard player == nil else { return }
         failure = nil
@@ -212,9 +220,14 @@ struct CatVodVLCVideoView: View {
     let headers: [String: String]
     let title: String
     var startAt: Double = 0
+    /// 片源自带弹幕的加载器。VLC 内核只负责解码画面，弹幕是 SwiftUI 层叠上去的。
+    /// 异步的原因：拉弹幕要几秒，不能挡在播放前面。
+    var danmaku: (@MainActor () async -> [DanmakuItem]?)? = nil
     let onClose: () -> Void
 
     @StateObject private var model = CatVodVLCPlayerModel()
+    @State private var clock = PlaybackClock()
+    @State private var danmakuController = DanmakuController()
     @State private var showsControls = true
     @State private var scrubbing: Double?
     @State private var hideTask: Task<Void, Never>?
@@ -224,6 +237,16 @@ struct CatVodVLCVideoView: View {
             Color.black.ignoresSafeArea()
             VLCVideoSurface(view: model.drawable)
                 .ignoresSafeArea()
+            // 弹幕压在画面上、控制条下面，且不接管触摸——否则点不到进度条。
+            if danmakuController.enabled, let track = danmakuController.track {
+                DanmakuOverlay(clock: clock, track: track,
+                               opacity: danmakuController.opacity,
+                               area: danmakuController.area,
+                               fontSize: danmakuController.fontSize,
+                               speed: danmakuController.speed)
+                    .allowsHitTesting(false)
+                    .ignoresSafeArea()
+            }
             if model.isPreparing {
                 ProgressView()
                     .progressViewStyle(.circular)
@@ -257,9 +280,22 @@ struct CatVodVLCVideoView: View {
         .statusBarHidden()
         .task {
             model.open(url: url, headers: headers, startAt: startAt)
+            clock.attach { [model] in (model.rawTime, model.isPlaying) }
+            if let danmaku {
+                // 画面先起来，弹幕到了再叠——红果取整集弹幕要十几秒。
+                Task {
+                    if let items = await danmaku(), !items.isEmpty {
+                        danmakuController.adopt(items, title: title,
+                                                sourceName: localized("片源自带"))
+                    }
+                }
+            }
             scheduleHide()
         }
-        .onDisappear { model.stop() }
+        .onDisappear {
+            clock.detach()
+            model.stop()
+        }
     }
 
     private var controls: some View {
