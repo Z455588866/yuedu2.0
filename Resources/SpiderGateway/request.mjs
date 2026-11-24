@@ -51,7 +51,9 @@ export function validateInvokeRequest(body) {
     api: requiredString(body.site.api, "site.api", 512),
     jar: requiredString(body.site.jar, "site.jar", 8192),
     ext: optionalExt(body.site.ext, "site.ext"),
-    quickSearch: body.site.quickSearch === true
+    quickSearch: body.site.quickSearch === true,
+    // Python 源：由本机 Python 服务答话，不进 CatVod 的 JS 运行时。
+    py: body.site.py === true
   };
   if (!site.api.startsWith("csp_") && !CATVOD_API.test(site.api)) {
     throw new GatewayError("UNSUPPORTED_API", "site.api must be csp_* or a valid /spider/<key>/<type> path", 400);

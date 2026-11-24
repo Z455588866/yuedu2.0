@@ -10,8 +10,88 @@ import { cloudPanSite, handleCloudPanAction, isCloudPanSite } from "./cloud-pan.
 import { handlePanSearchAction, isPanSearchSite } from "./pan-search.mjs";
 import { cloudFilesSite, handleCloudFilesAction, isCloudFilesSite } from "./cloud-files.mjs";
 import { resolveCatVodCloudPlayer } from "./catvod-cloud-player.mjs";
+import { normalizePlayerResult } from "./catvod-runner.mjs";
 import { requiresPlaybackConfirmation } from "./readonly-player.mjs";
 import { decodeMediaSpec, handleMediaRequest, playbackMediaKey } from "./playback-proxy.mjs";
+
+/// Python 源统一走本机那个 Python 服务：它按 /py/<token>/<动作> 答话，回的就是
+/// TVBox 的 JSON，和 JS 源在网关后半段享受同一套处理。没起 Python 就返回空，
+/// 界面上少几个源，而不是整页报错。
+const PYTHON_SITE_PREFIX = "py-";
+
+function pythonBase(config) {
+  return config.pythonSpiderPort ? `http://127.0.0.1:${config.pythonSpiderPort}` : "";
+}
+
+async function pythonCatalog(config, bundle) {
+  const base = pythonBase(config);
+  if (!base) return [];
+  try {
+    const response = await fetch(`${base}/v1/pyspider/sites`, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) return [];
+    const body = await response.json();
+    const sites = Array.isArray(body?.sites) ? body.sites : [];
+    return sites
+      .filter((site) => site && typeof site.key === "string" && site.key !== "")
+      .map((site) => {
+        const key = PYTHON_SITE_PREFIX + String(site.key).replace(/[^\w-]/gu, "");
+        return {
+          key,
+          name: String(site.name ?? site.key),
+          // 形状和 JS 源一致，界面不用为它做特判；jar 只是过校验用，
+          // 因为 py 站点在下面就被拦下，不会进 CatVod 运行时。
+          api: `/spider/${encodeURIComponent(key)}/4`,
+          type: 4,
+          jar: bundle,
+          ext: String(site.ext ?? ""),
+          py: true
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+/// 网关的入参名字和插件的名字不一样（tid/keyword/ids），在这里一次翻清楚。
+function pythonPayload(action, args) {
+  switch (action) {
+    case "home": return { filter: args.filter };
+    case "category": return { id: args.tid, page: args.page, filter: args.filter, filters: args.extend ?? {} };
+    case "detail": return { id: Array.isArray(args.ids) ? args.ids[0] : args.ids };
+    case "search": return { wd: args.keyword, quick: args.quick, page: args.page };
+    case "player": return { flag: args.flag, id: args.id, flags: args.vipFlags ?? [] };
+    default: throw new GatewayError("UNSUPPORTED_ACTION", `Python 源不支持 ${action}`, 400);
+  }
+}
+
+async function callPythonSite(config, invoke) {
+  const base = pythonBase(config);
+  if (!base) {
+    throw new GatewayError("PYTHON_UNAVAILABLE",
+      "这个源要 Python，但本机没有可用的 Python 运行时（需要重新构建安装包）", 503);
+  }
+  const token = invoke.site.key.slice(PYTHON_SITE_PREFIX.length);
+  let response;
+  try {
+    response = await fetch(`${base}/py/${encodeURIComponent(token)}/${invoke.action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(pythonPayload(invoke.action, invoke.arguments)),
+      signal: AbortSignal.timeout(120000)
+    });
+  } catch (error) {
+    throw new GatewayError("PYTHON_UNAVAILABLE", `Python 源没有响应（${error.message}）`, 503);
+  }
+  if (!response.ok) {
+    throw new GatewayError("PYTHON_ERROR", `Python 源返回 HTTP ${response.status}`, 502);
+  }
+  const result = await response.json();
+  if (result && typeof result === "object" && typeof result.error === "string" && result.errorCode) {
+    throw new GatewayError("PYTHON_SOURCE_ERROR", result.error, 502);
+  }
+  if (invoke.action === "player") return normalizePlayerResult(result, invoke.arguments.id);
+  return result;
+}
 
 function sendJSON(response, status, value) {
   const body = JSON.stringify(value);
@@ -316,11 +396,19 @@ export function createGateway(config, dependencies = {}) {
         // 形状各家不同（url 字符串 / urls 数组 / type+playerType），这里只做最基本
         // 的规整，真正的 M3U/TXT 解析在 Swift 侧（离线也能解析、能单测）。
         const lives = normaliseLives(result?.lives);
+        // Python 源：本机 Python 服务自己知道有哪些，这里只把它并进目录。
+        const pythonSites = await pythonCatalog(config, catalog.bundle);
+        if (pythonSites.length) sites = [...sites, ...pythonSites];
         sendJSON(response, 200, { sites, lives });
         return;
       }
 
       const invoke = validateInvokeRequest(body);
+      if (invoke.site.py) {
+        const result = await callPythonSite(config, invoke);
+        sendJSON(response, 200, result);
+        return;
+      }
       if (invoke.action === "player" && invoke.arguments.verifyResource === true
         && requiresPlaybackConfirmation(invoke.site, invoke.arguments)) {
         sendJSON(response, 200, { verification: "needs-playback", parse: 1, url: "" });

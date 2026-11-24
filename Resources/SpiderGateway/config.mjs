@@ -73,9 +73,16 @@ export function loadConfig(overrides = {}) {
     throw new Error("CatVod checksum redirect setting must be a boolean");
   }
 
+  const pythonSpiderPort = overrides.pythonSpiderPort;
+  if (pythonSpiderPort !== undefined
+    && (!Number.isInteger(pythonSpiderPort) || pythonSpiderPort < 1 || pythonSpiderPort > 65535)) {
+    throw new Error("Python spider port must be an integer between 1 and 65535");
+  }
+
   return {
     host,
     port: integer("SPIDER_GATEWAY_PORT", 8787, 0),
+    pythonSpiderPort,
     token,
     cloudConfig,
     panSouEndpoint: process.env.TVBOX_PANSOU_ENDPOINT || undefined,
