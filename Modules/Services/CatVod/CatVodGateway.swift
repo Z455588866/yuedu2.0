@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import YueduNodeRuntime
 
@@ -18,6 +19,8 @@ final class CatVodGateway {
     /// Credentials for netdisk sources. Kept here so both the initial launch
     /// config and live updates after the engine started see the same value.
     private var cloudConfig: [String: String] = [:]
+    /// Loopback base the engine reported. Playback URLs are rewritten against it.
+    private(set) var baseURL: URL?
 
     init(resourcesDirectory: URL? = nil, entryPoint: URL? = nil, cacheDirectory: URL? = nil) {
         let bundle = Bundle.main.bundleURL
@@ -109,11 +112,58 @@ final class CatVodGateway {
                 throw CatVodError.startupFailed(message)
             }
             if let urlString = YueduNodeRuntime.listeningURL(), let url = URL(string: urlString) {
+                baseURL = url
                 return url
             }
             try await Task.sleep(for: .milliseconds(25))
         }
         throw CatVodError.startupTimedOut
+    }
+
+    /// Turns a resolved stream into a URL the built-in player can actually open.
+    ///
+    /// Every CatVod bundle answers `player` with a URL on **its own** loopback
+    /// server, bound to a temporary port that dies with the session (idle sweep,
+    /// switching 猫源, the 4-session cap). Handing that URL to AVPlayer produced
+    /// "在此服务器上找不到所请求的 URL" (404) and, after a redirect, 403 — the
+    /// source's Referer/Cookie were lost. The gateway's stable `/v1/media` proxy
+    /// keeps the bundle identity instead of the dead port, re-attaches headers on
+    /// every hop and rewrites HLS playlists. Mature CatVod hosts do the same.
+    func playbackProxyURL(for url: URL, bundleURL: String, headers: [String: String]) -> URL? {
+        guard let base = baseURL ?? YueduNodeRuntime.listeningURL().flatMap(URL.init(string:)) else {
+            return nil
+        }
+        let host = url.host?.lowercased() ?? ""
+        let isLoopback = ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host)
+        var spec: [String: Any]
+        if isLoopback {
+            var path = url.percentEncodedPath
+            if let query = url.query, !query.isEmpty { path += "?" + query }
+            spec = ["j": bundleURL, "p": path.isEmpty ? "/" : path]
+        } else if headers.isEmpty {
+            spec = ["u": url.absoluteString]
+        } else {
+            spec = ["u": url.absoluteString, "h": headers]
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: spec, options: [.sortedKeys]) else {
+            return nil
+        }
+        let encoded = data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        guard var components = URLComponents(url: base.appendingPathComponent("v1/media"),
+                                             resolvingAgainstBaseURL: false) else { return nil }
+        components.queryItems = [URLQueryItem(name: "k", value: Self.mediaKey(for: authenticationToken)),
+                                 URLQueryItem(name: "s", value: encoded)]
+        return components.url
+    }
+
+    /// Mirrors `playbackMediaKey` in `playback-proxy.mjs`: the media route cannot
+    /// carry an Authorization header, so it accepts this derived value instead.
+    private static func mediaKey(for token: String) -> String {
+        let digest = SHA256.hash(data: Data("media:\(token)".utf8))
+        return String(digest.map { String(format: "%02x", $0) }.joined().prefix(32))
     }
 
     /// Adds a newly imported bundle URL to the allowlist and restarts with the widened set.

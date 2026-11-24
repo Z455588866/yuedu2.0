@@ -67,3 +67,6 @@ Resources/Assets/ReaderThemes/
 legado-upstream/
 legado-md3/
 legado-E/
+
+# Node gateway runtime cache (bundles, session dirs) created at run time.
+Resources/SpiderGateway/spider-gateway/

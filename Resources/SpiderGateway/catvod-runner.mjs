@@ -369,6 +369,10 @@ export async function runCatVod(bundlePath, options = {}) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   const port = loopbackServer.address().port;
+  // Publish the live loopback port on the control channel. The host's playback
+  // proxy forwards the bundle's own player routes here instead of trusting the
+  // port written inside an old answer (that port dies with this session).
+  try { writeLine(`${JSON.stringify({ type: "ready", port })}\n`); } catch { /* host gone */ }
   const initialized = new Map();
 
   /// 把 bundle 回答里指向「它自己的服务」的地址，统一改成这次真正监听的端口。

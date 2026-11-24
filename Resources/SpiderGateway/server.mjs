@@ -11,6 +11,7 @@ import { handlePanSearchAction, isPanSearchSite } from "./pan-search.mjs";
 import { cloudFilesSite, handleCloudFilesAction, isCloudFilesSite } from "./cloud-files.mjs";
 import { resolveCatVodCloudPlayer } from "./catvod-cloud-player.mjs";
 import { requiresPlaybackConfirmation } from "./readonly-player.mjs";
+import { decodeMediaSpec, handleMediaRequest, playbackMediaKey } from "./playback-proxy.mjs";
 
 function sendJSON(response, status, value) {
   const body = JSON.stringify(value);
@@ -190,6 +191,9 @@ export function createGateway(config, dependencies = {}) {
       return undefined;
     }
   });
+  // Filled in by `listen()`; playback URLs must point at the port this process
+  // actually bound, so HLS segments can be rewritten back through here.
+  let proxyOrigin = "";
   const server = http.createServer(async (request, response) => {
     try {
       await dependencies.beforeRequest?.();
@@ -200,6 +204,27 @@ export function createGateway(config, dependencies = {}) {
           protocol: 1,
           workerConfigured: Boolean(config.workerCommand),
           catVodConfigured: true
+        });
+        return;
+      }
+      // Playback proxy. AVPlayer cannot send an Authorization header, so this
+      // route authenticates with a value derived from the per-launch token and
+      // is only reachable on loopback.
+      if (["GET", "HEAD"].includes(request.method) && url.pathname === "/v1/media") {
+        if (url.searchParams.get("k") !== playbackMediaKey(config.token)) {
+          throw new GatewayError("UNAUTHORIZED", "Invalid media key", 401);
+        }
+        const spec = decodeMediaSpec(url.searchParams.get("s"));
+        await handleMediaRequest({
+          request,
+          response,
+          spec,
+          token: config.token,
+          proxyOrigin,
+          resolveLoopback: async (bundleURL) => {
+            const artifact = await nodeBundleCache.resolve(bundleURL);
+            return catVod.loopbackBase(artifact);
+          }
         });
         return;
       }
@@ -321,7 +346,9 @@ export function createGateway(config, dependencies = {}) {
           resolve();
         });
       });
-      return server.address();
+      const address = server.address();
+      if (address && typeof address === "object") proxyOrigin = `http://127.0.0.1:${address.port}`;
+      return address;
     },
     async close() {
       workers.close();

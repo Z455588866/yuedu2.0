@@ -412,7 +412,7 @@ final class CatVodService {
         if parse == 1 || jx == 1 || resolvedURL.hasPrefix("parse:")
             || resolvedURL.hasPrefix("json:") {
             if let sniffed = await Self.sniffPlaybackPage(resolvedURL, headers: headers) {
-                return CatVodPlayback(parse: 0, url: sniffed.absoluteString, header: headers)
+                return Self.proxiedPlayback(url: sniffed, headers: headers, bundleURL: bundleURL)
             }
             throw CatVodError.parseUnsupported
         }
@@ -444,7 +444,24 @@ final class CatVodService {
            let scheme = finalURL.scheme, let host = finalURL.host {
             finalHeaders["Referer"] = "\(scheme)://\(host)/"
         }
-        return CatVodPlayback(parse: parse, url: finalURL.absoluteString, header: finalHeaders)
+        return Self.proxiedPlayback(url: finalURL, headers: finalHeaders, bundleURL: bundleURL)
+    }
+
+    /// Single place that hands a stream to the player.
+    ///
+    /// The gateway proxy is the only consumer that keeps the bundle's loopback
+    /// port alive and re-sends Referer/Cookie/UA on every redirect and HLS
+    /// segment — AVFoundation itself drops them, which is exactly the 403/404
+    /// pair this app used to show on 网盘 lines. When the proxy is unavailable
+    /// (engine not up) the raw URL still plays, so behaviour degrades instead of
+    /// breaking.
+    private static func proxiedPlayback(url: URL, headers: [String: String],
+                                        bundleURL: String) -> CatVodPlayback {
+        if let proxied = CatVodGateway.shared.playbackProxyURL(for: url, bundleURL: bundleURL,
+                                                               headers: headers) {
+            return CatVodPlayback(parse: 0, url: proxied.absoluteString, header: [:])
+        }
+        return CatVodPlayback(parse: 0, url: url.absoluteString, header: headers)
     }
 
     private static func firstURL(_ value: Any?) -> String {

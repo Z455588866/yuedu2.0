@@ -26,12 +26,18 @@ export function safeProxyEnvironment(environment = process.env) {
 }
 
 export function catVodPermissionArguments(flags = process.allowedNodeEnvironmentFlags) {
+  // Desktop harnesses (and Node builds whose `--allow-net` is advertised but
+  // rejected at runtime) can opt out; iOS always leaves this unset, so the
+  // shipped sandbox behaviour is unchanged.
+  if (process.env.CATVOD_DISABLE_PERMISSION === "1") return [];
   const argumentsValue = ["--permission"];
   if (flags.has("--allow-net")) argumentsValue.push("--allow-net");
   return argumentsValue;
 }
 
 export function catVodFilePermissionArguments(artifactPath, runtimeDir) {
+  // These flags are only legal together with `--permission`.
+  if (process.env.CATVOD_DISABLE_PERMISSION === "1") return [];
   return [
     // qist's database adapter opens "./db.json". Node 22 checks that relative
     // resource separately even when the resolved runtime directory is allowed.
@@ -56,6 +62,10 @@ class CatVodSession {
     this.pending = new Map();
     this.lastUsedAt = Date.now();
     this.closed = false;
+    // Live loopback port reported by the runner. Playback URLs must be rebuilt
+    // against this, never against the port frozen inside an old answer.
+    this.loopbackPort = 0;
+    this.portWaiters = [];
     this.lines = attachBoundedLineReader(processValue.stdio[3], {
       maximumBytes: options.maxLineBytes,
       onLine: (line) => this.#receive(line),
@@ -80,6 +90,22 @@ class CatVodSession {
     // serving segments there, outside this protocol. Those requests report
     // activity so the idle sweeper does not cut the stream short.
     processValue.on?.("activity", () => { this.lastUsedAt = Date.now(); });
+  }
+
+  /// Resolves once the bundle's HTTP server is listening. Answers immediately
+  /// for a warm session; a cold one is already waiting on its catalog call.
+  waitForLoopback(timeoutMs = 20_000) {
+    if (this.loopbackPort > 0) return Promise.resolve(this.loopbackPort);
+    if (this.closed) return Promise.reject(new GatewayError("CATVOD_EXITED", "CatVod is unavailable", 502));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const index = this.portWaiters.indexOf(onPort);
+        if (index >= 0) this.portWaiters.splice(index, 1);
+        reject(new GatewayError("CATVOD_NO_LOOPBACK", "该接口没有可用的本地播放服务", 502));
+      }, timeoutMs);
+      const onPort = (port) => { clearTimeout(timer); resolve(port); };
+      this.portWaiters.push(onPort);
+    });
   }
 
   request(payload) {
@@ -107,6 +133,11 @@ class CatVodSession {
     try { message = JSON.parse(line); } catch {
       this.#fail(new GatewayError("INVALID_CATVOD_RESPONSE", "CatVod returned invalid JSON", 502));
       return this.close();
+    }
+    if (message && message.type === "ready" && Number.isInteger(message.port) && message.port > 0) {
+      this.loopbackPort = message.port;
+      for (const resolve of this.portWaiters.splice(0)) resolve(message.port);
+      return;
     }
     const pending = this.pending.get(message.id);
     if (!pending) return;
@@ -169,6 +200,16 @@ export class CatVodManager {
     // result instead of paying a second loopback round-trip on every view.
     if (session.catalogValue !== undefined) return session.catalogValue;
     return session.request({ type: "catalog" });
+  }
+
+  /// Base URL of this bundle's live loopback server, starting it if needed.
+  async loopbackBase(artifact) {
+    const session = await this.#session(artifact);
+    // Every proxied segment counts as use: a two-hour film must not be swept
+    // away mid-playback as an idle session.
+    session.lastUsedAt = Date.now();
+    const port = await session.waitForLoopback();
+    return `http://127.0.0.1:${port}`;
   }
 
   async invoke(artifact, site, action, argumentsValue) {
@@ -244,7 +285,8 @@ export class CatVodManager {
       artifact.path
     ], {
       cwd: runtimeDir,
-      stdio: ["pipe", "ignore", "ignore", "pipe"],
+      // Bundle stderr is noise on a phone; a desktop harness can forward it.
+      stdio: ["pipe", "ignore", process.env.CATVOD_DEBUG_STDERR === "1" ? "inherit" : "ignore", "pipe"],
       // qist bundle uses NODE_ENV to enable Fastify's stdout logger. Keep it off
       // because stdout is reserved for the JSON-lines control protocol.
       env: {
@@ -256,6 +298,11 @@ export class CatVodManager {
       }
     });
     // Wait for the process and its streams to close before removing its files.
+    if (process.env.CATVOD_DEBUG_STDERR === "1") {
+      child.once("exit", (code, signal) => {
+        process.stderr.write(`CATVOD_CHILD_EXIT code=${code} signal=${signal} path=${artifact.path}\n`);
+      });
+    }
     child.once("close", () => {
       void rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
     });

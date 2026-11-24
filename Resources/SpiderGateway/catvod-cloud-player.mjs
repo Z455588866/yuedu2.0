@@ -1,4 +1,4 @@
-import { playQuarkSourceEpisode } from "./cloud-pan.mjs";
+import { playQuarkSourceEpisode, play123ShareEpisode, QUARK_SERVICES } from "./cloud-pan.mjs";
 import {
   directPlaybackFromEpisode,
   shareURLFromEpisode,
@@ -8,7 +8,7 @@ import {
 import { GatewayError } from "./errors.mjs";
 
 function invalidEpisode() {
-  throw new GatewayError("INVALID_CLOUD_EPISODE", "夸克剧集信息无效，请重新打开资源详情", 400);
+  throw new GatewayError("INVALID_CLOUD_EPISODE", "网盘剧集信息无效，请重新打开资源详情", 400);
 }
 
 function field(value, maximum) {
@@ -27,14 +27,17 @@ function decodeCatVodEpisode(id) {
 
 // Decode the modern CatVod cloud contract without executing provider code.
 // Account credentials never become part of this public episode descriptor.
-export function parseCatVodQuarkEpisode(id) {
+//
+// Quark and UC share one contract, so the same decoder serves both: the caller
+// picks the service and only the `providerId` check differs.
+export function parseCatVodQuarkEpisode(id, service = QUARK_SERVICES.quark) {
   const episode = decodeCatVodEpisode(id);
-  if (episode?.providerId !== "quark") return null;
+  if (episode?.providerId !== service.key) return null;
   let token;
   try { token = JSON.parse(episode.playToken); } catch { invalidEpisode(); }
   if (!token || typeof token !== "object" || Array.isArray(token)) invalidEpisode();
   const file = {
-    provider: "quark",
+    provider: service.key,
     shareId: field(token.shareId, 256),
     stoken: field(token.stoken, 8192),
     fileId: field(token.fid, 256),
@@ -47,21 +50,67 @@ export function parseCatVodQuarkEpisode(id) {
   return { file, mode };
 }
 
+function collectStrings(value, depth = 0, out = []) {
+  if (value == null || depth > 5) return out;
+  if (typeof value === "string") {
+    if (/^https?:\/\//i.test(value)) out.push(value);
+    return out;
+  }
+  if (typeof value !== "object") return out;
+  for (const item of Object.values(value)) collectStrings(item, depth + 1, out);
+  return out;
+}
+
+function tokenObject(episode) {
+  const raw = episode?.playToken;
+  if (typeof raw !== "string") return episode;
+  try { return JSON.parse(raw); } catch { return episode; }
+}
+
+const SHARE_KEY_NAMES = ["shareKey", "share_key", "ShareKey", "sharekey", "pwdId", "pwd_id"];
+
+function scanName(value, names, depth = 0) {
+  if (!value || typeof value !== "object" || depth > 4) return "";
+  for (const name of names) {
+    const candidate = value[name];
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  for (const item of Object.values(value)) {
+    const found = scanName(item, names, depth + 1);
+    if (found) return found;
+  }
+  return "";
+}
+
+/// 123 云盘 is the one drive whose share plays without being copied first, so a
+/// CatVod episode only needs the share key. Bundles differ: some put it in the
+/// token JSON, some only hand back `https://www.123pan.com/s/<key>`.
+function share123FromEpisode(episode) {
+  const token = tokenObject(episode);
+  const declared = scanName(token, SHARE_KEY_NAMES) || scanName(episode, SHARE_KEY_NAMES);
+  if (declared) {
+    return { shareKey: declared, password: scanName(token, ["pwd", "password", "passcode"]) };
+  }
+  for (const raw of collectStrings(episode)) {
+    const match = raw.match(/^https?:\/\/(?:www\.)?(?:123pan|123684|123865|123912)\.com\/s\/([^/?#]+)/i);
+    if (match) {
+      let password = "";
+      try { password = new URL(raw).searchParams.get("pwd") || ""; } catch { /* Keep empty. */ }
+      return { shareKey: match[1], password };
+    }
+  }
+  return null;
+}
+
 /// Every netdisk the CatVod cloud contract can put in a play id, and whether this
-/// gateway can resolve it. Only Quark is implemented (`cloud-pan.mjs`, ported from
-/// the Quark share/transcode API). The rest must fail with a name and a reason —
-/// the bundle hands these ids to the host and expects the host to play them, so
-/// passing them on to AVPlayer just spins on a share page.
+/// gateway can resolve it. Quark, UC, 123 and Baidu are implemented; the rest must
+/// fail with a name and a reason rather than being handed to AVPlayer, which would
+/// only spin on a share page.
 const CLOUD_PROVIDERS = {
-  quark: null,
-  baidu: "百度网盘",
   tianyi: "天翼云盘",
   aliyun: "阿里云盘",
-  uc: "UC 网盘",
   pan115: "115 网盘",
   "115": "115 网盘",
-  pan123: "123 云盘",
-  "123": "123 云盘",
   guangya: "光雅/光年",
   xunlei: "迅雷云盘"
 };
@@ -69,29 +118,55 @@ const CLOUD_PROVIDERS = {
 function unsupportedProvider(providerID) {
   const name = CLOUD_PROVIDERS[providerID] || "该网盘";
   return new GatewayError("CLOUD_PROVIDER_UNSUPPORTED",
-    `这条线路是${name}，它的分享解析还没有接完（夸克、百度已接入）。`
+    `这条线路是${name}，它的分享解析还没有接完（夸克、UC、123、百度已接入）。`
     + "可以先换这条资源的其他线路；自己盘里的文件可以在「我的网盘」里直接播。", 422);
+}
+
+/// Quark and UC: verify the share token, walk the share, copy into a private
+/// cache folder, then ask the drive for a play address.
+async function playQuarkFamily(id, credentials, fetchValue, service) {
+  const episode = parseCatVodQuarkEpisode(id, service);
+  if (!episode) return null;
+  if (!credentials?.[service.cookieField]) {
+    throw new GatewayError("CLOUD_AUTH_REQUIRED",
+      `请先在「猫源 → 网盘账号配置」里保存${service.name}网盘 Cookie`, 401);
+  }
+  try {
+    return await playQuarkSourceEpisode(episode.file, credentials, fetchValue,
+      episode.mode === "original", service);
+  } catch (error) {
+    const authentication = error?.code === "CLOUD_AUTH_REQUIRED";
+    throw new GatewayError(authentication ? "CLOUD_AUTH_REQUIRED" : "CLOUD_PLAYBACK_FAILED",
+      authentication ? `${service.name}登录已失效，请在网盘账号配置里更新 Cookie`
+        : `${service.name}播放地址解析失败，请重新打开资源详情或稍后重试`,
+      authentication ? 401 : 502);
+  }
 }
 
 export async function resolveCatVodCloudPlayer(argumentsValue, credentials, fetchValue) {
   const descriptor = decodeCatVodEpisode(argumentsValue.id);
   const providerID = String(descriptor?.providerId || "").toLowerCase();
 
-  // 夸克：分享/转码的完整解析（最早接的一家）。
   if (providerID === "quark") {
-    const episode = parseCatVodQuarkEpisode(argumentsValue.id);
-    if (!episode) return null;
-    if (!credentials.quarkCookie) {
-      throw new GatewayError("CLOUD_AUTH_REQUIRED",
-        "请先在「猫源 → 网盘账号配置」里保存夸克 Cookie", 401);
-    }
-    try {
-      return await playQuarkSourceEpisode(episode.file, credentials, fetchValue, episode.mode === "original");
-    } catch (error) {
-      const authentication = error?.code === "CLOUD_AUTH_REQUIRED";
-      throw new GatewayError(authentication ? "CLOUD_AUTH_REQUIRED" : "CLOUD_PLAYBACK_FAILED",
-        authentication ? "夸克登录已失效，请在网盘账号配置里更新 Cookie"
-          : "夸克播放地址解析失败，请重新打开资源详情或稍后重试", authentication ? 401 : 502);
+    return playQuarkFamily(argumentsValue.id, credentials, fetchValue, QUARK_SERVICES.quark);
+  }
+  if (providerID === "uc") {
+    return playQuarkFamily(argumentsValue.id, credentials, fetchValue, QUARK_SERVICES.uc);
+  }
+  if (providerID === "123" || providerID === "pan123") {
+    const share = share123FromEpisode(descriptor);
+    if (share) {
+      try {
+        return await play123ShareEpisode({
+          ...share,
+          fileId: fileIDFromEpisode(descriptor, providerID),
+          fetchValue
+        });
+      } catch (error) {
+        if (error?.code) throw error;
+        throw new GatewayError("CLOUD_PLAYBACK_FAILED",
+          `123 网盘播放地址解析失败（${error?.message || "请稍后重试"}）`, 502);
+      }
     }
   }
 
@@ -113,7 +188,7 @@ export async function resolveCatVodCloudPlayer(argumentsValue, credentials, fetc
   const direct = directPlaybackFromEpisode(descriptor);
   if (direct) return direct;
 
-  if (providerID && providerID !== "quark" && providerID in CLOUD_PROVIDERS) {
+  if (providerID && providerID in CLOUD_PROVIDERS) {
     throw unsupportedProvider(providerID);
   }
   return null;

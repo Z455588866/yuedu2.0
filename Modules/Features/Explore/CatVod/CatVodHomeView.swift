@@ -229,6 +229,17 @@ struct CatVodHomeView: View {
         .onChange(of: selectedSourceID) { old, _ in
             // 首次由 `.task` 赋值时不重复加载，那一次由 content 的 task 负责。
             guard old != nil else { return }
+            // 切接口立刻清空上一个接口的内容。新接口要下载脚本、编译、起服务，
+            // 这段时间里如果还挂着旧站点和旧海报，看起来就是「换了猫源但画面
+            // 卡在上一个源」——实际是没清状态，不是缓存串了。
+            sites = []
+            list = CatVodList(categories: [], media: [], page: 1, pageCount: 1)
+            selectedSite = nil
+            currentCategory = nil
+            filterChoices = [:]
+            allFilters = [:]
+            message = nil
+            isLoading = true
             Task { await loadCatalogAndHome() }
         }
     }
