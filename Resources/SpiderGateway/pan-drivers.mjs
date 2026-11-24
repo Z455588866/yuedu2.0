@@ -439,6 +439,117 @@ function quarkFile(item) {
   return { id, name, isFolder: item.dir === true, size: number(item.size) };
 }
 
+// ---------------------------------------------------------------- 阿里云盘
+//
+// Refresh token -> access token, then the ADrive v3 list / download-url API,
+// the same calls FongMi's Aliyun spider and tvbox-silicon's Alibaba drive make.
+// The access token is cached for the module's lifetime and refreshed on 401.
+
+const ALIYUN = {
+  tokenURL: "https://auth.aliyundrive.com/v2/account/token",
+  api: "https://api.aliyundrive.com",
+  userAgent: BROWSER_UA
+};
+
+function aliyunSession(refreshToken) {
+  const state = { access: "", refresh: refreshToken };
+  async function accessToken(force = false) {
+    if (state.access && !force) return state.access;
+    const response = await fetch(ALIYUN.tokenURL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": ALIYUN.userAgent },
+      body: JSON.stringify({ grant_type: "refresh_token", refresh_token: state.refresh })
+    });
+    const answer = await readJSON(response);
+    const token = text(answer.access_token);
+    if (!token) {
+      throw new Error(`阿里云盘登录已失效（${text(answer.message) || text(answer.code) || `HTTP ${response.status}`}），请重新填写 Refresh Token`);
+    }
+    state.access = token;
+    if (text(answer.refresh_token)) state.refresh = text(answer.refresh_token);
+    return token;
+  }
+  async function call(path, body, retry = true) {
+    const token = await accessToken();
+    const response = await fetch(`${ALIYUN.api}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}`, "User-Agent": ALIYUN.userAgent },
+      body: JSON.stringify(body)
+    });
+    const answer = await readJSON(response);
+    const code = text(answer.code);
+    if (response.ok && !code) return answer;
+    if ([401, 403].includes(response.status) || code === "AccessTokenInvalid") {
+      if (retry) { await accessToken(true); return call(path, body, false); }
+      throw new Error("阿里云盘登录已失效，请重新填写 Refresh Token");
+    }
+    throw new Error(`阿里云盘：${text(answer.message) || code || `HTTP ${response.status}`}`);
+  }
+  return { call };
+}
+
+const aliyun = {
+  key: "aliyun",
+  name: "阿里云盘",
+  credentialField: "token",
+  root: "root",
+  async list(credentials, folder = "root") {
+    const refresh = text(credentials.token);
+    if (!refresh) throw new Error("还没有填写阿里云盘 Refresh Token");
+    const session = aliyunSession(refresh);
+    const files = [];
+    let marker = "";
+    for (let page = 0; page < 100; page += 1) {
+      const answer = await session.call("/adrive/v3/file/list", {
+        drive_id: "default", parent_file_id: folder || "root", limit: 200,
+        marker, type: "file", image_thumbnail_process: "", image_url_process: ""
+      }).catch(async () => session.call("/adrive/v3/file/list", {
+        drive_id: "default", parent_file_id: folder || "root", limit: 200, marker, type: "file"
+      }));
+      const items = Array.isArray(answer.items) ? answer.items : [];
+      files.push(...items.map((item) => {
+        const id = text(item.file_id);
+        const name = text(item.name);
+        if (!id || !name) return null;
+        return { id, name, isFolder: item.type === "folder", size: number(item.size) };
+      }).filter(Boolean));
+      marker = text(answer.next_marker);
+      if (!marker) break;
+    }
+    // v3 list with type=file skips folders; fetch them in a second pass.
+    const folders = [];
+    let folderMarker = "";
+    for (let page = 0; page < 100; page += 1) {
+      const answer = await session.call("/adrive/v3/file/list", {
+        drive_id: "default", parent_file_id: folder || "root", limit: 200,
+        marker: folderMarker, type: "folder"
+      });
+      const items = Array.isArray(answer.items) ? answer.items : [];
+      folders.push(...items.map((item) => {
+        const id = text(item.file_id);
+        const name = text(item.name);
+        if (!id || !name) return null;
+        return { id, name, isFolder: true, size: 0 };
+      }).filter(Boolean));
+      folderMarker = text(answer.next_marker);
+      if (!folderMarker) break;
+    }
+    return [...folders, ...files];
+  },
+  async link(credentials, file) {
+    const refresh = text(credentials.token);
+    if (!refresh) throw new Error("还没有填写阿里云盘 Refresh Token");
+    const answer = await aliyunSession(refresh).call("/adrive/v3/file/getdownloadurl", {
+      drive_id: "default", file_id: file.id
+    });
+    const address = text(answer.url) || text(answer.download_url);
+    if (!address) throw new Error("阿里云盘没有返回这个文件的地址");
+    const headers = { "User-Agent": ALIYUN.userAgent, Referer: "https://www.aliyundrive.com/" };
+    const resolved = await followLink(address, headers);
+    return { ...resolved, headers };
+  }
+};
+
 // ---------------------------------------------------------------- 123 云盘
 
 const PAN123 = {
@@ -811,24 +922,40 @@ const guangya = {
   }
 };
 
+// AList / OpenList servers are configured as a list in `credentials.alistServers`
+// (a JSON array), not one credential per provider. They are built on demand so
+// each request gets a fresh session and no token outlives it on a shared driver.
+import { alistServersFromConfig, alistDrive } from "./alist.mjs";
+
+function alistDrives(credentials = {}) {
+  const servers = alistServersFromConfig(credentials.alistServers);
+  return servers.map((server) => alistDrive(server));
+}
+
 export const panDrives = {
   tianyi,
   baidu,
   quark: quarkDrive("quark"),
   uc: quarkDrive("uc"),
+  aliyun,
   pan123,
   pan115,
   guangya
 };
 
-export function driveFor(key) {
-  return panDrives[String(key || "").toLowerCase()] || null;
+export function driveFor(key, credentials = {}) {
+  const raw = String(key || "");
+  if (raw.toLowerCase().startsWith("alist.")) {
+    return alistDrives(credentials).find((drive) => drive.key === raw) || null;
+  }
+  return panDrives[raw.toLowerCase()] || null;
 }
 
 /// Drives the person has signed in to, in the order they are offered.
 export function signedInDrives(credentials = {}) {
-  const order = ["quark", "uc", "pan115", "tianyi", "baidu", "pan123", "guangya"];
-  return order.map(driveFor).filter((drive) => drive && text(credentials[drive.credentialField]).length > 0);
+  const order = ["quark", "uc", "aliyun", "pan115", "tianyi", "baidu", "pan123", "guangya"];
+  const builtin = order.map(driveFor).filter((drive) => drive && text(credentials[drive.credentialField]).length > 0);
+  return [...builtin, ...alistDrives(credentials)];
 }
 
 export const panDriveTestSupport = { CookieJar, baiduAddress, tianyiSignature, quarkFile, baiduFile, m115Encode, m115Decode, pan115, followLink };

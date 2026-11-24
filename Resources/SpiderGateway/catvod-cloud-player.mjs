@@ -5,6 +5,7 @@ import {
   fileIDFromEpisode,
   playBaiduShare
 } from "./cloud-share.mjs";
+import { driveFor } from "./pan-drivers.mjs";
 import { GatewayError } from "./errors.mjs";
 
 function invalidEpisode() {
@@ -118,8 +119,8 @@ const CLOUD_PROVIDERS = {
 function unsupportedProvider(providerID) {
   const name = CLOUD_PROVIDERS[providerID] || "该网盘";
   return new GatewayError("CLOUD_PROVIDER_UNSUPPORTED",
-    `这条线路是${name}，它的分享解析还没有接完（夸克、UC、123、百度已接入）。`
-    + "可以先换这条资源的其他线路；自己盘里的文件可以在「我的网盘」里直接播。", 422);
+    `这条线路是${name}，它的分享链接解析还没有接完。`
+    + "可以先换这条资源的其他线路；已登录账号的网盘文件可在「我的网盘」里直接播。", 422);
 }
 
 /// Quark and UC: verify the share token, walk the share, copy into a private
@@ -178,6 +179,22 @@ export async function resolveCatVodCloudPlayer(argumentsValue, credentials, fetc
     if (providerID === "baidu" || /pan\.baidu\.com|yun\.baidu\.com/i.test(share)) {
       return await playBaiduShare(share, credentials, fetchValue,
         fileIDFromEpisode(descriptor, providerID));
+    }
+    // 阿里云盘 / 115 / 天翼 / 光雅：插件若把 file_id 一起给了，且本机保存了
+    // 对应账号，就能像「我的网盘」那样用账号凭证直接取链，不必啃分享页。
+    const accountDriveKeys = { aliyun: "aliyun", "115": "pan115", pan115: "pan115", tianyi: "tianyi", guangya: "guangya" };
+    const driveKey = accountDriveKeys[providerID];
+    if (driveKey) {
+      const fileID = fileIDFromEpisode(descriptor, providerID);
+      const drive = driveFor(driveKey);
+      if (fileID && drive && String(credentials?.[drive.credentialField] || "").length > 0) {
+        try {
+          const link = await drive.link(credentials, { id: fileID, name: fileID });
+          if (link?.url) return { parse: 0, jx: 0, url: link.url, header: link.headers || {} };
+        } catch { /* fall through to the explicit hint below */ }
+        throw new GatewayError("CLOUD_PLAYBACK_FAILED",
+          `这条${drive.name}线路没能取到播放地址，请确认账号有效，或到「我的网盘」里直接播放该文件`, 502);
+      }
     }
     const fallback = directPlaybackFromEpisode(descriptor);
     if (fallback) return fallback;

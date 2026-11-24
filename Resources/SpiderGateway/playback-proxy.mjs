@@ -2,6 +2,7 @@ import http from "node:http";
 import https from "node:https";
 import { createHash } from "node:crypto";
 import { GatewayError } from "./errors.mjs";
+import { StreamCache, MediaCache, parseRange, totalFromHeaders } from "./media-cache.mjs";
 
 /// Host-side playback proxy.
 ///
@@ -140,6 +141,61 @@ function passThroughHeaders(upstream) {
   return out;
 }
 
+// ---- Chunked parallel read-ahead cache (HTTP-layer equivalent of CloudStreams)
+// One bounded registry per process; keyed by the media spec so the same file
+// across seek requests shares its chunks. Anything here failing falls through
+// to the plain passthrough below, so playback can't regress below baseline.
+const mediaCache = new MediaCache();
+
+/// Fetch one byte range from the resolved target with the source's headers,
+/// following redirects (`openUpstream`) and validating the 206 Content-Range.
+/// Returns a Buffer of exactly [start, end].
+async function fetchRange(target, headers, start, end) {
+  const hopHeaders = { ...headers, Range: `bytes=${start}-${end}`, "Accept-Encoding": "identity" };
+  const { response, status } = await openUpstream(target, { method: "GET", headers: hopHeaders });
+  const total = totalFromHeaders(response.headers);
+  if (status === 416 || (response.statusCode || 0) === 416) {
+    response.resume();
+    return Buffer.alloc(0);
+  }
+  if (status !== 206) {
+    response.resume();
+    throw new GatewayError("MEDIA_RANGE_UNSUPPORTED", "源站不支持分段请求", 502);
+  }
+  const body = await readBody(response, (end - start + 1) + 1024 * 1024);
+  const rangeHeader = String(response.headers["content-range"] || "");
+  const match = /bytes\s+(\d+)-(\d+)\/(\d+)/i.exec(rangeHeader);
+  // Some servers ignore the exact requested end and send a larger/aligned
+  // range; slice down to what was asked. The chunk cache verifies exact size.
+  if (match && Number(match[1]) <= start && Number(match[2]) >= end) {
+    return body.subarray(start - Number(match[1]), start - Number(match[1]) + (end - start + 1));
+  }
+  if (body.length === end - start + 1 && (!total || total > end)) return body;
+  throw new GatewayError("MEDIA_RANGE_MISMATCH", "源站分段响应与请求不一致", 502);
+}
+
+/// Establish (or reuse) a stream cache for `key`. A one-byte range probe gets
+/// the total length and the response headers; then the requested range is
+/// served from chunks, fetched a few at a time in parallel.
+async function serveFromCache({ key, target, headers, range, responseOriginHeaders }) {
+  let cache = mediaCache.get(key);
+  if (!cache) {
+    // Probe the total from the first byte of the file.
+    const probeHeaders = { ...headers, Range: "bytes=0-0", "Accept-Encoding": "identity" };
+    const { response: probe, status } = await openUpstream(target, { method: "GET", headers: probeHeaders });
+    const total = totalFromHeaders(probe.headers);
+    const originHeaders = passThroughHeaders(probe.headers);
+    probe.resume();
+    if (status !== 206 || !total) throw new Error("cache probe failed");
+    cache = new StreamCache(total, responseOriginHeaders || originHeaders, (start, end) => fetchRange(target, headers, start, end));
+    mediaCache.put(key, cache);
+  }
+  const parsed = parseRange(range, cache.total);
+  if (!parsed || parsed.unsatisfiable) throw new Error("bad range for cache");
+  const bytes = await cache.read(parsed.start, parsed.end);
+  return { bytes, start: parsed.start, end: parsed.end, total: cache.total, headers: cache.headers };
+}
+
 /// Rewrite every URI in an HLS playlist so the player keeps asking this proxy.
 /// Relative segment names, absolute CDN URLs, keys and init segments are all
 /// covered — the old behaviour left relative segments pointing at the bundle's
@@ -212,6 +268,38 @@ export async function handleMediaRequest({
 
   if (request.headers.range) headers.range = request.headers.range;
   if (request.headers["if-range"]) headers["if-range"] = request.headers["if-range"];
+
+  // Chunked parallel read-ahead for seekable media (CloudStreams equivalent).
+  // Only for GET + explicit Range on a direct CDN URL: loopback bundle proxies
+  // and HLS segments have their own threading/lifecycle and stay on passthrough.
+  // A stable key lets successive seek requests share the same cached chunks.
+  if (method === "GET" && request.headers.range && !(typeof spec.j === "string" && spec.j)
+      && !looksLikePlaylist(target, {})) {
+    const cacheKey = createHash("sha256").update(`${playbackMediaKey(token)}|${target.href}`).digest("hex").slice(0, 32);
+    try {
+      const served = await serveFromCache({
+        key: cacheKey,
+        target,
+        headers: sanitizedHeaders(spec.h),
+        range: request.headers.range,
+        responseOriginHeaders: {}
+      });
+      const out = {
+        "content-type": served.headers["content-type"] || "video/mp4",
+        "accept-ranges": "bytes",
+        "content-range": `bytes ${served.start}-${served.end}/${served.total}`,
+        "content-length": String(served.bytes.length),
+        "cache-control": "no-store"
+      };
+      response.writeHead(206, out);
+      response.end(method === "HEAD" ? undefined : served.bytes);
+      return;
+    } catch {
+      // A cache miss or any inconsistency falls through to the verified
+      // passthrough below; never surface a cache error to the player.
+      mediaCache.remove(cacheKey);
+    }
+  }
 
   const { response: upstream, finalURL, status } = await openUpstream(target, { method, headers });
 

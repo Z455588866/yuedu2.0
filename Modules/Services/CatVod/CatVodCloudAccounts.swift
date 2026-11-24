@@ -21,11 +21,16 @@ struct CatVodCloudAccounts: Codable, Sendable, Equatable {
     var pan123Token = ""
     var guangyaToken = ""
     var xunleiCookie = ""
+    /// AList / OpenList servers as a JSON array, in FongMi's TVBox shape
+    /// (`[{name, server, path, password, login:{username,password}}]`). Kept as
+    /// one string so a whole server list round-trips through `cloudConfig`.
+    var alistServers = ""
 
     enum CodingKeys: String, CodingKey {
         case quarkCookie, quarkServiceTicket, ucCookie, ucToken
         case aliyunToken, baiduCookie, pan115Cookie, tianyiToken
         case pan123Token, guangyaToken, xunleiCookie
+        case alistServers
     }
 
     init() {}
@@ -43,6 +48,7 @@ struct CatVodCloudAccounts: Codable, Sendable, Equatable {
         pan123Token = try c.decodeIfPresent(String.self, forKey: .pan123Token) ?? ""
         guangyaToken = try c.decodeIfPresent(String.self, forKey: .guangyaToken) ?? ""
         xunleiCookie = try c.decodeIfPresent(String.self, forKey: .xunleiCookie) ?? ""
+        alistServers = try c.decodeIfPresent(String.self, forKey: .alistServers) ?? ""
     }
 
     /// Shape consumed by the gateway's `config.cloudConfig`. Spiders and the
@@ -62,6 +68,7 @@ struct CatVodCloudAccounts: Codable, Sendable, Equatable {
         put("pan123Token", pan123Token)
         put("guangyaToken", guangyaToken)
         put("xunleiCookie", xunleiCookie)
+        put("alistServers", alistServers)
         return result
     }
 
@@ -161,6 +168,16 @@ final class CatVodCloudAccountStore {
     }
 
     func clear(provider: CatVodCloudProvider) { set(provider: provider, primary: "", secondary: "") }
+
+    /// AList servers are stored as one JSON string, independent of the
+    /// per-provider credential switches above.
+    func setAListServers(_ json: String) {
+        accounts.alistServers = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        persist()
+        refreshGateway()
+    }
+
+    var alistServers: String { accounts.alistServers }
 
     private func persist() {
         guard let data = try? JSONEncoder().encode(accounts) else { return }

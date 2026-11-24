@@ -17,7 +17,8 @@ const SHARE_HOSTS = new Set([
   "pan.quark.cn", "drive.uc.cn", "fast.uc.cn",
   "cloud.189.cn", "h5.cloud.189.cn",
   "115.com", "115cdn.com", "anxia.com",
-  "123pan.com", "123684.com", "123865.com", "123912.com", "www.123pan.com"
+  "123pan.com", "123684.com", "123865.com", "123912.com", "www.123pan.com",
+  "aliyundrive.com", "www.aliyundrive.com", "alipan.com", "www.alipan.com"
 ]);
 
 function text(value) {

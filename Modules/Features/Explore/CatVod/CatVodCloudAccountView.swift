@@ -7,6 +7,7 @@ struct CatVodCloudAccountView: View {
     @State private var store = CatVodCloudAccountStore.shared
     @State private var editing: CatVodCloudProvider?
     @State private var scanning: CatVodCloudProvider?
+    @State private var editingAList = false
 
     var body: some View {
         List {
@@ -66,6 +67,37 @@ struct CatVodCloudAccountView: View {
                 Text(localized("网盘平台"))
             }
 
+            Section {
+                Button {
+                    editingAList = true
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "server.rack")
+                            .foregroundStyle(store.alistServers.isEmpty ? DSColor.textSecondary : Color.accentColor)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(localized("AList / OpenList 服务器"))
+                                .font(DSFont.subheadline.weight(.semibold))
+                                .foregroundStyle(DSColor.textPrimary)
+                            Text(store.alistServers.isEmpty
+                                 ? localized("未配置")
+                                 : localized("已配置 · 点按管理服务器列表"))
+                                .font(DSFont.caption2)
+                                .foregroundStyle(DSColor.textSecondary)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(DSColor.textSecondary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } footer: {
+                Text(localized("填 AList / OpenList 的 TVBox 配置数组，可在「我的网盘」里浏览并按原画质播放服务器里的视频。"))
+                    .dsSectionFooter()
+            }
+
             if store.accounts.hasAnyCredential {
                 Section {
                     Button(role: .destructive) {
@@ -85,6 +117,9 @@ struct CatVodCloudAccountView: View {
         }
         .sheet(item: $scanning) { provider in
             CatVodQRLoginView(provider: provider)
+        }
+        .sheet(isPresented: $editingAList) {
+            AListConfigView()
         }
     }
 
@@ -231,5 +266,81 @@ extension CatVodCloudProvider {
         case .guangya: return "g.circle"
         case .xunlei: return "x.circle"
         }
+    }
+}
+
+/// Edits the AList / OpenList server list as one JSON document, matching the
+/// TVBox AList configuration shape the gateway reads. Kept independent of the
+/// per-provider credential editor so adding a server type needs no enum change.
+private struct AListConfigView: View {
+    @State private var store = CatVodCloudAccountStore.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String
+
+    init() {
+        _text = State(initialValue: CatVodCloudAccountStore.shared.alistServers)
+    }
+
+    private var looksValidJSON: Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return false }
+        let object = try? JSONSerialization.jsonObject(with: data)
+        return object is [Any] || (object as? [String: Any])?["drives"] != nil
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text(localized("粘贴 AList / OpenList 的 TVBox 配置数组。填写后即可在「我的网盘」里浏览服务器，并按原画质播放。凭据只保存在本机。"))
+                        .font(DSFont.caption)
+                        .foregroundStyle(DSColor.textSecondary)
+                }
+                Section {
+                    TextEditor(text: $text)
+                        .font(DSFont.footnote)
+                        .frame(minHeight: 220)
+                } header: {
+                    Text(localized("服务器配置（JSON）"))
+                } footer: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("[{\"name\":\"我的AList\",\"server\":\"https://alist.example.com\",\"path\":\"/\",\"password\":\"\",\"login\":{\"username\":\"user\",\"password\":\"pass\"}}]")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(DSColor.textSecondary)
+                        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !looksValidJSON {
+                            Text(localized("格式看起来不是有效的服务器数组，保存后可能无法加载。"))
+                                .font(DSFont.caption2)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .dsSectionFooter()
+                }
+                if !store.alistServers.isEmpty {
+                    Section {
+                        Button(role: .destructive) {
+                            store.setAListServers("")
+                            text = ""
+                        } label: {
+                            Label(localized("清除 AList 配置"), systemImage: "trash")
+                        }
+                    }
+                }
+            }
+            .navigationTitle(localized("AList 服务器"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(localized("取消")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(localized("保存")) {
+                        store.setAListServers(text)
+                        dismiss()
+                    }
+                }
+            }
+            .themedAppSurface(for: .settings)
+        }
+        .presentationDetents([.medium, .large])
     }
 }
