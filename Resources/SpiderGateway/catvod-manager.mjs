@@ -298,6 +298,9 @@ export class CatVodManager {
         // 插件（FongMi 系）因此能直接用上账号；不读 db 的包拿到的仍是空表，
         // 行为与以前一致。
         CATVOD_ACCOUNTS: this.accountsJSON,
+        // 诊断开关（CATVOD_NET_LOG=<path> 时把每个出网请求的状态/地址写进文件），
+        // 只在桌面/内测排查时打开，默认不设就不产生任何落盘。
+        ...(process.env.CATVOD_NET_LOG ? { CATVOD_NET_LOG: process.env.CATVOD_NET_LOG } : {}),
         ...safeProxyEnvironment()
       }
     });

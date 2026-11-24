@@ -256,11 +256,34 @@ enum CatVodError: LocalizedError {
             return localized("源站响应超时（源自己的问题）。稍后重试，或者换一个站点")
         }
         if code >= 500 {
+            // 站点自身风控/反爬的两种典型形态。原文是英文（axios 的
+            // "Request failed with status code 403"、node 的
+            // "Client network socket disconnected…"），直接摊在「暂无内容」下面，
+            // 用户只能读出一串它看不懂的报错。这里按原因说清楚「是源的问题、能做什么」。
+            if lower.contains("status code 403") || lower.contains("403 forbidden")
+                || text.contains("请求失败 403") {
+                return localized("源站拒绝访问（403：站点开了风控，或需要登录/Cookie）。换一个站点，或者稍后再试")
+            }
+            if lower.contains("client network socket disconnected")
+                || lower.contains("before secure tls connection") || lower.contains("econnreset") {
+                return localized("源站断开了连接（站点拦截了当前网络）。换一个网络或站点再试")
+            }
+            if lower.contains("status code 502") || lower.contains("status code 520")
+                || lower.contains("status code 521") || lower.contains("status code 522") {
+                return localized("源站自己故障了（网关 5xx）。这不是 App 的问题，晚点再试或换站点")
+            }
             if text.contains("无法连接") || text.contains("连接失败") || text.contains("请稍后重试")
                 || lower.contains("econnrefused") || lower.contains("etimedout")
                 || lower.contains("socket hang up") || lower.contains("enotfound")
+                || lower.contains("getaddrinfo")
                 || lower.contains("unavailable") {
                 return localized("源站连不上（源自己的问题，不是 App 坏了）。稍后重试，或者换一个站点")
+            }
+            // `fetch failed ← certificate has expired ← …` 这类错误链：前半截是运行时
+            // 的包装，真正的原因在最后一段。只留原因，避免把英文栈甩给用户。
+            if text.contains(" ← ") {
+                let cause = text.split(separator: "←").last.map { $0.trimmingCharacters(in: .whitespaces) } ?? text
+                return String(format: localized("源站返回错误：%@"), cause.isEmpty ? localized("未知原因") : cause)
             }
             return String(format: localized("源站返回错误：%@"), text.isEmpty ? localized("未知原因") : text)
         }

@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
 import zlib from "node:zlib";
+import { appendFileSync } from "node:fs";
 
 /// Minimal `fetch` for CatVod bundles.
 ///
@@ -16,6 +17,21 @@ import zlib from "node:zlib";
 
 const MAX_REDIRECTS = 8;
 const DEFAULT_TIMEOUT = 60_000;
+
+/// Bundles run in a runtime with no browser identity: `node`/undici labels every
+/// request `node` and axios labels it `axios/1.x`. Cloudflare-fronted CMS sites
+/// answer those with 403 before the bundle ever sees a byte, while the same URL
+/// opens fine in the app's WebView. TVBox and FongMi both hand their spiders the
+/// host's mobile UA for exactly this reason; we do the same, and only where the
+/// bundle did not set one itself.
+export const DEFAULT_USER_AGENT =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 "
+  + "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+const DEFAULT_HEADERS = {
+  "user-agent": DEFAULT_USER_AGENT,
+  "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "accept-language": "zh-CN,zh;q=0.9,en;q=0.8"
+};
 
 class FetchHeaders {
   constructor(init) {
@@ -166,6 +182,9 @@ function requestOnce(url, { method, headers, body, timeout, signal }) {
       method,
       headers: headers.toObject(),
       timeout,
+      // Same two properties the transport patch applies, for the polyfill's own
+      // path on runtimes without a global `fetch`.
+      ALPNProtocols: TRANSPORT_ALPN,
       // Netdisk share pages and many CMS sites still ship broken chains; the
       // bundle only needs the bytes, so accepting them is the lesser evil.
       rejectUnauthorized: false
@@ -261,10 +280,223 @@ async function fetchValue(input, init = {}) {
 /// Installs the globals a CatVod bundle expects. Safe to call more than once:
 /// an existing (native) implementation always wins.
 export function installFetch() {
+  // Real sources ship incomplete or expired chains (measured: 4 of 40 sites in
+  // one interface answer "unable to verify the first certificate" on Node 24's
+  // undici, while the same URL opens in the app's WebView). TVBox/FongMi accept
+  // them — OkHttp is configured trust-all — and the bundle only needs the bytes.
+  // Without this the runtime reports "fetch failed" and the site looks dead.
+  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED !== "0") {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+  }
   if (typeof globalThis.fetch !== "function") globalThis.fetch = fetchValue;
+  globalThis.fetch = withBrowserIdentity(globalThis.fetch);
   if (typeof globalThis.Headers !== "function") globalThis.Headers = FetchHeaders;
   if (typeof globalThis.Response !== "function") globalThis.Response = FetchResponse;
   if (typeof globalThis.Request !== "function") globalThis.Request = FetchRequest;
+  installTransportIdentity();
+}
+
+/// Header pairs with the host's browser identity filled in, without touching a
+/// value the bundle set for itself (some sources need their own app UA).
+function withDefaultHeaderPairs(headers) {
+  const pairs = [];
+  if (headers) {
+    if (Array.isArray(headers)) {
+      for (const item of headers) if (Array.isArray(item) && item.length >= 2) pairs.push([String(item[0]), String(item[1])]);
+    } else if (typeof headers.forEach === "function") {
+      headers.forEach((value, key) => pairs.push([String(key), String(value)]));
+    } else if (typeof headers === "object") {
+      for (const [key, value] of Object.entries(headers)) {
+        if (value !== undefined && value !== null) pairs.push([key, String(value)]);
+      }
+    }
+  }
+  const names = new Set(pairs.map(([name]) => name.toLowerCase()));
+  for (const [name, value] of Object.entries(DEFAULT_HEADERS)) {
+    if (!names.has(name)) pairs.push([name, value]);
+  }
+  return pairs;
+}
+
+/// `undici` reports a failed socket as `TypeError: fetch failed` and hides the
+/// only useful sentence in `cause`; axios surfaces the raw OpenSSL text. Both
+/// reached the app as "源站返回错误：fetch failed" or an English sentence about
+/// a socket, which tells the person nothing. Flatten the chain so the host can
+/// classify it (blocked / expired certificate / host gone) and say something
+/// actionable.
+export function describeNetworkError(error) {
+  const parts = [];
+  for (let item = error; item && parts.length < 4; item = item.cause) {
+    const text = typeof item === "string" ? item : (item.message || String(item));
+    const trimmed = String(text || "").trim();
+    if (trimmed && !parts.includes(trimmed)) parts.push(trimmed);
+  }
+  const code = error?.code || error?.cause?.code || error?.cause?.errno || "";
+  if (code && !parts.some((part) => part.includes(String(code)))) parts.push(String(code));
+  return parts.join(" ← ") || "network error";
+}
+
+/// Optional on-device trace (`CATVOD_NET_LOG=/tmp/catvod-net.log`). Spider
+/// failures are otherwise invisible: the bundle swallows them and the app only
+/// gets the final sentence.
+function traceNetwork(line) {
+  const file = process.env.CATVOD_NET_LOG;
+  if (!file) return;
+  try { appendFileSync(file, `${new Date().toISOString()} ${line}\n`); } catch { /* tracing must not fail a request */ }
+}
+
+const RETRYABLE = /before secure TLS connection|ECONNRESET|EPIPE|socket hang up|ECONNABORTED/i;
+
+/// Wraps whatever `fetch` the runtime provides (undici on Node 24, the polyfill
+/// above on older nodejs-mobile builds) with the browser identity and one retry
+/// on a connection the far end dropped. A fresh connection is what actually
+/// fixes those: the pooled socket is already dead, and every later request on
+/// it fails the same way.
+function withBrowserIdentity(original) {
+  const wrapped = async function fetch(input, init) {
+    const method = String((init?.method || (typeof input === "object" && input?.method) || "GET")).toUpperCase();
+    const traceURL = typeof input === "string" ? input
+      : (input && typeof input.url === "string" ? input.url : String(input));
+    let firstInput = input;
+    let firstInit = init;
+    try {
+      if (init && "headers" in init) {
+        firstInit = { ...init, headers: withDefaultHeaderPairs(init.headers) };
+      } else if (typeof input === "string" || input instanceof URL) {
+        firstInit = { ...(init || {}), headers: withDefaultHeaderPairs(undefined) };
+      } else if (input && typeof input === "object" && "headers" in input && typeof Request === "function") {
+        firstInput = new Request(input, { headers: withDefaultHeaderPairs(input.headers) });
+        firstInit = init;
+      }
+    } catch { /* keep the caller's own shape */ }
+
+    const started = Date.now();
+    try {
+      const response = await original(firstInput, firstInit);
+      traceNetwork(`${response.status} ${method} ${traceURL} ${Date.now() - started}ms`);
+      return response;
+    } catch (error) {
+      const attempt = `${method} ${traceURL} failed: ${describeNetworkError(error)}`;
+      if ((method === "GET" || method === "HEAD") && !(firstInit?.body) && RETRYABLE.test(attempt)) {
+        traceNetwork(`${attempt} — retrying on a fresh connection`);
+        try {
+          const retried = await original(firstInput, firstInit);
+          traceNetwork(`${retried.status} ${method} ${traceURL} ${Date.now() - started}ms (retry)`);
+          return retried;
+        } catch (retryError) {
+          retryError.message = describeNetworkError(retryError);
+          traceNetwork(`${method} ${traceURL} retry failed: ${retryError.message}`);
+          throw retryError;
+        }
+      }
+      error.message = describeNetworkError(error);
+      traceNetwork(attempt);
+      throw error;
+    }
+  };
+  return wrapped;
+}
+
+/// Libraries that predate `fetch` — axios above all — talk to `http.request`
+/// directly, so the same identity has to be applied at the transport. Only
+/// missing headers are added; a request that already names its UA is untouched.
+///
+/// `ALPNProtocols` is the part that actually rescues a whole class of sites:
+/// Node's `https` sends a ClientHello with **no ALPN extension** unless asked,
+/// and the CC/WAF in front of several CMS front-ends answers that with an
+/// immediate RST — the app sees
+/// "Client network socket disconnected before secure TLS connection was
+/// established" while the same URL opens in curl and in the app's WebView
+/// (measured: m.9zhoukj.com, RST without ALPN, HTTP 502 with `http/1.1`).
+/// Safari, OkHttp and undici all advertise ALPN, which is why every mature host
+/// reaches these sites and a bare `https.request` does not.
+const TRANSPORT_ALPN = ["http/1.1"];
+
+function withTransportHeaders(options) {
+  if (!options || typeof options !== "object") return options;
+  // Raw header arrays mean the caller builds the socket itself; leave the whole
+  // request untouched rather than half-patching it.
+  if (Array.isArray(options.headers)) return options;
+  const merged = {};
+  const present = new Set();
+  for (const [key, value] of Object.entries(options.headers || {})) {
+    if (value === undefined || value === null) continue;
+    merged[key] = value;
+    present.add(key.toLowerCase());
+  }
+  for (const [name, value] of Object.entries(DEFAULT_HEADERS)) {
+    if (!present.has(name)) merged[name] = value;
+  }
+  return {
+    ...options,
+    headers: merged,
+    ALPNProtocols: options.ALPNProtocols || TRANSPORT_ALPN,
+    // 显式关掉证书校验：`NODE_TLS_REJECT_UNAUTHORIZED=0` 对自带 Agent／在
+    // 模块加载时就建好 secure context 的库不一定生效（实测仍有站点回
+    // `unable to verify the first certificate`），而这里一定生效。
+    rejectUnauthorized: false
+  };
+}
+
+function installTransportIdentity() {
+  // 有些包在模块里预先 `new https.Agent({ keepAlive: true })`：Agent 自己的
+  // options 会盖掉请求上的 rejectUnauthorized，证书链不完整的站点因此仍然
+  // 报 "unable to verify the first certificate"（实测 piku / 小鹿快看 /
+  // 小鸡看看）。继承原类再压实一次，任何 `new https.Agent(...)` 都拿到
+  // trust-all 的语义，`instanceof https.Agent` 也仍然成立。
+  const OriginalAgent = https.Agent;
+  if (OriginalAgent && !OriginalAgent.__catvodTrustAll) {
+    class CatVodAgent extends OriginalAgent {
+      constructor(options = {}) {
+        super({ ...options, rejectUnauthorized: false });
+      }
+    }
+    CatVodAgent.__catvodTrustAll = true;
+    https.Agent = CatVodAgent;
+    if (https.globalAgent?.options) https.globalAgent.options.rejectUnauthorized = false;
+  }
+  for (const transport of [http, https]) {
+    if (transport.__catvodIdentity) continue;
+    const request = transport.request;
+    const get = transport.get;
+    const describe = (input, options) => {
+      if (typeof input === "string" || input instanceof URL) return String(input);
+      const target = options && typeof options === "object" ? options : input;
+      if (!target || typeof target !== "object") return "?";
+      const protocol = target.protocol || `${transport === https ? "https" : "http"}:`;
+      const host = target.hostname || target.host || "?";
+      return `${protocol}//${host}${target.path || "/"}`;
+    };
+    const observe = (handle, label, started) => {
+      if (!process.env.CATVOD_NET_LOG) return;
+      handle.once("response", (response) => {
+        traceNetwork(`${response.statusCode} ${label} ${Date.now() - started}ms`);
+      });
+      handle.once("error", (error) => {
+        traceNetwork(`${label} failed: ${describeNetworkError(error)}`);
+      });
+    };
+    const patched = function requestWithIdentity(input, options, callback) {
+      const started = Date.now();
+      const label = describe(input, options);
+      const handle = (typeof input === "string" || input instanceof URL)
+        ? (typeof options === "function"
+          ? request.call(this, input, withTransportHeaders({}), options)
+          : request.call(this, input, withTransportHeaders(options), callback))
+        : request.call(this, withTransportHeaders(input), options, callback);
+      observe(handle, label, started);
+      return handle;
+    };
+    patched.__catvodIdentity = true;
+    transport.request = patched;
+    if (typeof get === "function") {
+      transport.get = function getWithIdentity(...args) {
+        const handle = patched.apply(this, args);
+        handle.end();
+        return handle;
+      };
+    }
+  }
 }
 
 /// CatVod's own JS API is `req(url, options, callback)`, and bundles mix it with
@@ -280,13 +512,16 @@ export function installReq() {
     const timeout = Number(settings.timeout) > 0
       ? Number(settings.timeout)
       : DEFAULT_TIMEOUT;
+    // Route through the installed `fetch` so `req` gets the same browser
+    // identity and retry behaviour as everything else in the bundle.
+    const fetchImpl = typeof globalThis.fetch === "function" ? globalThis.fetch : fetchValue;
     let settled = false;
     const finish = (error, value) => {
       if (settled) return;
       settled = true;
       if (typeof done === "function") done(error, value);
     };
-    fetchValue(url, {
+    fetchImpl(url, {
       method: String(settings.method || "GET").toUpperCase(),
       headers: settings.headers,
       body: settings.body,

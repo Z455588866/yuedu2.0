@@ -35,7 +35,16 @@ export function createMobileCatVodProcess({ bundlePath, runtimeDir, maxLineBytes
   const control = new PassThrough();
   const worker = new Worker(new URL('./mobile-catvod-worker.mjs', import.meta.url), {
     workerData: { bundlePath, runtimeDir, maxLineBytes, configPath, cloudAccounts },
-    env: { NODE_ENV: 'development', UNDICI_NO_WASM_SIMD: '1' },
+    env: {
+      NODE_ENV: 'development',
+      UNDICI_NO_WASM_SIMD: '1',
+      // 源站证书链不完整很常见（实测 40 个站点里 4 个），TVBox/FongMi 的
+      // OkHttp 也是 trust-all。这里和 fetch-polyfill 里各设一次：worker 的
+      // process.env 是独立副本，只靠运行时那次会在原生 fetch 上漏掉。
+      NODE_TLS_REJECT_UNAUTHORIZED: '0',
+      // 诊断开关透传（见 catvod-manager.mjs）；没有设置时不带这个键。
+      ...(process.env.CATVOD_NET_LOG ? { CATVOD_NET_LOG: process.env.CATVOD_NET_LOG } : {})
+    },
     argv: [], stdout: true, stderr: true,
     resourceLimits: { maxOldGenerationSizeMb: workerHeapLimit(), stackSizeMb: 4 },
     name: 'tvbox-catvod'
