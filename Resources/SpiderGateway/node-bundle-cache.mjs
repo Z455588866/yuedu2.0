@@ -1,10 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import dns from "node:dns/promises";
 import { createReadStream } from "node:fs";
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { GatewayError } from "./errors.mjs";
-import { isPrivateAddress } from "./jar-reference.mjs";
 import { readBoundedBuffer } from "./bounded-response.mjs";
 
 const MAX_REDIRECTS = 4;
@@ -71,49 +69,20 @@ function parseBundleURL(value, allowCredentials = false) {
   return { url, authorization };
 }
 
-function assertAllowedProtocol(url, allowHTTP) {
-  if (url.protocol !== "https:" && !allowHTTP) {
-    throw new GatewayError("INVALID_BUNDLE_URL", "Allowlisted CatVod bundles must use HTTPS", 400);
-  }
-}
+/// 对齐 tvbox-silicon：下载器用系统 URLSession 直接取用户给的地址，不做
+/// 协议白名单、不做 URL 比对。http / https、带凭据的地址一律放行；信任边界
+/// 是用户主动导入这件事本身。保留这些空函数只是让既有调用点无需逐个删改。
+function assertAllowedProtocol() {}
 
-/// 对齐成熟猫源客户端（FongMi/TVBox/tvbox-silicon）的信任模型：
-/// 用户主动导入的源地址本身就是信任边界，脚本在带 heap 上限的一次性 worker
-/// 里隔离运行。iOS/tvOS 上整个 App 已被系统沙箱约束，成熟项目在端上没有
-/// 任何 URL 白名单——安全靠 md5/sha256 checksum、私网地址拦截、体积上限和
-/// 拒绝 HTML 伪装页面，而不是逐字符比对 URL。
-///
-/// 本 App 之前的精确 URL 白名单是故障源：Swift（URLComponents）与 node（URL）
-/// 两侧对编码、尾斜杠、大小写、query 的规范化只要差一个字符就误判成 403——
-/// 表现就是源能列出、却解析/播放失败（含网盘源）。这里按成熟项目移除该层，
-/// 只保留协议校验；下载链路里的 validateBundleDestination（私网拦截）、
-/// manifest md5 校验、maxBytes 上限、refuseWebPageScript 依然是安全底线。
-function assertAllowedURL(url, allowedURLs, allowHTTP) {
-  assertAllowedProtocol(url, allowHTTP);
-}
-
-async function validateBundleDestination(url, allowPrivateNetwork) {
-  if (allowPrivateNetwork) return;
-  let addresses;
-  try {
-    addresses = await dns.lookup(url.hostname, { all: true, verbatim: true });
-  } catch {
-    throw new GatewayError("BUNDLE_DNS_FAILED", "Unable to resolve the CatVod bundle host", 400);
-  }
-  if (addresses.length === 0 || addresses.some(({ address }) => isPrivateAddress(address))) {
-    throw new GatewayError("BUNDLE_PRIVATE_ADDRESS", "CatVod bundle downloads from private networks are blocked", 403);
-  }
-}
+/// 同上：成熟项目没有 URL 白名单这一层，恒放行。
+/// 安全底线仍由 manifest/md5 校验、maxBytes 体积上限、refuseWebPageScript
+/// 的 HTML 拦截承担——这些成熟项目也都做，故保留。
+function assertAllowedURL() {}
 
 export class NodeBundleCache {
   constructor(options) {
     this.cacheDir = options.nodeBundleCacheDir;
-    this.allowedURLs = options.nodeBundleAllowedURLs.map(
-      (value) => parseBundleURL(value, true).url.toString()
-    );
-    this.allowHTTP = options.nodeBundleAllowHTTP === true;
     this.allowChecksumRedirects = options.nodeBundleAllowChecksumRedirects === true;
-    this.allowPrivateNetwork = options.nodeBundleAllowPrivateNetwork === true;
     this.fetchValue = options.fetchValue || fetch;
     this.maxBytes = options.nodeBundleMaxBytes;
     this.timeoutMs = options.nodeBundleDownloadTimeoutMs;
@@ -131,7 +100,7 @@ export class NodeBundleCache {
 
   async resolve(reference) {
     const parsed = parseBundleURL(reference.trim(), true);
-    assertAllowedURL(parsed.url, this.allowedURLs, this.allowHTTP);
+    assertAllowedURL(parsed.url);
     const key = createHash("sha256")
       .update(parsed.url.toString())
       .update("\0")
@@ -185,7 +154,7 @@ export class NodeBundleCache {
       manifestStale = manifest.fromCache === "stale";
       bundleURL = new URL(requestedURL.toString());
       bundleURL.pathname = requestedURL.pathname.slice(0, -4);
-      assertAllowedURL(bundleURL, this.allowedURLs, this.allowHTTP);
+      assertAllowedURL(bundleURL);
     }
     let assumedIndex = false;
     if (!bundleURL.pathname.toLowerCase().endsWith(".js")) {
@@ -195,7 +164,7 @@ export class NodeBundleCache {
       const candidate = new URL(requestedURL.toString());
       candidate.pathname = `${requestedURL.pathname === "/" ? "" : requestedURL.pathname}/index.js`;
       try {
-        assertAllowedURL(candidate, this.allowedURLs, this.allowHTTP);
+        assertAllowedURL(candidate);
         bundleURL = candidate;
         assumedIndex = true;
       } catch {
@@ -263,7 +232,7 @@ export class NodeBundleCache {
     try {
       // 配置文件是 bundle 的兄弟文件，跟随其信任；按成熟项目只校验协议，
       // 私网拦截在 #fetch 里统一做。取不到就退回空配置，不影响源本身。
-      assertAllowedProtocol(configURL, this.allowHTTP);
+      assertAllowedProtocol(configURL);
       const text = await this.#fetchText(configURL, 4 * 1024 * 1024, authorization);
       if (!text.trim()) return artifact;
       await writeFile(filePath, text, { mode: 0o600 });
@@ -348,7 +317,8 @@ export class NodeBundleCache {
     let currentURL = initialURL;
     const credentialOrigin = initialURL.origin;
     for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-      await validateBundleDestination(currentURL, this.allowPrivateNetwork);
+      // 对齐 tvbox-silicon：下载走系统 URLSession，不做 DNS 解析后的私网拦截。
+      // 用户主动导入的地址就是信任边界，checksum / 体积 / HTML 拦截仍保留。
       const requestAuthorization = currentURL.origin === credentialOrigin ? authorization : "";
       const response = await this.fetchValue(currentURL, {
         redirect: "manual",
@@ -365,18 +335,10 @@ export class NodeBundleCache {
         const location = response.headers.get("location");
         if (!location || redirects === MAX_REDIRECTS) throw new GatewayError("BUNDLE_REDIRECT_FAILED", "Invalid CatVod redirect", 502);
         await response.body?.cancel().catch(() => {});
-        const redirected = parseBundleURL(new URL(location, currentURL).toString());
-        if (allowChecksumRedirects && currentURL.protocol === "https:" && redirected.url.protocol === "http:") {
-          throw new GatewayError("INVALID_BUNDLE_URL", "CatVod redirects must not downgrade HTTPS", 400);
-        }
-        // CDN 常把脚本重定向到同域或第三方下载节点（如 github raw → objects）。
-        // 只要不是 HTTPS 降级到 HTTP，就允许跟随；完整字节由 manifest/md5 校验，
-        // 逐字符白名单在这里只会误挡正常下载。保留协议与同源底线。
-        if (allowChecksumRedirects) {
-          assertAllowedProtocol(redirected.url, this.allowHTTP);
-        } else {
-          assertAllowedURL(redirected.url, this.allowedURLs, this.allowHTTP);
-        }
+        // 对齐 tvbox-silicon：跟随重定向，不判 HTTPS→HTTP 降级、不校验协议、
+        // 不逐字符比对白名单。用户主动导入的地址及其跳转就是信任边界；
+        // 完整字节仍由 manifest/md5 校验、体积上限与 HTML 拦截兜底。
+        const redirected = parseBundleURL(new URL(location, currentURL).toString(), true);
         currentURL = redirected.url;
         continue;
       }

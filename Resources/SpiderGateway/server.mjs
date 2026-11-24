@@ -469,7 +469,27 @@ export function createGateway(config, dependencies = {}) {
       }
     } catch (error) {
       const gatewayError = asGatewayError(error);
-      sendJSON(response, gatewayError.status, { code: gatewayError.code, message: gatewayError.message });
+      // Surface a short diagnostic to the app log. The `message` alone (often a
+      // generic "must be a JSON object" / "internal error") never showed *why*;
+      // the underlying stack/cause did, but used to die at the worker's stderr.
+      // Truncate and strip newlines so it stays one log line and cannot leak a
+      // whole response body into an exported log.
+      let diagnostic = "";
+      const cause = gatewayError.cause || error;
+      if (cause && cause !== gatewayError) {
+        diagnostic = String(cause.stack || cause.message || cause)
+          .split("\n").slice(0, 2).join(" ").replace(/\s+/g, " ").trim()
+          .slice(0, 200);
+      }
+      // Prefix action + site so one exported line identifies which spider step
+      // broke. site.key is an id; api/arguments (tokens, share urls) are omitted.
+      const actionTag = typeof invoke?.action === "string" ? invoke.action : "-";
+      const siteTag = typeof invoke?.site?.key === "string" ? invoke.site.key : "-";
+      sendJSON(response, gatewayError.status, {
+        code: gatewayError.code,
+        message: gatewayError.message,
+        diagnostic: `action=${actionTag} site=${siteTag}${diagnostic ? ` ${diagnostic}` : ""}`.slice(0, 240)
+      });
     }
   });
   server.requestTimeout = Math.max(

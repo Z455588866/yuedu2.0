@@ -2620,8 +2620,11 @@ class GlobalSettings {
             (UserDefaults.standard.object(forKey: "yd_change_source_load_info") as? Bool) ?? false
         changeSourceLoadWordCount =
             (UserDefaults.standard.object(forKey: "yd_change_source_load_word_count") as? Bool) ?? false
-        iCloudAutoSync =
-            (UserDefaults.standard.object(forKey: "yd_icloud_auto_sync") as? Bool) ?? true
+        // iCloud sync removed: this build has no CloudKit container. Force the
+        // switch off on every launch so even installs that previously stored
+        // `true` stop attempting a doomed sync at launch/foreground/background.
+        // Keeps ShelfWorkService's guard taking the direct-merge path.
+        iCloudAutoSync = false
         edgeTtsVoiceID = UserDefaults.standard.string(forKey: "yd_edge_tts_voice_id") ?? EdgeTTSVoice.defaultVoice.id
         httpTtsUrlTemplate = UserDefaults.standard.string(forKey: "yd_http_tts_url_template") ?? ""
         httpTtsHeaders = Self.loadTTSHeaders()

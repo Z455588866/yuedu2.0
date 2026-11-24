@@ -53,13 +53,7 @@ export async function startMobileGateway(bridge, dependencies = {}) {
       }
       // JSON.parse("null") 不抛错但会给出 null，直接取字段就是 TypeError。
       if (!current || typeof current !== 'object' || Array.isArray(current)) return;
-      const allowed = Array.isArray(current.nodeBundleAllowedURLs)
-        ? current.nodeBundleAllowedURLs
-        : null;
-      if (allowed) {
-        nodeBundleCache.allowedURLs = allowed;
-        nodeBundleCache.allowHTTP = allowed.some(url => typeof url === 'string' && url.startsWith('http://'));
-      }
+      // 对齐 tvbox-silicon：不再按 URL 白名单/协议放行或拦截，导入的地址直接信任。
       if (current.cloudConfig && typeof current.cloudConfig === 'object' && !Array.isArray(current.cloudConfig)) {
         config.cloudConfig = current.cloudConfig;
       }

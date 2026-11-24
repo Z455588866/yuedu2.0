@@ -106,9 +106,14 @@ struct CatVodCloudLoginView: View {
         isCapturing = false
         let value = provider.prefersToken ? (token.isEmpty ? cookie : token) : cookie
         guard !value.isEmpty else {
+            // Never print cookie/token values — only the provider and whether a
+            // credential of each shape was found. That is enough to tell a bad
+            // extraction script from a user who never completed web login.
+            AppLogger.error("[CatVod] cloud login no credential provider=\(provider.rawValue) cookie=\(!cookie.isEmpty) token=\(!token.isEmpty)", level: .error)
             failure = localized("没有检测到登录状态。请先在网页里完成登录，再点「完成」。")
             return
         }
+        AppLogger.info("[CatVod] ⟐ cloud login ok provider=\(provider.rawValue) using=\(provider.prefersToken ? "token" : "cookie")", level: .notice)
         onCapture(value, "")
         dismiss()
     }

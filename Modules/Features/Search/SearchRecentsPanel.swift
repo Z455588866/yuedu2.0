@@ -53,6 +53,7 @@ struct SearchIdleContent<Hint: View>: View {
                     queries: recentQueries.queries,
                     books: books,
                     onSearch: onSearch,
+                    onDeleteQuery: { recentQueries = recentQueries.removing(atOffsets: $0) },
                     onClearQueries: { recentQueries = RecentSearchQueries() },
                     onOpenBook: onOpenBook,
                     onClearBooks: { readingClearedAt = Date().timeIntervalSinceReferenceDate }
@@ -75,6 +76,7 @@ private struct SearchRecentsList: View {
     let queries: [String]
     let books: [RecentReadingSelection.Entry]
     let onSearch: (String) -> Void
+    let onDeleteQuery: (IndexSet) -> Void
     let onClearQueries: () -> Void
     let onOpenBook: (ReadingBook) -> Void
     let onClearBooks: () -> Void
@@ -109,6 +111,9 @@ private struct SearchRecentsList: View {
                     .accessibilityHint(localized("搜索"))
                     .searchRecentsRow()
                     .listRowSeparator(query == queries.last ? .hidden : .visible, edges: .bottom)
+                }
+                .onDelete { offsets in
+                    onDeleteQuery(offsets)
                 }
             }
 
@@ -250,6 +255,7 @@ private extension View {
         queries: ["红楼梦", "三体"],
         books: [],
         onSearch: { _ in },
+        onDeleteQuery: { _ in },
         onClearQueries: {},
         onOpenBook: { _ in },
         onClearBooks: {}

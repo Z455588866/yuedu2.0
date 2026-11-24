@@ -13,6 +13,14 @@ enum CatVodPlaybackRoute: Sendable, Equatable {
     case system
     case vlc(reason: String)
 
+    /// Compact tag for the diagnostic log — never includes a URL or token.
+    var logTag: String {
+        switch self {
+        case .system: return "system"
+        case .vlc(let reason): return "vlc(\(reason))"
+        }
+    }
+
     /// 只有这些容器才是 VLC 的活。TS 不在此列：AVPlayer 播裸 TS 没问题。
     static let vlcOnlyExtensions: Set<String> = [
         "mkv", "webm", "avi", "flv", "f4v", "wmv", "asf",

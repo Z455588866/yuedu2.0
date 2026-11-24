@@ -42,6 +42,16 @@ export function createMobileCatVodProcess({ bundlePath, runtimeDir, maxLineBytes
       // OkHttp 也是 trust-all。这里和 fetch-polyfill 里各设一次：worker 的
       // process.env 是独立副本，只靠运行时那次会在原生 fetch 上漏掉。
       NODE_TLS_REJECT_UNAUTHORIZED: '0',
+      // 网盘账号：catvod-runner.bundleAccounts() 只从 process.env.CATVOD_ACCOUNTS
+      // 读取已登录账号并构造 hostDB（/quark.cookie、/baidu/baidu_cookie …）。
+      // 桌面 spawn 路径由 manager 注入该 env，但 iOS worker 的 env 是显式白名单，
+      // 之前漏了这一项 —— cloudAccounts 虽然进了 workerData，bundleAccounts 却
+      // 不读它，导致 hostDB 里所有网盘凭据恒为空，douer 等源每条网盘线路都回
+      // 「Cookie 未填写 / 登录状态失效」，表现为网盘内容不显示、不播放。
+      // 这里按桌面路径的同一格式补上，两端行为一致。
+      CATVOD_ACCOUNTS: JSON.stringify(
+        typeof cloudAccounts === 'function' ? cloudAccounts() : (cloudAccounts || {})
+      ),
       // 诊断开关透传（见 catvod-manager.mjs）；没有设置时不带这个键。
       ...(process.env.CATVOD_NET_LOG ? { CATVOD_NET_LOG: process.env.CATVOD_NET_LOG } : {})
     },
@@ -61,7 +71,10 @@ export function createMobileCatVodProcess({ bundlePath, runtimeDir, maxLineBytes
     }
     if (typeof line !== 'string' || Buffer.byteLength(line) > maxLineBytes) {
       result.emit('error', new Error('CatVod response exceeds the size limit'));
-      void worker.terminate();
+      // Do not terminate() a worker mid-cleanup: on iOS that aborts the whole
+      // app (uv__io_poll -> err() -> abort()). The graceful path below closes
+      // stdin and lets the runner unwind its libuv loop before the thread ends.
+      result.kill();
       return;
     }
     control.write(line);
@@ -82,6 +95,29 @@ export function createMobileCatVodProcess({ bundlePath, runtimeDir, maxLineBytes
     final(callback) { worker.postMessage({ close: true }); callback(); }
   });
   result.stdio = [result.stdin, null, null, control];
-  result.kill = () => { void worker.terminate(); };
+  // SIGABRT (uv__io_poll -> err() -> abort()) came from terminating a worker
+  // while its libuv loop was still inside messagesServer.close()/stop(). On
+  // iOS the worker shares the OS process with native code, so that abort kills
+  // the whole app. Ask it to close gracefully instead: stdin.end() already
+  // posts {close:true} (see result.stdin.final), the runner drains its queue,
+  // closes the loopback server and stops its provider before the thread ends.
+  // terminate() stays only as a last-resort safety net, delayed well past a
+  // graceful shutdown so a normally-exiting worker is never cut mid-cleanup.
+  let terminateTimer = null;
+  result.kill = () => {
+    if (closed) return;
+    try { result.stdin.end(); } catch { /* already ended */ }
+    if (terminateTimer) return;
+    terminateTimer = setTimeout(() => {
+      terminateTimer = null;
+      if (!closed) {
+        try { void worker.terminate(); } catch { /* already gone */ }
+      }
+    }, 5_000);
+    terminateTimer.unref();
+  };
+  worker.once('exit', () => {
+    if (terminateTimer) { clearTimeout(terminateTimer); terminateTimer = null; }
+  });
   return result;
 }

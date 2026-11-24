@@ -35,6 +35,8 @@ enum CatVodPlayerPresenter {
             // 播放器——弹幕、字幕、画中画都在那边。判断要读一次文件头，所以放到
             // 异步里，不阻塞点击。
             let route = await CatVodPlaybackRoute.decide(url: url, headers: headers)
+            // scheme + host only: playback URLs carry share tokens in the query.
+            AppLogger.info("[CatVod] ⟐ present route=\(route.logTag) url=\(url.scheme ?? "?")://\(url.host ?? "?") ext=\(url.pathExtension)", level: .notice)
             presentResolved(route, url: url, headers: headers, title: title,
                             danmaku: loader)
         }

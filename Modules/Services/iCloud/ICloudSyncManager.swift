@@ -315,6 +315,10 @@ final class ICloudSyncManager: ObservableObject {
     /// cancels is the trip to the background (`syncOnTheWayToTheBackground`), whose time
     /// is up for every caller at once.
     nonisolated func sync(reason: String = "manual") async throws {
+        // iCloud sync removed: this build carries no CloudKit container, so a sync
+        // can only end in "无法确认 iCloud 状态". Short-circuit every caller
+        // (launch/foreground/background/manual) instead of raising a doomed error.
+        guard Self.isICloudSyncAvailable else { return }
         try await ensureAccountAvailable()
         let passes = await onMain("sync.join") { self.joinOrStartSync(reason: reason) }
         guard let passes else { return }

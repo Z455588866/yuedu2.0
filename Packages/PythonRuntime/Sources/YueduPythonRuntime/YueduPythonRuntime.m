@@ -98,9 +98,13 @@ static PyObject *bridgeService;
     }
     Py_DECREF(outcome);
 
-    PyObject *port = PyDict_GetItemString(globals, @"port");
+    // CPython 的 PyDict_GetItemString 第二个参数是 const char *，必须传 C 字符串字面量。
+    // 之前误传 Objective-C 字符串 @"port"/@"service"：运行期拿 NSString 对象的内存地址
+    // 当 C 字符串去字典里查 key，必然查不到 → port=NULL → 返回 0 → 日志报「Python 源
+    // 服务没有起来」，脚本其实已经跑起来了。这就是脚本修复后 .py 源仍不显示的根因。
+    PyObject *port = PyDict_GetItemString(globals, "port");
     long value = port ? PyLong_AsLong(port) : 0;
-    PyObject *service = PyDict_GetItemString(globals, @"service");
+    PyObject *service = PyDict_GetItemString(globals, "service");
     if (service) {
         Py_INCREF(service);
         bridgeService = service;

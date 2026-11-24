@@ -104,7 +104,7 @@ export function loadConfig(overrides = {}) {
     nodeBundleAllowChecksumRedirects: overrides.nodeBundleAllowChecksumRedirects
       ?? boolean("CATVOD_BUNDLE_ALLOW_CHECKSUM_REDIRECTS", false),
     nodeBundleAllowPrivateNetwork: boolean("CATVOD_BUNDLE_ALLOW_PRIVATE_NETWORK", false),
-    nodeBundleMaxBytes: integer("CATVOD_BUNDLE_MAX_BYTES", 16 * 1024 * 1024),
+    nodeBundleMaxBytes: integer("CATVOD_BUNDLE_MAX_BYTES", 65 * 1024 * 1024),
     nodeBundleDownloadTimeoutMs: integer("CATVOD_BUNDLE_DOWNLOAD_TIMEOUT_MS", 40_000),
     // How long a `.js.md5` manifest is trusted from disk. Inside this window a
     // warm start reads the script straight from cache with no network at all.
@@ -116,7 +116,7 @@ export function loadConfig(overrides = {}) {
       .map((value) => value.trim().toLowerCase())
       .filter(Boolean),
     allowPrivateNetwork: boolean("SPIDER_JAR_ALLOW_PRIVATE_NETWORK", false),
-    jarMaxBytes: integer("SPIDER_JAR_MAX_BYTES", 64 * 1024 * 1024),
+    jarMaxBytes: integer("SPIDER_JAR_MAX_BYTES", 65 * 1024 * 1024),
     jarDownloadTimeoutMs: integer("SPIDER_JAR_DOWNLOAD_TIMEOUT_MS", 30_000),
     requestBodyMaxBytes: integer("SPIDER_REQUEST_MAX_BYTES", 1024 * 1024),
     workerCommand: process.env.SPIDER_WORKER_COMMAND || "",

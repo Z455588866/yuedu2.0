@@ -20,8 +20,6 @@ async function fileDigests(filePath) {
 export class JarCache {
   constructor(options) {
     this.cacheDir = options.cacheDir;
-    this.allowedHosts = options.jarAllowedHosts;
-    this.allowPrivateNetwork = options.allowPrivateNetwork;
     this.maxBytes = options.jarMaxBytes;
     this.timeoutMs = options.jarDownloadTimeoutMs;
     this.inflight = new Map();
@@ -86,7 +84,7 @@ export class JarCache {
 
     const temporaryPath = path.join(this.cacheDir, `.${key}.${randomUUID()}.part`);
     try {
-      const result = await this.#download(parsed.url, temporaryPath);
+      const result = await this.#download(parsed.url, temporaryPath, parsed.authorization);
       if (parsed.checksum && result.digests[parsed.checksum.algorithm] !== parsed.checksum.value) {
         throw new GatewayError("JAR_CHECKSUM_MISMATCH", "The downloaded JAR checksum does not match", 422);
       }
@@ -98,18 +96,19 @@ export class JarCache {
     }
   }
 
-  async #download(initialURL, temporaryPath) {
+  async #download(initialURL, temporaryPath, authorization = "") {
     let currentURL = initialURL;
+    const credentialOrigin = initialURL.origin;
     for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-      await validateJarDestination(currentURL, {
-        allowedHosts: this.allowedHosts,
-        allowPrivateNetwork: this.allowPrivateNetwork
-      });
+      await validateJarDestination();
 
       const response = await fetch(currentURL, {
         redirect: "manual",
         signal: AbortSignal.timeout(this.timeoutMs),
-        headers: { "user-agent": "tvbox-spider-gateway/0.1" }
+        headers: {
+          "user-agent": "tvbox-spider-gateway/0.1",
+          ...(authorization && currentURL.origin === credentialOrigin ? { authorization } : {})
+        }
       }).catch((error) => {
         if (error.name === "TimeoutError") {
           throw new GatewayError("JAR_DOWNLOAD_TIMEOUT", "JAR download timed out", 504);
@@ -122,10 +121,8 @@ export class JarCache {
         if (!location || redirects === MAX_REDIRECTS) {
           throw new GatewayError("JAR_REDIRECT_FAILED", "Too many or invalid JAR redirects", 502);
         }
+        // 对齐 tvbox-silicon：跟随重定向，不拦截凭据。
         currentURL = new URL(location, currentURL);
-        if (!["http:", "https:"].includes(currentURL.protocol) || currentURL.username || currentURL.password) {
-          throw new GatewayError("INVALID_JAR_URL", "The JAR redirect target is not allowed", 403);
-        }
         continue;
       }
       if (!response.ok || !response.body) {

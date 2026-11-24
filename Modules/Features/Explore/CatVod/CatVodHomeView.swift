@@ -347,19 +347,48 @@ struct CatVodHomeView: View {
                             .font(DSFont.caption2)
                             .foregroundStyle(DSColor.textSecondary)
                         ForEach(searchHistory, id: \.self) { term in
-                            Button {
-                                keyword = term
-                                Task { await search() }
-                            } label: {
-                                Text(term)
-                                    .font(DSFont.caption2)
-                                    .foregroundStyle(DSColor.textPrimary)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
-                                    .background(DSColor.surfaceTertiary, in: Capsule())
+                            HStack(spacing: 4) {
+                                // 点词搜索。
+                                Button {
+                                    keyword = term
+                                    Task { await search() }
+                                } label: {
+                                    Text(term)
+                                        .font(DSFont.caption2)
+                                        .foregroundStyle(DSColor.textPrimary)
+                                }
+                                .buttonStyle(.plain)
+                                // 点 × 只删除这一条，不再触发搜索。
+                                Button {
+                                    removeSearchTerm(term)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(DSFont.caption2)
+                                        .foregroundStyle(DSColor.textSecondary)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(String(format: localized("删除搜索记录 %@"), term))
                             }
-                            .buttonStyle(.plain)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(DSColor.surfaceTertiary, in: Capsule())
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    removeSearchTerm(term)
+                                } label: {
+                                    Label(localized("删除搜索记录"), systemImage: "trash")
+                                }
+                            }
                         }
+                        // 一键清空全部历史。
+                        Button {
+                            clearSearchHistory()
+                        } label: {
+                            Text(localized("清除"))
+                                .font(DSFont.caption2)
+                                .foregroundStyle(DSColor.textSecondary)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -1016,6 +1045,18 @@ struct CatVodHomeView: View {
         var history = searchHistory.filter { $0 != term }
         history.insert(term, at: 0)
         searchHistory = Array(history.prefix(12))
+        UserDefaults.standard.set(searchHistory, forKey: Self.searchHistoryKey)
+    }
+
+    /// 删除单条搜索历史；长按某个词时调用。
+    private func removeSearchTerm(_ term: String) {
+        searchHistory.removeAll { $0 == term }
+        UserDefaults.standard.set(searchHistory, forKey: Self.searchHistoryKey)
+    }
+
+    /// 清空搜索历史。
+    private func clearSearchHistory() {
+        searchHistory = []
         UserDefaults.standard.set(searchHistory, forKey: Self.searchHistoryKey)
     }
 

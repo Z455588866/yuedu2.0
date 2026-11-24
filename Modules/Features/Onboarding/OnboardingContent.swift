@@ -92,7 +92,6 @@ struct OnboardingContent: Equatable {
                     : "内建 Open Library、Bangumi、AniList、openBD 等官方模组，也能自己加入更多"),
                 Row(titleKey: "远端书库", textKey: "连接 WebDAV、OPDS 或 Calibre，新书会出现在首页的最新"),
                 Row(titleKey: "本机档案", textKey: "TXT、EPUB、PDF、漫画和有声书，也能用电脑传书从 Calibre 传过来"),
-                Row(titleKey: "iCloud 同步", textKey: "书籍、阅读进度、来源配置和阅读设置，在你的装置之间同步"),
             ]
         )
 

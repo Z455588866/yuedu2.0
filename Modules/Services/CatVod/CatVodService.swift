@@ -381,7 +381,9 @@ final class CatVodService {
         //   于是网盘里留下「查看记录」），必须当场说清楚；
         // - 夸克/UC/阿里/123 走网关的网盘解析，正常。
         if let netdisk = CatVodNetdiskEpisode.descriptor(from: episode.playID) {
+            AppLogger.info("[CatVod] ⟐ netdisk episode provider=\(netdisk.provider) site=\(site.key)", level: .notice)
             if !CatVodNetdiskEpisode.isSupported(netdisk.provider) {
+                AppLogger.error("[CatVod] netdisk provider unsupported=\(netdisk.provider)", level: .error)
                 throw CatVodError.http(-5, String(
                     format: localized("这条是%@线路，App 内暂时不能直接播放。换一条普通线路，或用夸克网盘线路。"),
                     CatVodNetdiskEpisode.displayName(netdisk.provider)))
@@ -457,6 +459,7 @@ final class CatVodService {
         // 网盘「分享页」不是媒体流：AVPlayer 打开它只会黑屏/转圈。源站经常把
         // 分享链接直接当播放地址返回，必须认出来并说明白，否则就是无限转圈。
         if Self.isNetdiskSharePage(resolvedURL) {
+            AppLogger.error("[CatVod] netdisk share page used as play url host=\(finalURL.host ?? "?")", level: .error)
             throw CatVodError.http(-6, localized("这条线路给的是网盘分享页，不是可播放的视频流。换一条线路，或先把分享转存到自己的网盘再播放。"))
         }
 
@@ -497,6 +500,9 @@ final class CatVodService {
                                         options: [CatVodQualityOption] = [],
                                         danmaku: CatVodDanmakuPayload? = nil,
                                         notice: String? = nil) -> CatVodPlayback {
+        // Record scheme + host only — playback URLs routinely carry share tokens
+        // and signatures in the query, which must never reach an exported log.
+        AppLogger.info("[CatVod] ⟐ playback url=\(url.scheme ?? "?")://\(url.host ?? "?") path=\(url.pathExtension) headers=\(headers.count) danmaku=\(danmaku != nil)", level: .notice)
         // 每一档都要走同一个代理：转码地址同样校验 Referer/Cookie，直接把原始
         // CDN 地址交给 AVPlayer 会 403。代理不可用时退回原地址。
         let proxiedOptions: [CatVodQualityOption] = options.map { option in
@@ -636,26 +642,48 @@ final class CatVodService {
     private func invoke(bundleURL: String, site: CatVodSite, action: String,
                         arguments: [String: Any],
                         timeout: TimeInterval = 150) async throws -> [String: Any] {
-        let base = try await CatVodGateway.shared.ensureStarted(allowedBundleURL: bundleURL)
-        // WebView 里登录/过挑战拿到的 cookie，先灌进 bundle 的 Cookie 池，
-        // 否则同一个站点在浏览器里是登录态、在 spider 里是游客态。
-        if shouldSeedCookies(bundleURL) {
-            await seedCookies(bundleURL: bundleURL)
+        // Every spider action (home/category/detail/player/search…) funnels through
+        // here. Log action + site + duration so a later exported log can show which
+        // step actually failed — previously these all failed silently into the UI.
+        // Keep the success line to the few actions a person actually triggers by hand;
+        // bulk refreshes must not eat the 6000-line export window.
+        let startedAt = Date()
+        do {
+            let base = try await CatVodGateway.shared.ensureStarted(allowedBundleURL: bundleURL)
+            // WebView 里登录/过挑战拿到的 cookie，先灌进 bundle 的 Cookie 池，
+            // 否则同一个站点在浏览器里是登录态、在 spider 里是游客态。
+            if shouldSeedCookies(bundleURL) {
+                await seedCookies(bundleURL: bundleURL)
+            }
+            let endpoint = base.appendingPathComponent("/v1/spider/invoke")
+            let body: [String: Any] = [
+                "version": 1,
+                "action": action,
+                "site": [
+                    "key": site.key,
+                    "api": site.api ?? "/spider/\(site.key)/3",
+                    "jar": bundleURL,
+                    "ext": site.ext,
+                    "quickSearch": site.quickSearch ?? false
+                ],
+                "arguments": arguments
+            ]
+            let result = try await post(endpoint, body: body, timeout: timeout)
+            let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+            if ["catalog", "home", "category", "detail", "player", "search"].contains(action) {
+                // site.key is an identifier, never a credential; api/arguments are
+                // deliberately omitted — they can carry tokens and share links.
+                AppLogger.info("[CatVod] ⟐ action=\(action) ok site=\(site.key) ms=\(elapsedMs)", level: .notice)
+            }
+            return result
+        } catch {
+            let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+            // The concrete cause (HTTP status + upstream text) is logged in postOnce;
+            // this line adds the action/site context and covers non-HTTP failures
+            // such as timeouts that never reach postOnce's status guard.
+            AppLogger.error("[CatVod] action=\(action) failed site=\(site.key) ms=\(elapsedMs)", error: error)
+            throw error
         }
-        let endpoint = base.appendingPathComponent("/v1/spider/invoke")
-        let body: [String: Any] = [
-            "version": 1,
-            "action": action,
-            "site": [
-                "key": site.key,
-                "api": site.api ?? "/spider/\(site.key)/3",
-                "jar": bundleURL,
-                "ext": site.ext,
-                "quickSearch": site.quickSearch ?? false
-            ],
-            "arguments": arguments
-        ]
-        return try await post(endpoint, body: body, timeout: timeout)
     }
 
     private func post(_ endpoint: URL, body: [String: Any],
@@ -696,11 +724,22 @@ final class CatVodService {
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200...299).contains(status) else {
-            let serverMessage = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
+            let payload = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let serverMessage = payload?["message"] as? String
+            // The gateway may attach a short diagnostic (bundle stderr tail, error
+            // code). Print it verbatim next to the status — this is the text that
+            // used to exist only in the UI toast and vanish from every log.
+            let diagnostic = payload?["diagnostic"] as? String
             let rawMessage = String(data: data, encoding: .utf8).map { String($0.prefix(120)) } ?? ""
+            AppLogger.error(
+                "[CatVod] gateway error status=\(status) message=\(String((serverMessage ?? rawMessage).prefix(200)))"
+                    + (diagnostic.map { " diagnostic=\(String($0.prefix(200)))" } ?? ""),
+                level: .error
+            )
             throw CatVodError.http(status, serverMessage ?? rawMessage)
         }
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            AppLogger.error("[CatVod] gateway returned a non-object response status=\(status)", level: .error)
             throw CatVodError.emptyResponse
         }
         return object
