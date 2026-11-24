@@ -131,7 +131,8 @@ static napi_value initializeBridge(napi_env env, napi_value exports) {
             }
         }];
         engineThread.name = @"Yuedu Mobile Spider";
-        engineThread.stackSize = 4 * 1024 * 1024;
+        // 对齐 letta-mobile PR#434（embedded node startup abort 修复）：8MB 启动栈。
+        engineThread.stackSize = 8 * 1024 * 1024;
         [engineThread start];
     }
 }
