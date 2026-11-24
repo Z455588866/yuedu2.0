@@ -364,7 +364,11 @@ struct VideoPlayerView: View {
                 speed: Binding(get: { danmaku.speed }, set: { danmaku.speed = $0 }),
                 showsPanel: $showsDanmakuPanel,
                 sources: danmakuSources.enabledSources,
-                status: danmaku.status
+                status: danmaku.status,
+                videoTitle: controller.book.title,
+                onManualPick: { source, episode, animeTitle in
+                    danmaku.loadManual(source: source, episode: episode, animeTitle: animeTitle)
+                }
             )
             SubtitleControls(
                 enabled: Binding(get: { subtitle.enabled }, set: { subtitle.setEnabled($0) }),

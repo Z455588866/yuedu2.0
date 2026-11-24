@@ -307,6 +307,12 @@ struct DanmakuControls: View {
     @Binding var showsPanel: Bool
     let sources: [DanmakuSource]
     let status: String
+    /// The playing video's title, pre-filled into manual search.
+    let videoTitle: String
+    /// Called when the person picks an episode by hand.
+    let onManualPick: (DanmakuSource, DanmakuEpisode, String) -> Void
+
+    @State private var manualSource: DanmakuSource?
 
     private struct Level: Identifiable {
         let label: String
@@ -361,6 +367,17 @@ struct DanmakuControls: View {
                         } else {
                             ForEach(sources) { source in
                                 selectRow(title: source.name, tag: source.id)
+                                    // Right swipe → search this source by hand. The automatic
+                                    // matcher works off the video title, and one season tag or
+                                    // fansub prefix is enough to miss.
+                                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                        Button {
+                                            manualSource = source
+                                        } label: {
+                                            Label(localized("搜索剧名"), systemImage: "magnifyingglass")
+                                        }
+                                        .tint(Color.accentColor)
+                                    }
                             }
                         }
                     }
@@ -393,6 +410,13 @@ struct DanmakuControls: View {
             }
         }
         .presentationDetents([.medium, .large])
+        // Nested on purpose: this sheet lives inside the settings sheet, so cancelling
+        // the search returns to the source list instead of dismissing everything.
+        .sheet(item: $manualSource) { source in
+            DanmakuManualSearchView(source: source, initialKeyword: videoTitle) { episode, animeTitle in
+                onManualPick(source, episode, animeTitle)
+            }
+        }
     }
 
     @ViewBuilder

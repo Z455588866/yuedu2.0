@@ -42,6 +42,13 @@ enum DanmakuAPIError: Error, LocalizedError {
     case http(Int)
     case api(Int, String)
     case malformed
+    /// The search ran fine but nothing matched the video's title. Distinct from
+    /// `malformed`: this is the common case for a title with a season tag, a fan
+    /// subtitle name, or a 「·HD」 suffix, and 「返回数据格式错误」 sent people looking
+    /// for a broken source that was working.
+    case noMatch
+    /// Matched a title and an episode, but nobody has commented on it yet.
+    case empty
 
     var errorDescription: String? {
         switch self {
@@ -49,6 +56,8 @@ enum DanmakuAPIError: Error, LocalizedError {
         case .http(let code): return "HTTP \(code)"
         case .api(let code, let msg): return "接口错误 \(code): \(msg)"
         case .malformed: return "返回数据格式错误"
+        case .noMatch: return "没搜到这部剧，可在弹幕源上右滑手动搜索"
+        case .empty: return "这一集还没有弹幕"
         }
     }
 }
@@ -134,13 +143,14 @@ enum DanmakuService {
             query = shorter
             animes = try await search(keyword: query, in: source)
         }
-        guard let anime = bestMatch(for: query, among: animes) else { throw DanmakuAPIError.malformed }
+        guard let anime = bestMatch(for: query, among: animes) else { throw DanmakuAPIError.noMatch }
 
         let eps = try await episodes(animeId: anime.animeId, in: source)
-        guard !eps.isEmpty else { throw DanmakuAPIError.malformed }
+        guard !eps.isEmpty else { throw DanmakuAPIError.noMatch }
 
         let episode = pickEpisode(number: episodeNumber, among: eps)
         var track = try await comments(episodeId: episode.episodeId, in: source)
+        guard !track.items.isEmpty else { throw DanmakuAPIError.empty }
         track.episodeTitle = episode.title
         track.animeTitle = anime.title
         track.sourceName = source.name

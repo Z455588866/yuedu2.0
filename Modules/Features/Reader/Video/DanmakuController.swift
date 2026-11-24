@@ -121,6 +121,37 @@ final class DanmakuController {
         }
     }
 
+    /// Loads an episode the person picked by hand, bypassing title matching.
+    ///
+    /// Auto-match is a guess; this is what replaces the guess when it is wrong. The chosen
+    /// source also becomes the active one, and danmaku turn on — picking an episode is an
+    /// unambiguous request to show them.
+    func loadManual(source: DanmakuSource, episode: DanmakuEpisode, animeTitle: String) {
+        loadTask?.cancel()
+        if selectedSourceID != source.id { selectedSourceID = source.id }
+        if !enabled { enabled = true }
+        status = "\(source.name) · 载入中…"
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                var loaded = try await DanmakuService.comments(episodeId: episode.episodeId, in: source)
+                guard !Task.isCancelled else { return }
+                loaded.episodeTitle = episode.title
+                loaded.animeTitle = animeTitle
+                loaded.sourceName = source.name
+                guard !loaded.items.isEmpty else {
+                    self.status = "\(source.name) · 这一集还没有弹幕"
+                    return
+                }
+                self.track = loaded
+                self.status = "\(source.name) · \(loaded.items.count) 条"
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.status = "\(source.name) · \(error.localizedDescription)"
+            }
+        }
+    }
+
     func stop() {
         loadTask?.cancel()
         loadTask = nil
