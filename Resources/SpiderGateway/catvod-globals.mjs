@@ -1,8 +1,19 @@
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+
+/// HTML 选择器用的 cheerio，打成了单文件放在 `vendor/`。1.3 MB，只在脚本第一次
+/// 调 `pdfh` / `pdfa` / `pd` 时才 require —— 纯 JSON 源的启动开销不受影响。
+let cheerioModule = null;
+function cheerio() {
+  if (cheerioModule) return cheerioModule;
+  const require = createRequire(import.meta.url);
+  cheerioModule = require("./vendor/cheerio.cjs");
+  return cheerioModule;
+}
 
 /// The rest of the TVBox script globals, ported from tvbox-silicon's
 /// `ScriptAssets/tvbox/prelude.js` (the QuickJS prelude that runs CatVod JS
@@ -158,5 +169,58 @@ export function installTVBoxGlobals(options = {}) {
     const directory = options.runtimeDirectory
       || path.join(os.tmpdir(), "yuedu-catvod-local");
     g.local = makeLocalStore(directory);
+  }
+
+  // ---------------------------------------------------------------------------
+  // HTML 选择器：TVBox 的 pdfh / pdfa / pd
+  //
+  // 大量 JS 源靠这几个函数解析站点 HTML，缺了就是 `pdfh is not defined`。
+  // 语义照影匣 `ScriptAssets/tvbox/prelude.js`（它自己也是照 TVBox 的 JsApi）：
+  //   pdfh(html, 'div&&a&&Text')   取文本
+  //   pdfh(html, 'div&&a&&href')   取属性
+  //   pdfh(html, 'div&&a&&Html')   取内部 HTML
+  //   pdfa(html, 'div&&a')         取每个匹配元素的外层 HTML
+  //   pd(html, 'div&&a&&href', base) 取地址并按 base 补全
+  // 每一段按 `&&` 依次向下 find，前一段的结果是后一段的根。
+  // ---------------------------------------------------------------------------
+  if (typeof g.pdfh !== "function") {
+    const select = (html, expression, single) => {
+      const $ = cheerio().load(String(html ?? ""));
+      let node = $.root();
+      for (const selector of expression.split("&&").filter(Boolean)) {
+        node = node.find(selector.trim());
+        if (single) node = node.first();
+      }
+      return { $, node };
+    };
+    g.pdfh = (html, expression) => {
+      const parts = String(expression ?? "").split("&&");
+      const attribute = parts.pop();
+      try {
+        const { node } = select(html, parts.join("&&"), true);
+        if (attribute === "Text") return node.text().trim();
+        if (attribute === "Html") return node.html() || "";
+        return node.attr(attribute) || "";
+      } catch {
+        return "";
+      }
+    };
+    g.pdfa = (html, expression) => {
+      try {
+        const { $, node } = select(html, String(expression ?? ""), false);
+        return node.toArray().map((element) => $.html(element));
+      } catch {
+        return [];
+      }
+    };
+    g.pd = (html, expression, base) => {
+      const value = g.pdfh(html, expression);
+      // 源里常见的写法：pd(html, 'a&&href', base) 拿相对地址再补全。
+      try {
+        return base ? new URL(value, String(base)).href : value;
+      } catch {
+        return value;
+      }
+    };
   }
 }
