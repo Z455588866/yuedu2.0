@@ -8,6 +8,7 @@ import { validateCatalogRequest, validateInvokeRequest } from "./request.mjs";
 import { WorkerManager } from "./worker-manager.mjs";
 import { cloudPanSite, handleCloudPanAction, isCloudPanSite } from "./cloud-pan.mjs";
 import { handlePanSearchAction, isPanSearchSite } from "./pan-search.mjs";
+import { cloudFilesSite, handleCloudFilesAction, isCloudFilesSite } from "./cloud-files.mjs";
 import { resolveCatVodCloudPlayer } from "./catvod-cloud-player.mjs";
 import { requiresPlaybackConfirmation } from "./readonly-player.mjs";
 
@@ -245,6 +246,11 @@ export function createGateway(config, dependencies = {}) {
         if (!sites.some((site) => isCloudPanSite(site))) {
           sites = [...sites, { ...cloudPanSite, jar: catalog.bundle }];
         }
+        // "我的网盘" reads the drives the person signed in to, with the account's
+        // own credentials — the one library a spider bundle cannot provide.
+        if (!sites.some((site) => isCloudFilesSite(site))) {
+          sites = [...sites, { ...cloudFilesSite, jar: catalog.bundle }];
+        }
         sendJSON(response, 200, { sites });
         return;
       }
@@ -256,6 +262,15 @@ export function createGateway(config, dependencies = {}) {
         return;
       }
       if (invoke.site.api.startsWith("/spider/")) {
+        if (isCloudFilesSite(invoke.site)) {
+          const result = await handleCloudFilesAction({
+            action: invoke.action,
+            argumentsValue: invoke.arguments,
+            credentials: cloudCredentials
+          });
+          sendJSON(response, 200, result);
+          return;
+        }
         if (isCloudPanSite(invoke.site) || isPanSearchSite(invoke.site)) {
           const options = {
             action: invoke.action,
