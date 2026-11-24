@@ -181,13 +181,12 @@ final class CatVodService {
             let deeper = await withTaskGroup(of: (Int, String, String)?.self) { group in
                 for candidate in candidates {
                     group.addTask { [weak self] in
-                        guard let self,
-                              let response = try? await self.invoke(bundleURL: bundleURL, site: site,
-                                                                    action: "detail",
-                                                                    arguments: ["ids": [candidate.id]]),
-                              let first = (response["list"] as? [[String: Any]])?.first,
-                              let url = first["vod_play_url"] as? String, !url.isEmpty else { return nil }
-                        return (candidate.order, first["vod_play_from"] as? String ?? "", url)
+                        guard let self else { return nil }
+                        // 只在 MainActor 里碰 spider 返回的字典，跨任务边界带回来的
+                        // 是两个字符串——`[String: Any]` 不是 Sendable，直接返回
+                        // 会被编译器拒绝（也确实不该跨隔离域传递）。
+                        return await self.playLine(bundleURL: bundleURL, site: site,
+                                                   id: candidate.id, order: candidate.order)
                     }
                 }
                 var hits: [(Int, String, String)] = []
@@ -226,6 +225,17 @@ final class CatVodService {
             CatVodDiskCache.store(data, key: Self.detailCacheKey(bundleURL: bundleURL, site: site, id: id))
         }
         return (media, groups)
+    }
+
+    /// 追一层 provider，只把「线路名 + 播放串」这对纯字符串交出去。
+    /// spider 的原始字典留在 MainActor 内解析，不跨任务边界。
+    private func playLine(bundleURL: String, site: CatVodSite, id: String,
+                          order: Int) async -> (Int, String, String)? {
+        guard let response = try? await invoke(bundleURL: bundleURL, site: site, action: "detail",
+                                               arguments: ["ids": [id]]),
+              let first = (response["list"] as? [[String: Any]])?.first,
+              let url = first["vod_play_url"] as? String, !url.isEmpty else { return nil }
+        return (order, first["vod_play_from"] as? String ?? "", url)
     }
 
     /// Episode list from a previous visit, so re-opening a title shows its

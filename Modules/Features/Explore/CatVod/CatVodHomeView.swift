@@ -730,7 +730,7 @@ struct CatVodHomeView: View {
                 // 一个站点都没回话，和「都回了但没有这部片」是两件事：前者该说
                 // 站点没响应（再搜一次没用），后者该说换个词。
                 message = hits.isEmpty
-                    ? String(format: localized("「%@」的 %d 个站点都没有响应，可能是源站在维护，换一个接口或稍后再试"), term, targets.count)
+                    ? String(format: localized("「%@」的 %ld 个站点都没有响应，可能是源站在维护，换一个接口或稍后再试"), term, targets.count)
                     : String(format: localized("在「%@」的所有站点里都没有找到结果"), term)
             } else {
                 message = nil
@@ -908,19 +908,10 @@ struct CatVodHomeView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     // Header: poster + title + metadata + synopsis.
                     HStack(alignment: .top, spacing: 14) {
-                        AsyncImage(url: URL(string: item.cover)) { phase in
-                            if let image = phase.image {
-                                image.resizable().scaledToFill()
-                            } else {
-                                ZStack {
-                                    DSColor.surfaceTertiary
-                                    Image(systemName: "film").foregroundStyle(DSColor.textSecondary)
-                                }
-                            }
-                        }
-                        .frame(width: 96, height: 136)
-                        .clipped()
-                        .cornerRadius(10)
+                        CatVodCoverImage(url: item.cover)
+                            .frame(width: 96, height: 136)
+                            .clipped()
+                            .cornerRadius(10)
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text(item.name)
@@ -1128,19 +1119,10 @@ private struct CatVodPosterCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            AsyncImage(url: URL(string: item.cover)) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                } else {
-                    ZStack {
-                        DSColor.surfaceTertiary
-                        Image(systemName: "film").foregroundStyle(DSColor.textSecondary)
-                    }
-                }
-            }
-            .frame(width: 104, height: 148)
-            .clipped()
-            .cornerRadius(10)
+            CatVodCoverImage(url: item.cover)
+                .frame(width: 104, height: 148)
+                .clipped()
+                .cornerRadius(10)
 
             Text(item.name)
                 .font(DSFont.caption.weight(.semibold))

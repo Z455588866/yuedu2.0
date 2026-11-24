@@ -1,0 +1,101 @@
+import SwiftUI
+import UIKit
+
+/// 猫元的封面图加载。
+///
+/// 原来用 `AsyncImage`：滚过去的封面上下一滚回来就要重新下载，点进详情再返回
+/// 还会白一下。SwiftUI 内部走 `URLSession.shared`，缓存策略不受我们控制，而本
+/// App 的其它网络请求刻意不带 `URLCache`（见 `URLSession.savedDownloads`），
+/// 共享缓存因此长期接近冷启动。这里给封面单独两层：
+///
+/// - 内存存**解码后**的 `UIImage`，同一张封面不再重复解码；
+/// - 磁盘存原始字节（独立的 192MB `URLCache`），重进 App 也不用重下；
+/// - 同一个 URL 的在途请求合并成一次，网格里十张同款海报不会发十个请求。
+@MainActor
+final class CatVodCoverStore {
+    static let shared = CatVodCoverStore()
+
+    private let images: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 240
+        cache.totalCostLimit = 48 * 1024 * 1024
+        return cache
+    }()
+
+    /// 封面 CDN 与源站不同域，也不经过源站的 TLS 兼容层；这里只服务图片。
+    private let session: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.urlCache = URLCache(memoryCapacity: 16 * 1024 * 1024,
+                                          diskCapacity: 192 * 1024 * 1024,
+                                          diskPath: "CatVodCovers")
+        configuration.requestCachePolicy = .returnCacheDataElseLoad
+        configuration.timeoutIntervalForRequest = 12
+        configuration.httpMaximumConnectionsPerHost = 4
+        return URLSession(configuration: configuration)
+    }()
+
+    private var inflight: [String: Task<UIImage?, Never>] = [:]
+
+    /// 同步读内存，只用于首帧：命中就先用，没命中再去加载。
+    func cached(_ url: String) -> UIImage? {
+        images.object(forKey: url as NSString)
+    }
+
+    func image(for url: String) async -> UIImage? {
+        guard let parsed = URL(string: url), parsed.scheme?.hasPrefix("http") == true else { return nil }
+        if let hit = images.object(forKey: url as NSString) { return hit }
+        if let running = inflight[url] { return await running.value }
+
+        let task = Task<UIImage?, Never> { [session] in
+            do {
+                let (data, response) = try await session.data(from: parsed)
+                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    return nil
+                }
+                return UIImage(data: data)
+            } catch {
+                return nil
+            }
+        }
+        inflight[url] = task
+        let image = await task.value
+        inflight[url] = nil
+        if let image {
+            let pixels = image.size.width * image.size.height * image.scale * image.scale
+            images.setObject(image, forKey: url as NSString, cost: Int(pixels) * 4)
+        }
+        return image
+    }
+}
+
+/// 海报位置统一用它：尺寸与圆角由调用方给，这里只管「有图显示图，没图不闪」。
+struct CatVodCoverImage: View {
+    let url: String
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .transition(.opacity)
+            } else {
+                ZStack {
+                    DSColor.surfaceTertiary
+                    Image(systemName: "film")
+                        .foregroundStyle(DSColor.textSecondary)
+                }
+            }
+        }
+        .task(id: url) {
+            if let cached = CatVodCoverStore.shared.cached(url) {
+                image = cached
+                return
+            }
+            let loaded = await CatVodCoverStore.shared.image(for: url)
+            guard !Task.isCancelled else { return }
+            image = loaded
+        }
+    }
+}

@@ -43,13 +43,34 @@ enum CatVodDiskCache {
 
     /// Reads a stored payload. `maxAge` of `nil` accepts any age — that is the
     /// stale copy the UI shows before the network answers.
+    /// 写盘在后台，但**读盘原来是在主线程同步做的**：每次切分类、每次回到
+    /// 推荐，`cachedCategory` / `cachedHome` 都会 `Data(contentsOf:)` 再解一遍
+    /// JSON。单条几 KB 看着不多，可它发生在按下 chip 的那一帧上，滚动和点击
+    /// 的手感就是从这里丢的。这一层内存副本让重复访问完全不碰磁盘。
+    ///
+    /// 只存 payload，不存 envelope：envelope 的 `savedAt` 只服务于 `maxAge`，
+    /// 而目前没有调用方传 `maxAge`。真要用时走磁盘那条路即可，不会读错。
+    private static let memory: NSCache<NSString, NSData> = {
+        let cache = NSCache<NSString, NSData>()
+        cache.countLimit = 400
+        cache.totalCostLimit = 24 * 1024 * 1024
+        return cache
+    }()
+
     static func load(key: String, maxAge: TimeInterval? = nil) -> Data? {
+        if maxAge == nil, let cached = memory.object(forKey: key as NSString) {
+            return cached as Data
+        }
         let url = fileURL(for: key)
         guard let raw = try? Data(contentsOf: url),
               let envelope = try? JSONDecoder().decode(Envelope.self, from: raw),
               envelope.version == schemaVersion,
               !envelope.payload.isEmpty else { return nil }
         if let maxAge, Date().timeIntervalSince1970 - envelope.savedAt > maxAge { return nil }
+        if maxAge == nil {
+            memory.setObject(envelope.payload as NSData, forKey: key as NSString,
+                             cost: envelope.payload.count)
+        }
         return envelope.payload
     }
 
@@ -60,6 +81,8 @@ enum CatVodDiskCache {
 
     static func store(_ payload: Data, key: String) {
         guard !payload.isEmpty else { return }
+        // 新结果立刻可读：否则同一次浏览里刚加载完的分类，切回来还要再解一次盘。
+        memory.setObject(payload as NSData, forKey: key as NSString, cost: payload.count)
         let envelope = Envelope(version: schemaVersion,
                                 savedAt: Date().timeIntervalSince1970,
                                 payload: payload)
@@ -73,6 +96,7 @@ enum CatVodDiskCache {
     /// Drops every stored response. Called when the person clears 猫元 data or
     /// switches interfaces, so a renamed/replaced source cannot show old titles.
     static func removeAll() {
+        memory.removeAllObjects()
         try? FileManager.default.removeItem(at: directory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
