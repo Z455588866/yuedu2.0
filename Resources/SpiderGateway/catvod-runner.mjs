@@ -6,6 +6,7 @@ import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { readBoundedText } from "./bounded-response.mjs";
 import { installFetch, installReq } from "./fetch-polyfill.mjs";
+import { installTVBoxGlobals } from "./catvod-globals.mjs";
 import { startParentWatchdog } from "./process-lifecycle.mjs";
 
 // nodejs-mobile has no global `fetch`. Bundles target Electron (Node 18+), so
@@ -211,6 +212,9 @@ export function createSiteRequestQueue() {
 
 export async function runCatVod(bundlePath, options = {}) {
   if (!bundlePath) throw new Error("Bundle path is required");
+  // Everything the bundle's module scope reads from the host. Must run before
+  // the bundle is evaluated (see the `new Function` below).
+  installTVBoxGlobals({ runtimeDirectory: options.runtimeDirectory });
   // fd 3 is a dedicated control channel. Third-party bundles may write logs to
   // stdout even after console is replaced, so stdout cannot carry protocol data.
   const writeLine = options.writeLine || ((value) => writeSync(3, value));

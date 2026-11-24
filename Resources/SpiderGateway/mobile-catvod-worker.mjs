@@ -72,6 +72,9 @@ try {
     onActivity: reportActivity,
     configPath,
     cloudAccounts,
+    // `local` (the bundle's key-value store) persists here instead of dying with
+    // the session — spiders keep cookies and tokens in it.
+    runtimeDirectory: runtimeDir,
     wrapRequire: original => name => {
       if (name === 'fs' || name === 'node:fs') return scopedFS(fs);
       if (name === 'fs/promises' || name === 'node:fs/promises') return scopedFS(fs.promises);

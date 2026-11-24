@@ -41,10 +41,37 @@ export function parseCatVodQuarkEpisode(id) {
   return { file, mode };
 }
 
+/// Every netdisk the CatVod cloud contract can put in a play id, and whether this
+/// gateway can resolve it. Only Quark is implemented (`cloud-pan.mjs`, ported from
+/// the Quark share/transcode API). The rest must fail with a name and a reason —
+/// the bundle hands these ids to the host and expects the host to play them, so
+/// passing them on to AVPlayer just spins on a share page.
+const CLOUD_PROVIDERS = {
+  quark: null,
+  baidu: "百度网盘",
+  tianyi: "天翼云盘",
+  aliyun: "阿里云盘",
+  uc: "UC 网盘",
+  pan115: "115 网盘",
+  "115": "115 网盘",
+  pan123: "123 云盘",
+  "123": "123 云盘",
+  guangya: "光雅/光年",
+  xunlei: "迅雷云盘"
+};
+
+function unsupportedProvider(providerID) {
+  const name = CLOUD_PROVIDERS[providerID];
+  return new GatewayError("CLOUD_PROVIDER_UNSUPPORTED",
+    `这条线路是${name}，App 内置网关还没有接入它的播放（目前只内置夸克）。`
+    + "换普通影视线路，或在网盘账号里改用夸克分享的资源", 422);
+}
+
 export async function resolveCatVodCloudPlayer(argumentsValue, credentials, fetchValue) {
-  if (decodeCatVodEpisode(argumentsValue.id)?.providerId === "baidu") {
-    throw new GatewayError("CLOUD_PROVIDER_UNSUPPORTED",
-      "TVBox 暂未接入百度网盘播放，请选择夸克或普通影视线路；夸克 Cookie 不能用于百度网盘", 422);
+  const descriptor = decodeCatVodEpisode(argumentsValue.id);
+  const providerID = String(descriptor?.providerId || "").toLowerCase();
+  if (providerID && providerID !== "quark" && providerID in CLOUD_PROVIDERS) {
+    throw unsupportedProvider(providerID);
   }
   const episode = parseCatVodQuarkEpisode(argumentsValue.id);
   if (!episode) return null;

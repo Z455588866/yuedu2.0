@@ -501,7 +501,7 @@ struct CatVodHomeView: View {
                     // 已经填过网盘凭据还劝人去登录，是把自己「源站没返回」的问题
                     // 推给用户——天翼这类站点登录了照样空，文案必须先认这个事实。
                     Text(CatVodCloudAccountStore.shared.accounts.hasAnyCredential
-                         ? localized("已经填过网盘账号。这个分类还空，说明源站这次没有返回内容（换分类或换源试试）。")
+                         ? localized("已经填过网盘账号。分类还空有两种原因：接口本身没有这个网盘的线路（多数公共接口只做夸克），或源站这次没返回内容。")
                          : localized("网盘或 Alist 站点需要先在「管理猫源 → 网盘账号」里登录。"))
                         .font(DSFont.caption2)
                         .foregroundStyle(.tertiary)

@@ -96,7 +96,7 @@ enum CatVodCloudProvider: String, CaseIterable, Identifiable, Sendable {
         case .aliyun: return localized("Refresh Token（32 位）")
         case .baidu: return localized("Cookie（BDUSS / STOKEN / PTOKEN）")
         case .pan115: return localized("Cookie（UID / CID / SEID / KID）")
-        case .tianyi: return localized("Access Token")
+        case .tianyi: return localized("TV 版 Access Token（e189AccessToken）；网页 Cookie 多数源站不认")
         case .pan123: return localized("Bearer Token")
         case .guangya: return localized("Token")
         case .xunlei: return localized("Cookie")
