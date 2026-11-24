@@ -167,7 +167,10 @@ enum CatVodFilterParser {
 struct CatVodEpisode: Identifiable, Hashable, Sendable {
     var id: String { "\(groupIndex)-\(index)-\(title)" }
     var groupIndex: Int
+    /// 展示用的线路名。可能被改过（重名线路加「·2」后缀），**不能**回传给 spider。
     var groupName: String
+    /// spider 声明的原始线路名，`player` 的 `flag` 只认这个。
+    var spiderFlag: String
     var index: Int
     var title: String
     /// Spider play id or a direct URL. Passed to the gateway's `player` action.
@@ -175,9 +178,55 @@ struct CatVodEpisode: Identifiable, Hashable, Sendable {
 }
 
 struct CatVodGroup: Identifiable, Hashable, Sendable {
-    var id: String { name }
+    /// 线路名可能重复（源自己就会给两组同名线路），id 里带上首集的播放 id，
+    /// 免得 `ForEach` 撞 id 导致整块选集不刷新或抖动。
+    var id: String { "\(name)#\(episodes.first?.playID ?? "")" }
     var name: String
+    /// 交给 spider 的原始线路名（见 `CatVodEpisode.spiderFlag`）。
+    var spiderFlag: String
     var episodes: [CatVodEpisode]
+}
+
+/// 网盘线路的播放 id 不是 URL，而是一段 base64(JSON) 描述符，里面写着 `providerId`。
+///
+/// 为什么要在客户端先读它：百度网盘的播放请求在网关里必然失败（见
+/// `catvod-cloud-player.mjs` 的 422 分支），但如果把 id 直接丢给 spider，
+/// spider 会先去访问分享页（网盘里于是留下「查看记录」）、再走 `/play` 的 60 秒
+/// 超时、再做一次流探测，一共两三分钟都停在转圈上。提前解码就能立刻说清楚。
+enum CatVodNetdiskEpisode {
+    struct Descriptor {
+        var provider: String
+    }
+
+    private static let supported: Set<String> = ["quark", "uc", "aliyun", "123"]
+
+    static func descriptor(from playID: String) -> Descriptor? {
+        var text = playID.trimmingCharacters(in: .whitespacesAndNewlines)
+        // CatVod 的 base64 可能是 URL-safe 且省略 padding 的。
+        text = text.replacingOccurrences(of: "-", with: "+")
+                   .replacingOccurrences(of: "_", with: "/")
+        while text.count % 4 != 0 { text += "=" }
+        guard text.count < 8192,
+              let data = Data(base64Encoded: text, options: .ignoreUnknownCharacters),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let provider = object["providerId"] as? String, !provider.isEmpty else { return nil }
+        return Descriptor(provider: provider.lowercased())
+    }
+
+    static func isSupported(_ provider: String) -> Bool { supported.contains(provider) }
+
+    /// 网盘客户端不认识的 provider 名字直接用原样展示。
+    static func displayName(_ provider: String) -> String {
+        switch provider {
+        case "quark": return "夸克网盘"
+        case "uc": return "UC 网盘"
+        case "aliyun": return "阿里云盘"
+        case "baidu": return "百度网盘"
+        case "123": return "123 网盘"
+        case "115": return "115 网盘"
+        default: return provider
+        }
+    }
 }
 
 /// Result of a `player` invocation.
@@ -221,7 +270,13 @@ enum CatVodPlaylistParser {
         for (gi, rawGroup) in urlGroups.enumerated() {
             let groupName = gi < names.count ? names[gi] : String(format: localized("线路 %d"), gi + 1)
             var episodes: [CatVodEpisode] = []
-            let entries = rawGroup.split(separator: "#", omittingEmptySubsequences: true)
+            var entries = rawGroup.split(separator: "#", omittingEmptySubsequences: true)
+            // 少数网盘源用换行分隔分集（`第1集$id\n第2集$id`），按 `#` 切会得到
+            // 一整条无法解析的串，选集就空了。这里兜一层。
+            if entries.count == 1, rawGroup.contains("\n") {
+                entries = rawGroup.split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+                    .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            }
             for (ei, entry) in entries.enumerated() {
                 let parts = entry.split(separator: "$", maxSplits: 1, omittingEmptySubsequences: false)
                 let title = parts.first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? "\(ei + 1)"
@@ -232,11 +287,13 @@ enum CatVodPlaylistParser {
                     playID = String(entry)
                 }
                 if playID.isEmpty { continue }
-                episodes.append(CatVodEpisode(groupIndex: gi, groupName: groupName,
+                episodes.append(CatVodEpisode(groupIndex: gi, groupName: groupName, spiderFlag: groupName,
                                               index: ei, title: title.isEmpty ? "\(ei + 1)" : title,
                                               playID: playID))
             }
-            if !episodes.isEmpty { result.append(CatVodGroup(name: groupName, episodes: episodes)) }
+            if !episodes.isEmpty {
+                result.append(CatVodGroup(name: groupName, spiderFlag: groupName, episodes: episodes))
+            }
         }
         return result
     }

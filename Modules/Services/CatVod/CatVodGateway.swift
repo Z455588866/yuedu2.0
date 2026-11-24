@@ -165,6 +165,9 @@ enum CatVodError: LocalizedError {
     private static func describeHTTP(code: Int, message: String) -> String {
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = text.lowercased()
+        // 负数是 App 自己造的语义错误码（网盘不支持、磁力链、片单合集…），
+        // 文案已经写成人话，不该再包一层「猫源请求失败（-4）」。
+        if code < 0 { return text.isEmpty ? localized("播放失败") : text }
         // 网盘类线路：没登录时的提示原本是「请先在 TVBox 设置 → 网盘设置中保存
         // 夸克 Cookie」——我们的 App 里没有那个菜单，照着找永远找不到。
         if text.contains("网盘") || text.contains("登录") || text.contains("未配置")

@@ -157,17 +157,31 @@ final class CatVodService {
     }
 
     /// Full detail incl. play groups for one media id.
-    func detail(bundleURL: String, site: CatVodSite, id: String) async throws -> (CatVodMedia, [CatVodGroup]) {
+    ///
+    /// `expectedName` 用于在「片单/合集」里认回用户点的那一条：片单条目的 detail
+    /// 常常一次返回整张片单（几十部电影），以前直接取 `list[0]`，于是点《A》
+    /// 打开的却是《B》——封面、简介、剧集全对不上，看起来像"点开就是错的"。
+    func detail(bundleURL: String, site: CatVodSite, id: String,
+                expectedName: String? = nil) async throws -> CatVodDetailResult {
         let object = try await invoke(bundleURL: bundleURL, site: site, action: "detail",
                                       arguments: ["ids": [id]])
         let items = object["list"] as? [[String: Any]] ?? []
-        guard let first = items.first,
-              let data = try? JSONSerialization.data(withJSONObject: first),
+        guard !items.isEmpty else { throw CatVodError.emptyResponse }
+
+        let picked = Self.pickItem(items, requestedID: id, expectedName: expectedName)
+        guard let first = picked else {
+            // 每个条目都和请求的 id/片名对不上：这是一张片单（合集），不是一部片。
+            // 报清楚，让 UI 引导去全网搜，而不是拿错片子的剧集去播。
+            throw CatVodError.collectionOnly
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: first.element),
               let media = try? decoder.decode(CatVodMedia.self, from: data) else {
             throw CatVodError.emptyResponse
         }
-        var from = first["vod_play_from"] as? String ?? ""
-        var playURL = first["vod_play_url"] as? String ?? ""
+        var from = first.element["vod_play_from"] as? String ?? ""
+        var playURL = first.element["vod_play_url"] as? String ?? ""
+        // 交给 spider 的线路名（不含「·2」这类展示后缀）。
+        var spiderFrom = from
 
         // Some bundles answer in two steps: the first detail returns provider
         // "groups" (七味/盘库/蜗牛 return one entry per 线路) whose ids must be
@@ -204,6 +218,9 @@ final class CatVodService {
             }
             var fromParts: [String] = []
             var urlParts: [String] = []
+            // 与 fromParts 一一对应的**原始**线路名。展示名可能被加了「·2」后缀，
+            // 而 spider 的 `flag` 只认原名，所以两份都要留。
+            var originalParts: [String] = []
             var usedFlags = Set<String>()
             for (_, rawFrom, deeperURL) in deeper {
                 // 三个 provider 常常返回同一份剧集（只是线路名不同），合并后
@@ -211,6 +228,9 @@ final class CatVodService {
                 guard !urlParts.contains(deeperURL) else { continue }
                 let deeperFrom = rawFrom.isEmpty ? "线路\(fromParts.count + 1)" : rawFrom
                 // 两条线路可能同名（"量子线路(1)"），重名会让选集合并到同一条里。
+                // 注意：这里只改**展示名**，`spiderFlag` 仍是原来的名字——spider 的
+                // `flag` 参数只认原名，加了后缀就查不到，表现是点了没反应/一直转圈。
+                originalParts.append(deeperFrom)
                 var flags = deeperFrom.components(separatedBy: "$$$")
                 for index in flags.indices where usedFlags.contains(flags[index]) {
                     flags[index] += " ·\(fromParts.count + index + 1)"
@@ -222,18 +242,78 @@ final class CatVodService {
             if !fromParts.isEmpty {
                 from = fromParts.joined(separator: "$$$")
                 playURL = urlParts.joined(separator: "$$$")
+                spiderFrom = originalParts.joined(separator: "$$$")
             }
         }
 
-        let groups = CatVodPlaylistParser.groups(from: from, playURL: playURL)
+        var groups = CatVodPlaylistParser.groups(from: from, playURL: playURL)
+        // 把展示名换回原始名：`player` 要的是 spider 认识的那个 flag。
+        if spiderFrom != from {
+            let originals = spiderFrom.components(separatedBy: "$$$")
+            for index in groups.indices where index < originals.count {
+                groups[index].spiderFlag = originals[index]
+                for episodeIndex in groups[index].episodes.indices {
+                    groups[index].episodes[episodeIndex].spiderFlag = originals[index]
+                }
+            }
+        }
+        // 线路名换回原始名之后再合并重复组，否则索引会错位、flag 会对到别的线路。
+        groups = Self.dedupeGroups(groups)
         // Only the two play columns are stored: the episode list is all the detail
         // sheet needs, and keeping `vod_*` text out of the cache avoids persisting
         // a whole title's metadata for every poster the person taps.
         if !groups.isEmpty,
-           let data = try? JSONSerialization.data(withJSONObject: ["from": from, "url": playURL]) {
+           let data = try? JSONSerialization.data(withJSONObject: ["from": from, "url": playURL,
+                                                                  "spiderFrom": spiderFrom]) {
             CatVodDiskCache.store(data, key: Self.detailCacheKey(bundleURL: bundleURL, site: site, id: id))
         }
-        return (media, groups)
+        return CatVodDetailResult(media: media, groups: groups,
+                                  isCollection: first.isFallbackForCollection)
+    }
+
+    /// 网盘源常把同一份文件列两遍（`01 [5.03GB]…` 与 `E01 [5.18GB]…`），
+    /// 选集里就出现两组一模一样的集数，看着像"错乱"。播放 id 完全一致的两组只留第一组。
+    private static func dedupeGroups(_ groups: [CatVodGroup]) -> [CatVodGroup] {
+        var kept: [CatVodGroup] = []
+        var signatures = Set<String>()
+        for group in groups {
+            let signature = group.episodes.map(\.playID).joined(separator: "|")
+            guard !signature.isEmpty, signatures.insert(signature).inserted else { continue }
+            kept.append(group)
+        }
+        return kept.isEmpty ? groups : kept
+    }
+
+    /// 从 detail 返回的条目里认出「用户点的那一条」。
+    ///
+    /// 三级匹配：`vod_id` 完全一致 → 片名一致 → 只有一条时就用它。都失败说明这是
+    /// 片单/合集（一次返回整张片单），返回 nil 让上层走「合集」分支。
+    private static func pickItem(_ items: [[String: Any]], requestedID: String,
+                                 expectedName: String?) -> (element: [String: Any], isFallbackForCollection: Bool)? {
+        if let exact = items.first(where: { item in
+            let raw = item["vod_id"]
+            if let text = raw as? String { return text == requestedID }
+            if let number = raw as? NSNumber { return number.stringValue == requestedID }
+            return false
+        }) {
+            return (exact, false)
+        }
+        if let name = expectedName.map(normalizeTitle) {
+            if let sameName = items.first(where: { normalizeTitle($0["vod_name"] as? String ?? "") == name }) {
+                return (sameName, false)
+            }
+        }
+        if items.count == 1, let only = items.first { return (only, false) }
+        return nil
+    }
+
+    /// 片名归一化：去空白、去「(真彩)」「4K」这类后缀噪音，用来比对同一条目。
+    static func normalizeTitle(_ value: String) -> String {
+        var text = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        for noise in ["（", "(", "[", "【"] {
+            if let range = text.range(of: noise) { text = String(text[text.startIndex..<range.lowerBound]) }
+        }
+        return text.replacingOccurrences(of: " ", with: "")
     }
 
     /// 追一层 provider，只把「线路名 + 播放串」这对纯字符串交出去。
@@ -254,7 +334,16 @@ final class CatVodService {
         guard let data = CatVodDiskCache.load(key: key),
               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
               let from = object["from"], let playURL = object["url"] else { return nil }
-        let groups = CatVodPlaylistParser.groups(from: from, playURL: playURL)
+        var groups = CatVodPlaylistParser.groups(from: from, playURL: playURL)
+        if let spiderFrom = object["spiderFrom"], spiderFrom != from {
+            let originals = spiderFrom.components(separatedBy: "$$$")
+            for index in groups.indices where index < originals.count {
+                groups[index].spiderFlag = originals[index]
+                for episodeIndex in groups[index].episodes.indices {
+                    groups[index].episodes[episodeIndex].spiderFlag = originals[index]
+                }
+            }
+        }
         return groups.isEmpty ? nil : groups
     }
 
@@ -263,12 +352,33 @@ final class CatVodService {
     /// and `parse/jx == 1` need an external parser; netdisk shares are resolved by
     /// the trusted gateway (which holds the account credentials).
     func player(bundleURL: String, site: CatVodSite, episode: CatVodEpisode) async throws -> CatVodPlayback {
-        let object = try await invoke(bundleURL: bundleURL, site: site, action: "player",
+        // 网盘线路先认描述符再决定要不要打 spider：
+        // - 百度网盘在网关里明确不支持，打过去只会白等（spider 会去访问分享页，
+        //   于是网盘里留下「查看记录」），必须当场说清楚；
+        // - 夸克/UC/阿里/123 走网关的网盘解析，正常。
+        if let netdisk = CatVodNetdiskEpisode.descriptor(from: episode.playID) {
+            if !CatVodNetdiskEpisode.isSupported(netdisk.provider) {
+                throw CatVodError.http(-5, String(
+                    format: localized("这条是%@线路，App 内暂时不能直接播放。换一条普通线路，或用夸克网盘线路。"),
+                    CatVodNetdiskEpisode.displayName(netdisk.provider)))
+            }
+        }
+        let object: [String: Any]
+        do {
+            object = try await invoke(bundleURL: bundleURL, site: site, action: "player",
                                       arguments: [
-                                        "flag": episode.groupName,
+                                        // 只认 spider 声明的原始线路名；`groupName` 是
+                                        // 展示用的（重名时加了「·2」后缀），传过去查不到线路。
+                                        "flag": episode.spiderFlag,
                                         "id": episode.playID,
                                         "vipFlags": [String]()
-                                      ])
+                                      ],
+                                      // 网盘线路会先在分享页上绕一圈，源站的 /play 最长
+                                      // 允许 60 秒；客户端再多等只会在转圈上耗时间。
+                                      timeout: 40)
+        } catch let urlError as URLError where urlError.code == .timedOut {
+            throw CatVodError.http(-7, localized("解析这一集的播放地址超过 40 秒，源站没有回话。换一条线路，或稍后再试"))
+        }
         var headers: [String: String] = [:]
         if let header = object["header"] as? [String: Any] {
             for (k, v) in header {
@@ -310,6 +420,11 @@ final class CatVodService {
             || resolvedURL.hasPrefix("ed2k:") {
             throw CatVodError.unsupportedScheme
         }
+        // 网盘「分享页」不是媒体流：AVPlayer 打开它只会黑屏/转圈。源站经常把
+        // 分享链接直接当播放地址返回，必须认出来并说明白，否则就是无限转圈。
+        if Self.isNetdiskSharePage(resolvedURL) {
+            throw CatVodError.http(-6, localized("这条线路给的是网盘分享页，不是可播放的视频流。换一条线路，或先把分享转存到自己的网盘再播放。"))
+        }
 
         // Relative URLs are meaningless against the gateway loopback; spider URLs
         // are always absolute, so a missing scheme means the source is malformed.
@@ -343,6 +458,18 @@ final class CatVodService {
             .contains { lowered.contains($0) }
     }
 
+    /// `https://pan.baidu.com/s/xxx`、`https://pan.quark.cn/s/xxx` 这类是分享页，
+    /// 不是视频。真流量的路径长成 `/file/xxx.mp4`、`play.m3u8` 或带签名参数的 CDN 地址。
+    private static func isNetdiskSharePage(_ value: String) -> Bool {
+        guard let url = URL(string: value), let host = url.host?.lowercased() else { return false }
+        let shareHosts = ["pan.baidu.com", "pan.quark.cn", "drive.uc.cn", "fast.uc.cn",
+                          "www.aliyundrive.com", "www.alipan.com", "115.com", "115cdn.com",
+                          "www.123pan.com", "www.123684.com", "www.123865.com"]
+        guard shareHosts.contains(where: { host == $0 || host.hasSuffix("." + $0) }) else { return false }
+        let path = url.path.lowercased()
+        return path.hasPrefix("/s/") || path == "/s" || path.hasPrefix("/share/")
+    }
+
     /// Last chance for a `parse=1` line: load the play page unseen and let its own
     /// script hand over the stream (mirrors tvbox-silicon's WebSniffer and the app's
     /// own Legado page sniffer). Returns nil for `json:`/`parse:` service payloads,
@@ -368,7 +495,8 @@ final class CatVodService {
     // MARK: - Low level
 
     private func invoke(bundleURL: String, site: CatVodSite, action: String,
-                        arguments: [String: Any]) async throws -> [String: Any] {
+                        arguments: [String: Any],
+                        timeout: TimeInterval = 150) async throws -> [String: Any] {
         let base = try await CatVodGateway.shared.ensureStarted(allowedBundleURL: bundleURL)
         let endpoint = base.appendingPathComponent("/v1/spider/invoke")
         let body: [String: Any] = [
@@ -383,27 +511,29 @@ final class CatVodService {
             ],
             "arguments": arguments
         ]
-        return try await post(endpoint, body: body)
+        return try await post(endpoint, body: body, timeout: timeout)
     }
 
-    private func post(_ endpoint: URL, body: [String: Any]) async throws -> [String: Any] {
+    private func post(_ endpoint: URL, body: [String: Any],
+                      timeout: TimeInterval = 150) async throws -> [String: Any] {
         // A spider session can be reclaimed while the app is backgrounded or idle.
         // The gateway rebuilds it on demand, so one automatic retry turns a
         // transient "CatVod stopped" 502 into a seamless success.
         do {
-            return try await postOnce(endpoint, body: body)
+            return try await postOnce(endpoint, body: body, timeout: timeout)
         } catch let error as CatVodError {
             if case .http(let status, let message) = error,
                status == 502,
                message.localizedCaseInsensitiveContains("stopped")
                 || message.localizedCaseInsensitiveContains("exited") {
-                return try await postOnce(endpoint, body: body)
+                return try await postOnce(endpoint, body: body, timeout: timeout)
             }
             throw error
         }
     }
 
-    private func postOnce(_ endpoint: URL, body: [String: Any]) async throws -> [String: Any] {
+    private func postOnce(_ endpoint: URL, body: [String: Any],
+                          timeout: TimeInterval = 150) async throws -> [String: Any] {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -417,7 +547,7 @@ final class CatVodService {
         // overseas upstream needs the budget the CatVod players give a source
         // (150s for catalog/home/category, less for search and play). The old
         // 30–50s reported healthy-but-slow sources as "cannot load".
-        request.timeoutInterval = 150
+        request.timeoutInterval = timeout
 
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -521,4 +651,13 @@ extension CatVodError {
     static let parseUnsupported = CatVodError.http(-1, "该线路需要外部解析，换一条线路试试")
     static let emptyPlayerURL = CatVodError.http(-2, "该片源没有返回可播放地址")
     static let unsupportedScheme = CatVodError.http(-3, "该线路是磁力/电驴链接，App 内无法直接播放")
+    /// detail 回的是整张片单（合集），里面没有用户点的那一条。
+    static let collectionOnly = CatVodError.http(-4, "这一条是片单/合集，需要按片名重新搜索")
+}
+
+/// `detail` 的结果。`isCollection` 让 UI 能把「片单/合集」和「真的没有剧集」分开说。
+struct CatVodDetailResult: Sendable {
+    var media: CatVodMedia
+    var groups: [CatVodGroup]
+    var isCollection: Bool
 }

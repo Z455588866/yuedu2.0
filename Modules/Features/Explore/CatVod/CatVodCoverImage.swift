@@ -104,6 +104,9 @@ struct CatVodCoverImage: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
+                    // `scaledToFill` 只报告被提议的尺寸，画面却按自身比例画出去。
+                    // 少这一刀，横版剧照就会爬出单元格盖住邻列——网格"错乱"的根源。
+                    .clipped()
                     .transition(.opacity)
             } else {
                 ZStack {

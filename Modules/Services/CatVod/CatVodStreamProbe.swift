@@ -28,7 +28,10 @@ enum CatVodStreamProbe {
         var request = URLRequest(url: url)
         request.setValue("bytes=0-1024", forHTTPHeaderField: "Range")
         let isLoopback = ["127.0.0.1", "localhost", "::1"].contains(url.host ?? "")
-        request.timeoutInterval = isLoopback ? 5 : 12
+        // 探测只是「提前说清楚死因」，不是播放的前置条件。以前给 12 秒，网盘 CDN
+        // 光握手就要好几秒，于是正常线路被判定成"源站连不上"，人看到转圈十几秒
+        // 然后回到选集——也就是"点了半天进不去播放器"。6 秒够识别死域名。
+        request.timeoutInterval = isLoopback ? 4 : 6
         // Loopback belongs to the bundle's own proxy; its headers are not ours to
         // forward, and a stale Range can upset it.
         if !isLoopback {
@@ -46,6 +49,9 @@ enum CatVodStreamProbe {
                 // the actual fix, so this must be retryable rather than fatal.
                 return .retryable(localized("播放代理已断开（源会话被回收），请重试这一集"))
             }
+            // 网盘/大文件 CDN 对 Range 探测经常不回包，超时不代表不能播。这类地址
+            // 交给 AVPlayer 自己谈，失败时播放器会带着自己的错误提示。
+            if error.code == .timedOut, Self.isNetdiskCDN(url) { return .playable }
             switch error.code {
             case .cannotFindHost, .dnsLookupFailed:
                 return .blocked(localized("这条线路的域名已失效（源站问题），换一条线路或换一个源"))
@@ -64,5 +70,14 @@ enum CatVodStreamProbe {
         } catch {
             return .playable
         }
+    }
+
+    /// 网盘与云存储的下载节点。它们的签名 URL 对 `Range` 探测不友好，超时很常见。
+    private static func isNetdiskCDN(_ url: URL) -> Bool {
+        let host = (url.host ?? "").lowercased()
+        let markers = ["baidupcs", "pan.baidu", "quark", "uc.cn", "aliyundrive", "alipan",
+                       "aliyuncs", "115.com", "115cdn", "123pan", "123684", "123865",
+                       "pcs.baidu", "d.pcs"]
+        return markers.contains { host.contains($0) }
     }
 }

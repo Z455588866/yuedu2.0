@@ -996,13 +996,20 @@ struct CatVodHomeView: View {
         if busy { return }
 
         do {
-            let (_, groups) = try await CatVodService.shared.detail(bundleURL: bundle, site: site, id: item.id)
+            let result = try await CatVodService.shared.detail(bundleURL: bundle, site: site,
+                                                              id: item.id, expectedName: item.name)
             await MainActor.run {
-                detailCache[cacheKey] = groups
+                detailCache[cacheKey] = result.groups
                 // Fill the sheet only if the person has not moved on to another title.
                 if detailItem?.id == item.id {
-                    detailGroups = groups
+                    detailGroups = result.groups
                     isLoadingDetail = false
+                    // 片单/合集：spider 一次回了整张片单，里面没有用户点的那一部。
+                    // 以前会拿第一条去播，于是「点开就是错的」。
+                    if result.isCollection {
+                        detailMissing = true
+                        message = localized("这一条是片单/合集，里面没有这一部片子。点下面按片名重新搜一次。")
+                    }
                 }
                 isOpeningDetail = false
             }
@@ -1011,14 +1018,25 @@ struct CatVodHomeView: View {
             // 搜索：弹层在加载动画之后自己消失，看起来就是「点开一部剧就闪退」。
             // 现在留在弹层里说清楚，把「换源搜」交给用户点。
             var missing = false
-            if let catError = error as? CatVodError, case .emptyResponse = catError { missing = true }
+            var collection = false
+            if let catError = error as? CatVodError {
+                switch catError {
+                case .emptyResponse: missing = true
+                case .http(-4, _): collection = true
+                default: break
+                }
+            }
+            // 先把错误翻译成一句话再进 MainActor：`any Error` 不是 Sendable，
+            // 直接跨进 @Sendable 闭包在 Swift 6 下会被拒绝。
+            let failureText = collection
+                ? localized("这一条是片单/合集，里面没有这一部片子。点下面按片名重新搜一次。")
+                : (missing ? localized("这个源没有返回这部剧的详细信息")
+                           : error.localizedDescription)
             await MainActor.run {
                 if detailItem?.id == item.id {
                     // Keep the cached episodes visible: a failed refresh is worth a
                     // line of text, not wiping the list the person can still play.
-                    message = missing
-                        ? localized("这个源没有返回这部剧的详细信息")
-                        : error.localizedDescription
+                    message = failureText
                     // Whatever the cause, ending with no episodes needs an exit that the
                     // person can see. `missing` only changes the wording.
                     detailMissing = true
@@ -1360,7 +1378,12 @@ struct CatVodHomeView: View {
     /// the marker alone is what they scan for, so fall back to it when the full
     /// title cannot fit even at two lines.
     private func episodeTitle(_ title: String) -> String {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 网盘源返回的是文件名：`01 [5.03GB]`、`E01 2160p WEB-DL H265`。
+        // 方括号里几乎永远是体积/分辨率，格子只有 76pt 宽，留着就只剩省略号。
+        trimmed = trimmed.replacingOccurrences(of: #"\[[^\]]*\]"#, with: "", options: .regularExpression)
+        trimmed = trimmed.replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+        trimmed = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > 6,
               let range = trimmed.range(of: #"第\s*\d+\s*[集话期回]"#,
                                         options: .regularExpression) else { return trimmed }
@@ -1375,24 +1398,34 @@ private struct CatVodPosterCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // 宽度交给网格列，高度按 2:3 自己算。固定 104×148 时，宽屏上每列
-            // 右边缘都会空出几像素，看起来像对齐没做。2:3 也是海报的标准比例，
-            // 源给的图大多是这个形状，裁切最少。
-            CatVodCoverImage(url: item.cover)
+            // 封面尺寸必须与图片本身无关：榜单/片单/搜索里混着竖海报、横剧照、
+            // 豆瓣方图，一旦让 `Image` 参与测量，`scaledToFill` 的画布就会溢出
+            // 单元格，压住下一行的文字——这就是「榜单/片单错乱」。
+            // 做法：空色块先定出 2:3 的框，图片只作为 overlay 画在里面，
+            // overlay 不参与布局，再 clip 一刀，几何就完全由列宽决定。
+            Color.clear
                 .aspectRatio(2.0 / 3.0, contentMode: .fit)
-                .frame(maxWidth: .infinity)
+                .overlay {
+                    CatVodCoverImage(url: item.cover)
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-            Text(item.name)
-                .font(DSFont.caption.weight(.semibold))
-                .foregroundStyle(DSColor.textPrimary)
-                .lineLimit(1)
-            if !item.remark.isEmpty {
-                Text(item.remark)
+            // 标题区高度固定（两行位），这样每张卡高度一致，行与行不会错位；
+            // 没有 remark 的条目也占住那一行，避免半行卡挤上来。
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name)
+                    .font(DSFont.caption.weight(.semibold))
+                    .foregroundStyle(DSColor.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(item.remark.isEmpty ? " " : item.remark)
                     .font(DSFont.caption2)
                     .foregroundStyle(DSColor.textSecondary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 32, alignment: .top)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -1407,15 +1440,20 @@ private struct CatVodGridSkeleton: View {
         LazyVGrid(columns: columns, spacing: 16) {
             ForEach(0..<9, id: \.self) { index in
                 VStack(alignment: .leading, spacing: 6) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(DSColor.surfaceTertiary)
+                    Color.clear
                         .aspectRatio(2.0 / 3.0, contentMode: .fit)
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(DSColor.surfaceTertiary)
-                        .frame(height: 11)
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(DSColor.surfaceTertiary.opacity(0.55))
-                        .frame(width: 46, height: 9)
+                        .background(DSColor.surfaceTertiary,
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    VStack(alignment: .leading, spacing: 4) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(DSColor.surfaceTertiary)
+                            .frame(height: 11)
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(DSColor.surfaceTertiary.opacity(0.55))
+                            .frame(width: 46, height: 9)
+                    }
+                    .frame(height: 32, alignment: .top)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // 轻微错落，避免九块灰砖排得太整齐反而像内容已经出来了。
