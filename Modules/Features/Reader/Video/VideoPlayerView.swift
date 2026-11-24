@@ -50,6 +50,11 @@ struct VideoPlayerView: View {
     /// The person's explicit window orientation wish; `nil` follows the picture.
     @State private var orientationOverride: FixedLayoutOrientation?
     @State private var window = ReaderWindowReference()
+    /// Overlay settings panels live here, not inside their buttons. The buttons are part
+    /// of the chrome, and the chrome is removed from the tree when it auto-hides — a panel
+    /// owned by that subtree closed itself a few seconds after opening.
+    @State private var showsDanmakuPanel = false
+    @State private var showsSubtitlePanel = false
 
     var body: some View {
         ZStack {
@@ -84,10 +89,13 @@ struct VideoPlayerView: View {
                                     coverBuiltin: subtitle.coverBuiltin)
                         .ignoresSafeArea()
                 }
-                if showsControls {
-                    controls(controller)
-                        .transition(.opacity)
-                }
+                // Kept in the tree and faded out instead of being removed: the overlay
+                // settings panels are presented from these buttons, and tearing the
+                // subtree down would dismiss a panel that is still being used.
+                controls(controller)
+                    .opacity(showsControls ? 1 : 0)
+                    .allowsHitTesting(showsControls)
+                    .accessibilityHidden(!showsControls)
                 if let pan, pan.kind == .seek, let range = controller.seekableRange {
                     VideoSeekBadge(time: pan.value, end: range.upperBound, delta: pan.value - pan.origin)
                 }
@@ -143,9 +151,16 @@ struct VideoPlayerView: View {
         .task(id: interaction) {
             guard showsControls, !voiceOverEnabled, controller?.phase == .playing else { return }
             try? await Task.sleep(for: DSAnimation.videoControlsAutoHide)
-            guard !Task.isCancelled, scrubTime == nil, !showsEpisodes else { return }
+            // An open settings panel keeps the chrome alive: hiding it would tear the
+            // panel down mid-adjustment.
+            guard !Task.isCancelled, scrubTime == nil, !showsEpisodes,
+                  !showsDanmakuPanel, !showsSubtitlePanel else { return }
             showsControls = false
         }
+        // Closing a panel counts as activity, so the chrome gets a fresh idle window
+        // instead of vanishing the instant the sheet goes away.
+        .onChange(of: showsDanmakuPanel) { _, open in if !open { touched() } }
+        .onChange(of: showsSubtitlePanel) { _, open in if !open { touched() } }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { controller?.saveProgress(force: true) }
         }
@@ -347,6 +362,7 @@ struct VideoPlayerView: View {
                 area: Binding(get: { danmaku.area }, set: { danmaku.area = $0 }),
                 fontSize: Binding(get: { danmaku.fontSize }, set: { danmaku.fontSize = $0 }),
                 speed: Binding(get: { danmaku.speed }, set: { danmaku.speed = $0 }),
+                showsPanel: $showsDanmakuPanel,
                 sources: danmakuSources.enabledSources,
                 status: danmaku.status
             )
@@ -364,6 +380,7 @@ struct VideoPlayerView: View {
                     get: { subtitle.coverBuiltin },
                     set: { subtitle.coverBuiltin = $0 }
                 ),
+                showsPanel: $showsSubtitlePanel,
                 onSelect: { subtitle.resolve() },
                 onRetry: { subtitle.resolve() }
             )

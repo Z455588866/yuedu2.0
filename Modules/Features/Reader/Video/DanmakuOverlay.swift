@@ -70,11 +70,15 @@ struct LaidOutDanmaku: Identifiable {
 ///
 /// Unlike DanmakuKit's self-driven `CAAnimation` clock, positions here are a pure function of the
 /// video time, so seeking and rate changes stay perfectly in sync.
-/// A plain cache, not an observable object: redraws are driven by `PlaybackClock.time` (an `@Observable`),
-/// and `layout` mutates only derived data read in the same `body`. Using the Observation framework
-/// here avoids Swift 6's `ObservableObject.objectWillChange` main-actor conformance error.
+/// A plain cache, not an observable object: redraws are driven by `PlaybackClock.time`
+/// (an `@Observable`), and `layout` mutates only derived data read in the same `body`.
+///
+/// It must NOT be `@Observable`: `layout` writes `key`/`items` while SwiftUI is
+/// evaluating the body, and an observable write during a view update is exactly the
+/// "modifying state during view update" pattern that intermittently crashes a view
+/// mid-playback. Nothing here needs to publish — the clock already drives the redraw —
+/// so a bare class is both correct and safe under Swift 6.
 @MainActor
-@Observable
 final class DanmakuLayoutStore {
     private var key = ""
     private(set) var items: [LaidOutDanmaku] = []
@@ -297,10 +301,12 @@ struct DanmakuControls: View {
     @Binding var area: Double
     @Binding var fontSize: Double
     @Binding var speed: Double
+    /// Owned by the player, not by this button: the button lives inside the chrome,
+    /// which hides itself after a few idle seconds, and a panel whose presentation
+    /// state dies with the chrome closes itself while the person is still adjusting it.
+    @Binding var showsPanel: Bool
     let sources: [DanmakuSource]
     let status: String
-
-    @State private var showsPanel = false
 
     private struct Level: Identifiable {
         let label: String

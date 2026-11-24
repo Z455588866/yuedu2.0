@@ -95,10 +95,11 @@ struct SubtitleControls: View {
     let status: String
     let matched: Bool
     @Binding var coverBuiltin: Bool
+    /// Owned by the player for the same reason as the danmaku panel: the chrome that
+    /// hosts this button hides itself on an idle timer, and the panel must survive that.
+    @Binding var showsPanel: Bool
     let onSelect: () -> Void
     let onRetry: () -> Void
-
-    @State private var showsPanel = false
 
     private static let sourcePrefix = "src:"
 
