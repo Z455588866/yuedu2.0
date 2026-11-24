@@ -43,6 +43,7 @@ struct CatVodHomeView: View {
     /// burst of taps queues a burst of requests, and when they all land they
     /// stack a dozen detail sheets on top of each other.
     @State private var isOpeningDetail = false
+    @State private var showsSitePicker = false
     /// Same guard for episode taps — a slow `player` resolve must not let a
     /// dozen taps each present a player the moment they finally answer.
     @State private var isResolvingPlayback = false
@@ -117,6 +118,15 @@ struct CatVodHomeView: View {
             // otherwise a 150s resolve keeps the grid refusing every tap.
             isOpeningDetail = false
         }) { item in detailSheet(item) }
+        .sheet(isPresented: $showsSitePicker) {
+            CatVodSitePickerSheet(sites: sites, selected: selectedSite,
+                                  bundleURL: currentBundleURL ?? "") { site in
+                selectedSite = site
+                currentCategory = nil
+                filterChoices = [:]
+                Task { await loadHome() }
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 NavigationLink {
@@ -163,17 +173,23 @@ struct CatVodHomeView: View {
             .frame(maxWidth: .infinity)
 
             if sites.count > 1 {
-                Picker(localized("站点"), selection: Binding(
-                    get: { selectedSite?.key ?? sites.first?.key ?? "" },
-                    set: { key in
-                        selectedSite = sites.first { $0.key == key }
-                        Task { await loadHome() }
+                // 几十上百个站点用菜单选不动：没有搜索，名字必被截断，也看不出
+                // 哪个最近连不上。换成可搜索的列表。
+                Button {
+                    showsSitePicker = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(selectedSite?.name ?? localized("选择站点"))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Image(systemName: "chevron.down")
+                            .font(DSFont.caption2)
                     }
-                )) {
-                    ForEach(sites) { site in Text(site.name).tag(site.key) }
+                    .frame(maxWidth: .infinity)
                 }
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel(localized("选择站点"))
             }
         }
         .onChange(of: selectedSourceID) { _, _ in Task { await loadCatalogAndHome() } }
