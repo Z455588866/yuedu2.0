@@ -9,7 +9,7 @@
 // the same public endpoints rather than copied, so this module stays ours; the
 // endpoint shapes are what the vendors' own web and TV clients use.
 
-import { createHash, createHmac } from "node:crypto";
+import { constants, createHash, createHmac, createPublicKey, publicDecrypt, publicEncrypt } from "node:crypto";
 
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 const VIDEO_EXTENSIONS = new Set(["mp4", "mkv", "mov", "m4v", "avi", "ts", "m2ts", "webm", "flv", "wmv", "rmvb", "mpg", "mpeg", "3gp"]);
@@ -525,26 +525,6 @@ export async function followLink(address, headers, hops = 0) {
   return { url: response.url || address, length };
 }
 
-export const panDrives = {
-  tianyi,
-  baidu,
-  quark: quarkDrive("quark"),
-  uc: quarkDrive("uc"),
-  pan123
-};
-
-export function driveFor(key) {
-  return panDrives[String(key || "").toLowerCase()] || null;
-}
-
-/// Drives the person has signed in to, in the order they are offered.
-export function signedInDrives(credentials = {}) {
-  const order = ["quark", "uc", "tianyi", "baidu", "pan123"];
-  return order.map(driveFor).filter((drive) => drive && text(credentials[drive.credentialField]).length > 1);
-}
-
-export const panDriveTestSupport = { CookieJar, baiduAddress, tianyiSignature, quarkFile, baiduFile };
-
 // `crypto.randomUUID` is only on `crypto`, not on the global namespace of every
 // runtime this module is bundled into.
 function randomUUID() {
@@ -554,3 +534,184 @@ function randomUUID() {
   return `${hex.slice(0, 8).join("")}-${hex.slice(8, 12).join("")}-${hex.slice(12, 16).join("")}`
     + `-${hex.slice(16, 20).join("")}-${hex.slice(20, 32).join("")}`;
 }
+
+// ---------------------------------------------------------------- 115 网盘
+
+/// 115's download API wraps request and answer in `m115`: two XOR layers around
+/// a reversal, then RSA with 115's public key (as deadblue/elevengo does, MIT).
+/// The answer comes back signed with the private key, so the same public key
+/// opens it.
+const M115_TABLE = [
+  0xf0, 0xe5, 0x69, 0xae, 0xbf, 0xdc, 0xbf, 0x8a, 0x1a, 0x45, 0xe8, 0xbe, 0x7d, 0xa6, 0x73, 0xb8,
+  0xde, 0x8f, 0xe7, 0xc4, 0x45, 0xda, 0x86, 0xc4, 0x9b, 0x64, 0x8b, 0x14, 0x6a, 0xb4, 0xf1, 0xaa,
+  0x38, 0x01, 0x35, 0x9e, 0x26, 0x69, 0x2c, 0x86, 0x00, 0x6b, 0x4f, 0xa5, 0x36, 0x34, 0x62, 0xa6,
+  0x2a, 0x96, 0x68, 0x18, 0xf2, 0x4a, 0xfd, 0xbd, 0x6b, 0x97, 0x8f, 0x4d, 0x8f, 0x89, 0x13, 0xb7,
+  0x6c, 0x8e, 0x93, 0xed, 0x0e, 0x0d, 0x48, 0x3e, 0xd7, 0x2f, 0x88, 0xd8, 0xfe, 0xfe, 0x7e, 0x86,
+  0x50, 0x95, 0x4f, 0xd1, 0xeb, 0x83, 0x26, 0x34, 0xdb, 0x66, 0x7b, 0x9c, 0x7e, 0x9d, 0x7a, 0x81,
+  0x32, 0xea, 0xb6, 0x33, 0xde, 0x3a, 0xa9, 0x59, 0x34, 0x66, 0x3b, 0xaa, 0xba, 0x81, 0x60, 0x48,
+  0xb9, 0xd5, 0x81, 0x9c, 0xf8, 0x6c, 0x84, 0x77, 0xff, 0x54, 0x78, 0x26, 0x5f, 0xbe, 0xe8, 0x1e,
+  0x36, 0x9f, 0x34, 0x80, 0x5c, 0x45, 0x2c, 0x9b, 0x76, 0xd5, 0x1b, 0x8f, 0xcc, 0xc3, 0xb8, 0xf5
+];
+const M115_CLIENT_KEY = [0x78, 0x06, 0xad, 0x4c, 0x33, 0x86, 0x5d, 0x18, 0x4c, 0x01, 0x3f, 0x46];
+const M115_PUBLIC_DER = Buffer.from(
+  "MIGJAoGBAIaGmAwPWiTEudQwIM0sInA/8/RQdWUpBYsc+I8JuGAhNkdxmKbiaDFJZZvRIsM1kv21rUeUStHqTTbGsXKq1jOMO7asYidQLQEJk6yWfRrvAPDI4DjeLk07wuw2ivLp8QpvHtpPcmLxNkIMB8MxuHG/E5908wEOPE/lffOvtxaDAgMBAAE=",
+  "base64"
+);
+
+function m115Derive(seed, size) {
+  const result = new Uint8Array(size);
+  for (let index = 0; index < size; index += 1) {
+    result[index] = ((seed[index] + M115_TABLE[size * index]) & 0xff) ^ M115_TABLE[size * (size - index - 1)];
+  }
+  return result;
+}
+
+/// XOR with `key` repeated, restarting it after the first `count % 4` bytes.
+function m115Xor(data, key) {
+  const head = data.length % 4;
+  for (let index = 0; index < data.length; index += 1) {
+    data[index] ^= key[(index < head ? index : index - head) % key.length];
+  }
+}
+
+function m115Encode(payload, key) {
+  const publicKey = createPublicKey({ key: M115_PUBLIC_DER, format: "der", type: "pkcs1" });
+  const data = Uint8Array.from(payload);
+  m115Xor(data, m115Derive(key, 4));
+  data.reverse();
+  m115Xor(data, M115_CLIENT_KEY);
+  const buffer = Buffer.concat([Buffer.from(key), Buffer.from(data)]);
+  const blocks = [];
+  // A 1,024-bit key takes 117 bytes per block with PKCS #1 v1.5 padding.
+  for (let start = 0; start < buffer.length; start += 117) {
+    blocks.push(publicEncrypt({ key: publicKey, padding: constants.RSA_PKCS1_PADDING }, buffer.subarray(start, start + 117)));
+  }
+  return Buffer.concat(blocks).toString("base64");
+}
+
+function m115Decode(encoded, key) {
+  const publicKey = createPublicKey({ key: M115_PUBLIC_DER, format: "der", type: "pkcs1" });
+  const raw = Buffer.from(encoded, "base64");
+  const plain = [];
+  for (let start = 0; start < raw.length; start += 128) {
+    const slice = raw.subarray(start, start + 128);
+    const padded = Buffer.concat([Buffer.alloc(128 - slice.length), slice]);
+    const block = publicDecrypt({ key: publicKey, padding: constants.RSA_NO_PADDING }, padded);
+    // 00 01 FF … FF 00, then the data.
+    let index = 0;
+    while (index < block.length && block[index] === 0) index += 1;
+    while (index < block.length && block[index] !== 0) index += 1;
+    plain.push(...block.subarray(index + 1));
+  }
+  if (plain.length < 16) throw new Error("115 返回的数据无法解开");
+  const data = Uint8Array.from(plain.slice(16));
+  m115Xor(data, m115Derive(Uint8Array.from(plain.slice(0, 16)), 12));
+  data.reverse();
+  m115Xor(data, m115Derive(key, 4));
+  return Buffer.from(data);
+}
+
+const PAN115 = {
+  api: "https://webapi.115.com",
+  userAgent: `${BROWSER_UA} 115Browser/27.0.5.7`,
+  pageSize: 1000
+};
+
+const pan115 = {
+  key: "pan115",
+  name: "115 网盘",
+  credentialField: "pan115Cookie",
+  root: "0",
+  async list(credentials, folder = "0") {
+    const cookie = text(credentials.pan115Cookie);
+    if (!cookie) throw new Error("还没有填写 115 网盘 Cookie（UID / CID / SEID / KID）");
+    const jar = new CookieJar(cookie);
+    const files = [];
+    let offset = 0;
+    for (let page = 0; page < 50; page += 1) {
+      const url = `${PAN115.api}/files?aid=1&cid=${encodeURIComponent(folder || "0")}&o=user_ptime&asc=1`
+        + `&offset=${offset}&show_dir=1&limit=${PAN115.pageSize}&snap=0&natsort=0&record_open_time=1&format=json&fc_mix=0`;
+      const answer = await pan115Call(url, jar);
+      const items = Array.isArray(answer.data) ? answer.data : [];
+      files.push(...items.map(pan115File).filter(Boolean));
+      offset += items.length;
+      const total = number(answer.count);
+      if (items.length === 0 || (total > 0 && offset >= total)) break;
+    }
+    return files;
+  },
+  async link(credentials, file) {
+    const cookie = text(credentials.pan115Cookie);
+    if (!cookie) throw new Error("还没有填写 115 网盘 Cookie");
+    const jar = new CookieJar(cookie);
+    const key = Uint8Array.from(Array.from({ length: 16 }, () => Math.floor(Math.random() * 256)));
+    const encoded = m115Encode(Buffer.from(JSON.stringify({ pickcode: file.id })), key);
+    const url = `https://proapi.115.com/app/chrome/downurl?t=${Math.floor(Date.now() / 1000)}`;
+    const answer = await pan115Call(url, jar, { data: encoded });
+    const payload = text(answer.data);
+    if (!payload) throw new Error(`115 网盘没有返回这个文件的地址`);
+    const decoded = JSON.parse(m115Decode(payload, key).toString("utf8"));
+    const info = Object.values(decoded || {})[0];
+    let address = text(info?.url?.url);
+    if (!address) throw new Error("115 网盘拒绝提供这个文件的下载地址（可能是会员限制）");
+    try { address = decodeURIComponent(address); } catch { /* Keep it as given. */ }
+    return {
+      url: address,
+      headers: { Cookie: jar.header, "User-Agent": PAN115.userAgent },
+      length: number(info?.file_size)
+    };
+  }
+};
+
+async function pan115Call(url, jar, form) {
+  const headers = { Cookie: jar.header, "User-Agent": PAN115.userAgent };
+  const options = { method: form ? "POST" : "GET", headers };
+  if (form) {
+    headers["Content-Type"] = "application/x-www-form-urlencoded";
+    options.body = new URLSearchParams(form).toString();
+  }
+  const response = await fetch(url, options);
+  jar.absorb(response);
+  const answer = await readJSON(response);
+  if (answer.state === true && response.ok) return answer;
+  const message = text(answer.error) || text(answer.msg);
+  const code = number(answer.errno ?? answer.errNo ?? -1);
+  if (response.status === 401 || [99, 990001].includes(code) || message.includes("登录")) {
+    throw new Error(`115 网盘登录已失效（${message || `errno ${code}`}），请重新填写 Cookie`);
+  }
+  throw new Error(`115 网盘：${message || `errno ${code}`}`);
+}
+
+function pan115File(item) {
+  const name = text(item.n);
+  if (!name) return null;
+  const pickCode = text(item.pc);
+  const folder = text(item.cid);
+  if (text(item.fid)) {
+    if (!pickCode) return null;
+    return { id: pickCode, name, isFolder: false, size: number(item.s) };
+  }
+  if (!folder) return null;
+  return { id: folder, name, isFolder: true, size: 0 };
+}
+
+export const panDrives = {
+  tianyi,
+  baidu,
+  quark: quarkDrive("quark"),
+  uc: quarkDrive("uc"),
+  pan123,
+  pan115
+};
+
+export function driveFor(key) {
+  return panDrives[String(key || "").toLowerCase()] || null;
+}
+
+/// Drives the person has signed in to, in the order they are offered.
+export function signedInDrives(credentials = {}) {
+  const order = ["quark", "uc", "pan115", "tianyi", "baidu", "pan123"];
+  return order.map(driveFor).filter((drive) => drive && text(credentials[drive.credentialField]).length > 0);
+}
+
+export const panDriveTestSupport = { CookieJar, baiduAddress, tianyiSignature, quarkFile, baiduFile, m115Encode, m115Decode, pan115, followLink };
