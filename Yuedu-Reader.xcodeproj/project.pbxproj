@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		7C1FA00000000000000000A3 /* VLCKitSPM in Frameworks */ = {isa = PBXBuildFile; productRef = 7C1FA00000000000000000A2 /* VLCKitSPM */; };
 		1C081706E1002E557584EDC6 /* YueduCoreTextTypography in Frameworks */ = {isa = PBXBuildFile; productRef = 3D3ACA9A6DDE978E3B91280C /* YueduCoreTextTypography */; };
 		1E90D290C84CF7DFB61183AB /* yuedu_app_Widget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4E4E1DDA4EE35F67778097F0 /* yuedu_app_Widget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		2EE60C00FD763A43CFCAC2A0 /* yuedu_app_ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 81F92752186D8D0E971A17B9 /* yuedu_app_ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -196,6 +197,7 @@
 				54FF42D0FA99075B5C91D59B /* ReadiumZIPFoundation in Frameworks */,
 				46A6AB672FCD4ED60071B397 /* FirebaseAnalyticsIdentitySupport in Frameworks */,
 				3021769152B9F41FC1F2CBA5 /* SwiftSoup in Frameworks */,
+				7C1FA00000000000000000A3 /* VLCKitSPM in Frameworks */,
 				BBBB2222BBBB2222BBBB0001 /* LNPopupUI-Static in Frameworks */,
 				AAAA1111AAAA1111AAAA0001 /* Nuke in Frameworks */,
 				46A6AB732FCD4ED60071B397 /* FirebaseCrashlytics in Frameworks */,
@@ -334,6 +336,7 @@
 			name = "yuedu app";
 			packageProductDependencies = (
 				8A11B0E22F9A1C7300A1B001 /* ReadiumFuzi */,
+				7C1FA00000000000000000A2 /* VLCKitSPM */,
 				7F41A49C749809CDAB632913 /* ReadiumZIPFoundation */,
 				489E6E08B47AA3AC9F140CAD /* SwiftSoup */,
 				BBBB2222BBBB2222BBBB0002 /* LNPopupUI-Static */,
@@ -480,6 +483,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				46935AA62F52E48600662F9D /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+				7C1FA00000000000000000A1 /* XCRemoteSwiftPackageReference "vlckit-spm" */,
 				AAAA1111AAAA1111AAAA0003 /* XCRemoteSwiftPackageReference "Nuke" */,
 				8A11B0E12F9A1C7300A1B001 /* XCRemoteSwiftPackageReference "Fuzi" */,
 				460274812F710D7500486947 /* XCRemoteSwiftPackageReference "swift-toolkit" */,
@@ -1201,6 +1205,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		7C1FA00000000000000000A1 /* XCRemoteSwiftPackageReference "vlckit-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tylerjonesio/vlckit-spm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.6.0;
+			};
+		};
 		4503FB56A177080D0D9E31E4 /* XCRemoteSwiftPackageReference "YueduCoreText" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/CHANG-JUI-LIN/YueduCoreText";
@@ -1268,6 +1280,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		7C1FA00000000000000000A2 /* VLCKitSPM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C1FA00000000000000000A1 /* XCRemoteSwiftPackageReference "vlckit-spm" */;
+			productName = VLCKitSPM;
+		};
 		3D3ACA9A6DDE978E3B91280C /* YueduCoreTextTypography */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 4503FB56A177080D0D9E31E4 /* XCRemoteSwiftPackageReference "YueduCoreText" */;

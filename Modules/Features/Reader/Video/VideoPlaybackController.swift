@@ -51,6 +51,7 @@ final class VideoPlaybackController {
     private var loadTask: Task<Void, Never>?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
+    private var failureObserver: NSObjectProtocol?
     private var statusObservation: NSKeyValueObservation?
     private var sizeObservation: NSKeyValueObservation?
     private var timelineObservations: [NSKeyValueObservation] = []
@@ -60,6 +61,9 @@ final class VideoPlaybackController {
     /// refreshes a failed link once (`retryOnPlayError`), then reports the failure.
     private var refetchedChapter: Int?
     private var lastSavedTime: Double = 0
+    /// 断流自动重开：网络抖动导致这一集被 AVPlayer 结束，就等几秒在原位置重来。
+    private var dropRecovery = VideoDropRecovery()
+    private var recoveryTask: Task<Void, Never>?
     private var nowPlayingSession: MPNowPlayingSession?
     /// Not state the screen shows; set while the picture's layer is made.
     @ObservationIgnored private var pictureInPicture: AVPictureInPictureController?
@@ -118,12 +122,15 @@ final class VideoPlaybackController {
     func close() {
         saveProgress(force: true)
         loadTask?.cancel()
+        recoveryTask?.cancel()
         player.pause()
         player.replaceCurrentItem(with: nil)
         if let timeObserver { player.removeTimeObserver(timeObserver) }
         timeObserver = nil
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = nil
+        if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
+        failureObserver = nil
         statusObservation = nil
         sizeObservation = nil
         timelineObservations = []
@@ -150,6 +157,9 @@ final class VideoPlaybackController {
     func play(chapterIndex: Int, at time: Double = 0) {
         guard guide.route(containing: chapterIndex) != nil else { return }
         if chapterIndex != self.chapterIndex { saveProgress(force: true) }
+        // 换集是人主动做的，断流计数不该带到下一集。
+        recoveryTask?.cancel()
+        dropRecovery.reset()
         self.chapterIndex = chapterIndex
         if refetchedChapter != chapterIndex { refetchedChapter = nil }
         load(at: time)
@@ -274,6 +284,8 @@ final class VideoPlaybackController {
                 AppLogger.info("[Video] link failed to play; resolving it again", level: .notice)
                 VideoChapterLinks.discardResolvedLink(for: book, chapterIndex: chapterIndex, store: store)
                 load(at: currentTime)
+            } else if recoverIfDropped(player.currentItem?.error) {
+                // 连接断了，已经在重开，错误先不显示给人看。
             } else {
                 AppLogger.info("[Video] episode failed to play: \(error ?? "-")", level: .error)
                 phase = .failed(error ?? localized("无法播放这一集"))
@@ -363,6 +375,35 @@ final class VideoPlaybackController {
                 self.episodeEnded()
             }
         }
+        // 连接断掉时 AVPlayer 结束这一集的回调。它和 `.failed` 都会来，先到的那个
+        // 触发重开，另一个看到 phase 已经变了就不再动作。
+        failureObserver = NotificationCenter.default.addObserver(
+            forName: AVPlayerItem.failedToPlayToEndTimeNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            let item = notification.object as? AVPlayerItem
+            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            MainActor.assumeIsolated {
+                guard let self, item != nil, item === self.player.currentItem else { return }
+                self.recoverIfDropped(error)
+            }
+        }
+    }
+
+    /// 连接类错误：按 1s/3s/8s 在原位置重开。真正的失败（403、解码不了）仍然报错。
+    @discardableResult
+    private func recoverIfDropped(_ error: Error?) -> Bool {
+        guard phase == .playing || phase == .loading else { return false }
+        guard let delay = dropRecovery.delay(after: error, position: currentTime) else { return false }
+        AppLogger.info("[Video] 连接中断，\(delay) 后在原位置重开", level: .notice)
+        phase = .loading
+        recoveryTask?.cancel()
+        let resumeAt = currentTime
+        recoveryTask = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard !Task.isCancelled, let self else { return }
+            self.load(at: resumeAt)
+        }
+        return true
     }
 
     private func timeAdvanced(_ seconds: Double) {
