@@ -300,6 +300,11 @@ export async function runCatVod(bundlePath, options = {}) {
   // regex-based patch only matched one specific minified shape and failed on
   // every real-world bundle.
   let loopbackServer;
+  // 插件会按「自己请求的端口」拼播放地址（`…:9979/play?vid=…`），也会用局域网
+  // IP 拼；而宿主为了不撞车把它绑到临时端口。地址交出去就是 connection
+  // refused——源是好的，端口是旧的。tvbox-silicon 的做法是把回答里所有这类
+  // 地址改写成本次真正监听的端口，这里照做，并把请求过的端口记下来。
+  const requestedPorts = new Set();
   globalThis.catServerFactory = (handler) => {
     // Every request that reaches the bundle's own server counts as activity:
     // providers answer `player` with a URL on this very server (their
@@ -312,8 +317,13 @@ export async function runCatVod(bundlePath, options = {}) {
     };
     loopbackServer = http.createServer(served);
     const originalListen = loopbackServer.listen.bind(loopbackServer);
-    loopbackServer.listen = (...args) =>
-      originalListen(0, "127.0.0.1", args.find((arg) => typeof arg === "function"));
+    loopbackServer.listen = (...args) => {
+      const first = args[0];
+      const wanted = typeof first === "number" ? first
+        : first && typeof first === "object" ? Number(first.port) : 0;
+      if (Number.isInteger(wanted) && wanted > 0 && wanted < 65536) requestedPorts.add(wanted);
+      return originalListen(0, "127.0.0.1", args.find((arg) => typeof arg === "function"));
+    };
     return loopbackServer;
   };
 
@@ -360,6 +370,35 @@ export async function runCatVod(bundlePath, options = {}) {
   }
   const port = loopbackServer.address().port;
   const initialized = new Map();
+
+  /// 把 bundle 回答里指向「它自己的服务」的地址，统一改成这次真正监听的端口。
+  ///
+  /// 插件不知道宿主给了它哪个端口：它按 9979、按上一次的端口、或按局域网 IP
+  /// 拼地址，直接交给播放器就是连不上（红果那条「播放代理已断开」）。只改
+  /// 主机是 IP/localhost 且端口在本次集合里的地址，外部 CDN 一律不碰。
+  function rewriteLoopback(value) {
+    // 9978/9979 是 TVBox/FongMi 生态里宿主代理解析器的固定端口，插件把它写成
+    // 常量（`H$ = "http://127.0.0.1:9979"`），并不会自己去 listen。我们进程里
+    // 不可能占用这两个端口，所以一并改写成本次真实端口是安全的。
+    const ports = [...new Set([...requestedPorts, port, 9978, 9979]
+      .filter((item) => Number.isInteger(item) && item > 0))];
+    if (ports.length === 0) return value;
+    const pattern = new RegExp(
+      `http://(?:[0-9]{1,3}(?:\\.[0-9]{1,3}){3}|localhost):(?:${ports.join("|")})(?=[/?#"']|$)`,
+      "g");
+    const walk = (node, depth = 0) => {
+      if (depth > 8) return node;
+      if (typeof node === "string") return node.replace(pattern, `http://127.0.0.1:${port}`);
+      if (Array.isArray(node)) return node.map((item) => walk(item, depth + 1));
+      if (node && typeof node === "object") {
+        const out = {};
+        for (const [key, item] of Object.entries(node)) out[key] = walk(item, depth + 1);
+        return out;
+      }
+      return node;
+    };
+    return walk(value);
+  }
 
   // Netdisk sources list their files only with a signed-in account. The host owns
   // the credentials and hands each drive to the bundle at the routes the CatVod
@@ -526,7 +565,14 @@ export async function runCatVod(bundlePath, options = {}) {
       // 玩偶/花卷/原盘 family). Treat only other failures as fatal.
       const initBase = siteBasePath(site.api);
       if (initBase) {
-        await inject("post", `${initBase}/init`, { ext: site.ext || "" })
+        // `bridge` 是插件拼播放地址时用的「宿主本地服务地址」。不传，它就退回
+        // 硬编码的 `http://127.0.0.1:9979`（TVBox/FongMi 的固定端口），而我们
+        // 绑定的是临时端口 —— 播放器连过去就是 connection refused，界面上写成
+        // 「播放代理已断开」。Y佬红果那条就是这个原因。
+        await inject("post", `${initBase}/init`, {
+          ext: site.ext || "",
+          bridge: `http://127.0.0.1:${port}`
+        })
           .catch((error) => { if (error.status !== 404) throw error; });
       }
       initialized.set(site.api, initKey);
@@ -552,9 +598,10 @@ export async function runCatVod(bundlePath, options = {}) {
         flag: String(message.arguments?.flag || known?.flag || "")
       };
     }
-    return message.action === "player"
+    const answer = message.action === "player"
       ? await resolvePlayerResult(site, result, message.arguments.id)
       : result;
+    return rewriteLoopback(answer);
   }
 
   const lines = readline.createInterface({ input: options.input || process.stdin, crlfDelay: Infinity });

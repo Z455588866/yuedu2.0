@@ -85,9 +85,42 @@ function isSharePage(url) {
   return !/\.(m3u8|mp4|mkv|flv|ts)(\?|$)/i.test(parsed.pathname);
 }
 
+/// 插件自己的媒体代理地址里，`pst` 参数是 base64url 的 `{url, headers}`：真实
+/// 网盘直链和它需要的请求头。影匣（tvbox-silicon）靠它把 4K 文件的字节从 Node
+/// 里挪出来——Node 只负责登录和解析，字节由播放器直连 CDN，否则中转会把手机上
+/// 的 Node 堆撑爆（它的 #530）。
+export function revealedLink(raw) {
+  let parsed;
+  try { parsed = new URL(raw); } catch { return null; }
+  if (!["127.0.0.1", "localhost"].includes(parsed.hostname)) return null;
+  if (!/^\/spider\/[^/]+\/[^/]+\/proxy\//.test(parsed.pathname)) return null;
+  const value = parsed.searchParams.get("pst");
+  if (!value) return null;
+  let base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  base64 += "=".repeat((4 - (base64.length % 4)) % 4);
+  try {
+    const payload = JSON.parse(Buffer.from(base64, "base64").toString("utf8"));
+    const url = String(payload?.url || "");
+    if (!/^https?:\/\//i.test(url)) return null;
+    const header = {};
+    for (const [name, item] of Object.entries(payload?.headers || {})) {
+      if (typeof item === "string" && item) header[name] = item;
+    }
+    return { url, header };
+  } catch {
+    return null;
+  }
+}
+
 /// 从 episode 描述里挑一条可播地址。返回 null 表示这条 id 里没有直链。
 export function directPlaybackFromEpisode(episode) {
   const candidates = collectStrings(episode);
+  // 先看有没有「代理地址里藏着真实直链」的：能直连就不必让 Node 中转。
+  for (const raw of candidates) {
+    if (!/^https?:\/\//i.test(raw)) continue;
+    const revealed = revealedLink(raw);
+    if (revealed) return { parse: 0, jx: 0, url: revealed.url, header: revealed.header };
+  }
   for (const raw of candidates) {
     if (!/^https?:\/\//i.test(raw)) continue;
     if (isSharePage(raw)) continue;
