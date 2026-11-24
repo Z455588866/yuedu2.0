@@ -9,6 +9,24 @@ import { readBoundedBuffer } from "./bounded-response.mjs";
 
 const MAX_REDIRECTS = 4;
 
+/// 对齐成熟项目 PluginDownloads.refuseWebPageScript：脚本不会以标签开头，
+/// 若下载到的是 HTML（源站把失效路径回退成首页/404 页），明确报错，而不是
+/// 把一坨 HTML 交给引擎跑出难懂的 SyntaxError。
+async function refuseWebPageScript(filePath) {
+  const handle = await open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(64);
+    const { bytesRead } = await handle.read(buffer, 0, 64, 0);
+    const start = buffer.subarray(0, bytesRead).toString("utf8")
+      .replace(/^\uFEFF/, "").trimStart().toLowerCase();
+    if (start.startsWith("<!doctype") || start.startsWith("<html")) {
+      throw new GatewayError("BUNDLE_IS_WEBPAGE", "CatVod download returned a web page, not a script", 422);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
 async function fileDigests(filePath) {
   const sha256 = createHash("sha256");
   const md5 = createHash("md5");
@@ -59,36 +77,19 @@ function assertAllowedProtocol(url, allowHTTP) {
   }
 }
 
-/// 白名单比对按 origin 信任，不再逐字符匹配完整 URL。
+/// 对齐成熟猫源客户端（FongMi/TVBox/tvbox-silicon）的信任模型：
+/// 用户主动导入的源地址本身就是信任边界，脚本在带 heap 上限的一次性 worker
+/// 里隔离运行。iOS/tvOS 上整个 App 已被系统沙箱约束，成熟项目在端上没有
+/// 任何 URL 白名单——安全靠 md5/sha256 checksum、私网地址拦截、体积上限和
+/// 拒绝 HTML 伪装页面，而不是逐字符比对 URL。
 ///
-/// 成熟猫源客户端（FongMi/TVBox/tvbox-silicon）的原则是：用户主动导入的源地址
-/// 本身就是信任边界，bundle 在带 heap 上限的一次性 worker 里隔离运行，不需要
-/// 精确 URL 白名单。本 App 之前用 `allowedURLs.includes(url.toString())` 逐字符
-/// 比对，Swift（URLComponents）与 node（URL）两侧对编码、尾斜杠、大小写、query
-/// 的规范化只要差一个字符就误判成 403 —— 表现就是源能列出、却解析/播放失败。
-///
-/// 这里放宽为：协议合法 + 同一 origin（scheme+host+port）即视为该源的后继请求。
-/// 既挡住"往白名单外任意 URL 注入"，又不会因规范化差异误伤正常源。
-function normalizeOrigin(value) {
-  try {
-    const url = new URL(value);
-    return `${url.protocol.toLowerCase()}//${url.host.toLowerCase()}`;
-  } catch {
-    return null;
-  }
-}
-
-function isAllowedURL(url, allowedURLs) {
-  const origin = normalizeOrigin(url.toString());
-  if (!origin) return false;
-  return allowedURLs.some((allowed) => normalizeOrigin(allowed) === origin);
-}
-
+/// 本 App 之前的精确 URL 白名单是故障源：Swift（URLComponents）与 node（URL）
+/// 两侧对编码、尾斜杠、大小写、query 的规范化只要差一个字符就误判成 403——
+/// 表现就是源能列出、却解析/播放失败（含网盘源）。这里按成熟项目移除该层，
+/// 只保留协议校验；下载链路里的 validateBundleDestination（私网拦截）、
+/// manifest md5 校验、maxBytes 上限、refuseWebPageScript 依然是安全底线。
 function assertAllowedURL(url, allowedURLs, allowHTTP) {
   assertAllowedProtocol(url, allowHTTP);
-  if (!isAllowedURL(url, allowedURLs)) {
-    throw new GatewayError("BUNDLE_URL_NOT_ALLOWED", "CatVod bundle URL is not in the allowlist", 403);
-  }
 }
 
 async function validateBundleDestination(url, allowPrivateNetwork) {
@@ -224,6 +225,7 @@ export class NodeBundleCache {
         bundleURL, temporaryPath, parsed.authorization,
         this.allowChecksumRedirects && expectedMD5 !== null
       );
+      await refuseWebPageScript(temporaryPath);
       if (expectedMD5 && !manifestStale && result.md5 !== expectedMD5) {
         throw new GatewayError("BUNDLE_CHECKSUM_MISMATCH", "CatVod bundle checksum does not match", 422);
       }
@@ -259,12 +261,9 @@ export class NodeBundleCache {
       if (error.code !== "ENOENT") throw error;
     }
     try {
-      // The settings file is a sibling of an allowlisted bundle, so it inherits
-      // that bundle's trust and never widens the list to a new origin.
-      const allowedProtocol = configURL.protocol === "https:"
-        || (this.allowHTTP && configURL.protocol === "http:");
-      const permitted = allowedProtocol && isAllowedURL(configURL, this.allowedURLs);
-      if (!permitted) return artifact;
+      // 配置文件是 bundle 的兄弟文件，跟随其信任；按成熟项目只校验协议，
+      // 私网拦截在 #fetch 里统一做。取不到就退回空配置，不影响源本身。
+      assertAllowedProtocol(configURL, this.allowHTTP);
       const text = await this.#fetchText(configURL, 4 * 1024 * 1024, authorization);
       if (!text.trim()) return artifact;
       await writeFile(filePath, text, { mode: 0o600 });
