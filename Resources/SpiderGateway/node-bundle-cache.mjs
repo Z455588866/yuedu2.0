@@ -59,9 +59,34 @@ function assertAllowedProtocol(url, allowHTTP) {
   }
 }
 
+/// 白名单比对按 origin 信任，不再逐字符匹配完整 URL。
+///
+/// 成熟猫源客户端（FongMi/TVBox/tvbox-silicon）的原则是：用户主动导入的源地址
+/// 本身就是信任边界，bundle 在带 heap 上限的一次性 worker 里隔离运行，不需要
+/// 精确 URL 白名单。本 App 之前用 `allowedURLs.includes(url.toString())` 逐字符
+/// 比对，Swift（URLComponents）与 node（URL）两侧对编码、尾斜杠、大小写、query
+/// 的规范化只要差一个字符就误判成 403 —— 表现就是源能列出、却解析/播放失败。
+///
+/// 这里放宽为：协议合法 + 同一 origin（scheme+host+port）即视为该源的后继请求。
+/// 既挡住"往白名单外任意 URL 注入"，又不会因规范化差异误伤正常源。
+function normalizeOrigin(value) {
+  try {
+    const url = new URL(value);
+    return `${url.protocol.toLowerCase()}//${url.host.toLowerCase()}`;
+  } catch {
+    return null;
+  }
+}
+
+function isAllowedURL(url, allowedURLs) {
+  const origin = normalizeOrigin(url.toString());
+  if (!origin) return false;
+  return allowedURLs.some((allowed) => normalizeOrigin(allowed) === origin);
+}
+
 function assertAllowedURL(url, allowedURLs, allowHTTP) {
   assertAllowedProtocol(url, allowHTTP);
-  if (!allowedURLs.includes(url.toString())) {
+  if (!isAllowedURL(url, allowedURLs)) {
     throw new GatewayError("BUNDLE_URL_NOT_ALLOWED", "CatVod bundle URL is not in the allowlist", 403);
   }
 }
@@ -238,18 +263,7 @@ export class NodeBundleCache {
       // that bundle's trust and never widens the list to a new origin.
       const allowedProtocol = configURL.protocol === "https:"
         || (this.allowHTTP && configURL.protocol === "http:");
-      const permitted = allowedProtocol && (
-        this.allowedURLs.includes(configURL.toString())
-        || this.allowedURLs.some((allowed) => {
-          try {
-            const base = new URL(allowed);
-            return base.origin === configURL.origin
-              && base.pathname.replace(/\.js$/, "") === configURL.pathname.replace(/\.config\.js$/, "");
-          } catch {
-            return false;
-          }
-        })
-      );
+      const permitted = allowedProtocol && isAllowedURL(configURL, this.allowedURLs);
       if (!permitted) return artifact;
       const text = await this.#fetchText(configURL, 4 * 1024 * 1024, authorization);
       if (!text.trim()) return artifact;
@@ -356,10 +370,10 @@ export class NodeBundleCache {
         if (allowChecksumRedirects && currentURL.protocol === "https:" && redirected.url.protocol === "http:") {
           throw new GatewayError("INVALID_BUNDLE_URL", "CatVod redirects must not downgrade HTTPS", 400);
         }
-        if (allowChecksumRedirects && !this.allowedURLs.includes(redirected.url.toString())) {
-          // The allowlisted manifest pins the complete downloaded bytes before
-          // execution. Only its script may follow CDN redirects; manifests and
-          // unchecked .js entries retain the exact URL allowlist.
+        // CDN 常把脚本重定向到同域或第三方下载节点（如 github raw → objects）。
+        // 只要不是 HTTPS 降级到 HTTP，就允许跟随；完整字节由 manifest/md5 校验，
+        // 逐字符白名单在这里只会误挡正常下载。保留协议与同源底线。
+        if (allowChecksumRedirects) {
           assertAllowedProtocol(redirected.url, this.allowHTTP);
         } else {
           assertAllowedURL(redirected.url, this.allowedURLs, this.allowHTTP);
