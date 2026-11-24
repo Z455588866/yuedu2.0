@@ -50,7 +50,10 @@ enum CatVodDiskCache {
     ///
     /// 只存 payload，不存 envelope：envelope 的 `savedAt` 只服务于 `maxAge`，
     /// 而目前没有调用方传 `maxAge`。真要用时走磁盘那条路即可，不会读错。
-    private static let memory: NSCache<NSString, NSData> = {
+    /// `NSCache` 自己是线程安全的（Apple 明确的 thread-safe 类），它没有标
+    /// `Sendable` 是历史原因。Swift 6 对 `static let` 做并发安全检查时会因此
+    /// 报错，这里用 `nonisolated(unsafe)` 显式承担这个保证。
+    nonisolated(unsafe) private static let memory: NSCache<NSString, NSData> = {
         let cache = NSCache<NSString, NSData>()
         cache.countLimit = 400
         cache.totalCostLimit = 24 * 1024 * 1024
