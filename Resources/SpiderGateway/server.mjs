@@ -60,6 +60,13 @@ async function pythonCatalog(config, bundle) {
 }
 
 /// 网关的入参名字和插件的名字不一样（tid/keyword/ids），在这里一次翻清楚。
+/// App 与网关之间用的动作名是 TVBox 的 `player`，而 Python 插件协议里叫 `play`
+/// （`playerContent`）。两个名字必须在这里对齐，否则 /py/<token>/player 会落到
+/// Python 侧的 else 分支，每个 .py 源播放都报「不认识的动作」。
+function pythonAction(action) {
+  return action === "player" ? "play" : action;
+}
+
 function pythonPayload(action, args) {
   switch (action) {
     case "home": return { filter: args.filter };
@@ -78,9 +85,10 @@ async function callPythonSite(config, invoke) {
       "这个源要 Python，但本机没有可用的 Python 运行时（需要重新构建安装包）", 503);
   }
   const token = invoke.site.key.slice(PYTHON_SITE_PREFIX.length);
+  const remote = pythonAction(invoke.action);
   let response;
   try {
-    response = await fetch(`${base}/py/${encodeURIComponent(token)}/${invoke.action}`, {
+    response = await fetch(`${base}/py/${encodeURIComponent(token)}/${remote}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(pythonPayload(invoke.action, invoke.arguments)),

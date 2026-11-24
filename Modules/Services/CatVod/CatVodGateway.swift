@@ -202,11 +202,14 @@ final class CatVodGateway {
     func playbackProxyURL(for url: URL, bundleURL: String, headers: [String: String]) -> URL? {
         let host = url.host?.lowercased() ?? ""
         let isLoopback = ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host)
-        // Python 源自己的 localProxy 就挂在内嵌 Python 服务的端口上，那个路径
-        // 属于 Python 进程，不是 JS bundle 的，转给网关只会 404。它本来就在本机、
-        // 自己会补 Referer/Cookie，原样交给播放器。
-        if isLoopback, let port = url.port, port == pythonSpiderPort, pythonSpiderPort > 0 {
-            return url
+        // 回环上不止网关一个服务：Python bridge 是一个端口，每个 .py 源还会
+        // 再起一个随机端口的 localProxy（`/py-proxy?do=py`）。只有网关自己的
+        // 端口才该走 /v1/media 转发，其余端口在网关里根本不存在，转过去只会
+        // 404——原样交给播放器。
+        if isLoopback, let port = url.port {
+            if pythonSpiderPort > 0, port == pythonSpiderPort { return url }
+            let gatewayPort = (baseURL ?? YueduNodeRuntime.listeningURL().flatMap(URL.init(string:)))?.port
+            if let gatewayPort, port != gatewayPort { return url }
         }
         guard let base = baseURL ?? YueduNodeRuntime.listeningURL().flatMap(URL.init(string:)) else {
             return nil

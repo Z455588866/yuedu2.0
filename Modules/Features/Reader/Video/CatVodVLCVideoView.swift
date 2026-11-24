@@ -119,7 +119,9 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         isPreparing = true
         pendingSeek = 0
         time = 0
-        player.stop()
+        // 不要先 stop()：libvlc 的 stop 是异步收尾，紧接着 setMedia 会被那次
+        // 收尾一起清掉，表现就是重播一片黑。ended 状态下直接换 media 再 play
+        // 才是 VLCKit 认的用法。
         player.media = makeMedia(url: url, headers: sourceHeaders)
         player.play()
     }
