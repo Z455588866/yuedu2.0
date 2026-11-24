@@ -53,6 +53,8 @@ class Registry:
         self.sessions = {}
         self.used = 0
         self.lock = threading.Lock()
+        # 记住扫描目录：App 里导入 .py 之后要重新扫，不能等到下次冷启动。
+        self.scan = scan
         for source in sources or []:
             self.add(source)
         for source in self.discover(scan):
@@ -87,13 +89,62 @@ class Registry:
         if not key or not api or len(key) > 200:
             return
         token = self.token(key)
+        try:
+            stamp = os.path.getmtime(api)
+        except OSError:
+            stamp = 0.0
         self.sources[token] = {
             "key": key,
             "token": token,
             "name": str(source.get("name") or key),
             "api": api,
             "ext": str(source.get("ext") or ""),
+            # 文件被同名覆盖时靠它识别，好丢掉旧会话重新加载。
+            "mtime": stamp,
         }
+
+    def refresh(self):
+        """重新扫描目录，返回扫描后的源总数。
+
+        App 里导入/删除 .py 之后调用：新增的立刻能用，删掉的不再出现，
+        同名文件被覆盖的丢掉旧会话（下次调用重新 import）。
+        """
+        found = self.discover(self.scan)
+        present = {}
+        for source in found:
+            key = str(source.get("key") or "").strip()
+            if not key:
+                continue
+            api = str(source.get("api") or "")
+            try:
+                stamp = os.path.getmtime(api)
+            except OSError:
+                stamp = 0.0
+            present[self.token(key)] = (source, stamp)
+
+        with self.lock:
+            for token, (source, stamp) in present.items():
+                previous = self.sources.get(token)
+                if previous is None:
+                    self.add(source)
+                    continue
+                if previous.get("mtime") != stamp:
+                    self._drop_session(token)
+                    previous["mtime"] = stamp
+            for token in [item for item in self.sources if item not in present]:
+                self._drop_session(token)
+                self.sources.pop(token, None)
+            return len(self.sources)
+
+    def _drop_session(self, token):
+        """关掉某个源的会话（持锁调用）。"""
+        entry = self.sessions.pop(token, None)
+        if not entry:
+            return
+        try:
+            entry["session"].close()
+        except Exception as error:  # noqa: BLE001 —— 关不掉也不该影响刷新
+            log("close failed", token, error)
 
     # —— 脚本落地：远程地址只下一次，按内容哈希存 ——
 
@@ -202,6 +253,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         split = urlsplit(self.path)
+        # App 里刚导入的 .py 要立刻出现，不必杀进程重开。
+        if split.path == "/v1/pyspider/reload":
+            try:
+                return self.send_json(200, {"ok": True, "count": self.registry.refresh()})
+            except Exception as error:  # noqa: BLE001
+                return self.send_json(500, {"error": str(error)})
         pieces = split.path.strip("/").split("/")
         if len(pieces) != 3 or pieces[0] != "py":
             return self.send_json(404, {"error": "not found"})

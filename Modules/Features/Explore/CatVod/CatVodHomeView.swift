@@ -145,6 +145,11 @@ struct CatVodHomeView: View {
                 Task { await loadCatalogAndHome() }
             }
         }
+        // .py 导入走这条：Python 源不进 `sources`，上面那个 onChange 不会触发，
+        // 但站点表里已经多了几个 `py-` 源，不重拉就还是「导入成功却看不到」。
+        .onChange(of: store.pythonRevision) { _, _ in
+            Task { await loadCatalogAndHome() }
+        }
         .sheet(item: $detailItem, onDismiss: {
             isLoadingDetail = false
             playingEpisodeID = nil

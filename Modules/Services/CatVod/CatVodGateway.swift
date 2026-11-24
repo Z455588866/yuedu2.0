@@ -115,6 +115,51 @@ final class CatVodGateway {
         }
     }
 
+    /// 把用户选中的 .py 拷进扫描目录，返回成功个数。
+    ///
+    /// 只做文件拷贝，不碰会话：解释器可能还没起来（`pythonSpiderPort == 0`），
+    /// 那种情况下文件先躺在那儿，等 `reloadPythonSources()` 或下次冷启动再扫。
+    func importPythonSources(from urls: [URL]) -> Int {
+        let fileManager = FileManager.default
+        try? fileManager.createDirectory(at: pythonSourcesDirectory, withIntermediateDirectories: true)
+        var copied = 0
+        for url in urls where url.pathExtension.lowercased() == "py" {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let target = pythonSourcesDirectory.appendingPathComponent(url.lastPathComponent)
+            do {
+                // 同名覆盖：先删再拷，避免 copyItem 遇到已存在文件直接失败。
+                if fileManager.fileExists(atPath: target.path) {
+                    try fileManager.removeItem(at: target)
+                }
+                try fileManager.copyItem(at: url, to: target)
+                copied += 1
+            } catch {
+                AppLogger.info("[CatVod] 导入 Python 源失败 \(url.lastPathComponent)：\(error)", level: .error)
+            }
+        }
+        return copied
+    }
+
+    /// 让 Python 运行时重扫目录，返回扫描后的源总数；`-1` 表示解释器还没起来。
+    ///
+    /// 有这个就不必让用户"导入完杀掉 App 重开"——那是最容易被当成导入失败的操作。
+    func reloadPythonSources() async -> Int {
+        guard pythonSpiderPort > 0 else { return -1 }
+        guard let url = URL(string: "http://127.0.0.1:\(pythonSpiderPort)/v1/pyspider/reload") else {
+            return -1
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let count = object["count"] as? Int else {
+            return -1
+        }
+        return count
+    }
+
     /// Pushes updated netdisk credentials into the already-running engine. The
     /// node side re-reads `bridge.configuration()` before every request, so this
     /// takes effect immediately without a restart. Safe to call before launch.

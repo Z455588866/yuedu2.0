@@ -141,7 +141,7 @@ struct CatVodSourceSettingsView: View {
                     }
                 }
             } footer: {
-                Text(localized("支持 .js.md5 / .js 接口地址，可整段粘贴带 # 注释的列表；每行一个地址。点猫源名称或右侧铅笔可改名。"))
+                Text(localized("支持 .js.md5 / .js 接口地址和 .py 脚本：地址可整段粘贴、每行一个（# 后写名字）；.py 从文件导入后立即生效。点猫源名称或右侧铅笔可改名。"))
                     .dsSectionFooter()
             }
 
@@ -178,10 +178,19 @@ struct CatVodSourceSettingsView: View {
             }
         }
         .themedAppSurface(for: .settings)
-        .fileImporter(isPresented: $showsImporter, allowedContentTypes: [.plainText, .json]) { result in
-            guard let url = try? result.get(), url.startAccessingSecurityScopedResource() else { return }
-            defer { url.stopAccessingSecurityScopedResource() }
-            if let data = try? Data(contentsOf: url) { applyImport(data) }
+        .fileImporter(isPresented: $showsImporter,
+                      allowedContentTypes: [.plainText, .json, .sourceCode],
+                      allowsMultipleSelection: true) { result in
+            guard case let .success(urls) = result, !urls.isEmpty else { return }
+            // .js 接口是一个文本文件，进 store；.py 是脚本，落点是
+            // Documents/PythonSources，由内嵌解释器扫描，两条路不能混。
+            let scripts = urls.filter { $0.pathExtension.lowercased() == "py" }
+            if !scripts.isEmpty { importPython(scripts) }
+            if let textURL = urls.first(where: { $0.pathExtension.lowercased() != "py" }) {
+                guard textURL.startAccessingSecurityScopedResource() else { return }
+                defer { textURL.stopAccessingSecurityScopedResource() }
+                if let data = try? Data(contentsOf: textURL) { applyImport(data) }
+            }
         }
         .sheet(isPresented: $showsPaste) { pasteSheet }
         .alert(localized("重命名猫源"), isPresented: Binding(
@@ -197,6 +206,28 @@ struct CatVodSourceSettingsView: View {
                 }
                 rows = store.sources
                 renamingSource = nil
+            }
+        }
+    }
+
+    /// .py 走内嵌 Python 运行时：拷进 Documents/PythonSources，再让运行时重扫。
+    /// 它们不进 `store`（那存的是 .js 接口地址），所以不能按导入接口那条路处理。
+    @MainActor
+    private func importPython(_ urls: [URL]) {
+        let copied = CatVodGateway.shared.importPythonSources(from: urls)
+        guard copied > 0 else {
+            importMessage = localized("没有读到可用的 .py 文件")
+            return
+        }
+        Task { @MainActor in
+            let total = await CatVodGateway.shared.reloadPythonSources()
+            store.notePythonSourcesChanged()
+            // Python 源不在这张列表里（它存的是 .js 接口地址），所以必须说清去哪儿看，
+            // 否则「导入成功、列表没变」会被当成没生效。
+            if total >= 0 {
+                importMessage = String(format: localized("已导入 %d 个 Python 源（共 %d 个），在「影视」页的源列表里可以看到。"), copied, total)
+            } else {
+                importMessage = String(format: localized("已导入 %d 个 Python 源，重启 App 后生效。"), copied)
             }
         }
     }

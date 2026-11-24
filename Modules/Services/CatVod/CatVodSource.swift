@@ -139,6 +139,14 @@ final class CatVodSourceStore: ObservableObject {
 
     @Published private(set) var sources: [CatVodSource]
 
+    /// Python 源是运行时扫目录得来的，不在 `sources` 里。导入 .py 之后把它 +1，
+    /// 界面据此重拉一次站点表——否则表现是「导入成功，回到影视页什么都没有」。
+    @Published private(set) var pythonRevision = 0
+
+    func notePythonSourcesChanged() {
+        pythonRevision += 1
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
