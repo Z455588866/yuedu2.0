@@ -192,12 +192,12 @@ struct AppearancePageBackgroundView: View {
         Binding(
             get: {
                 let config = settings.pageBackgroundConfig(for: pageBackgroundScope)
-                let stored = config.imageOpacity(for: scheme)
-                if stored != 1.0 { return stored }
+                let raw: Double? = scheme == .dark ? config.darkImageOpacity : config.lightImageOpacity
+                if let raw { return raw }
                 if pageBackgroundScope != .global {
                     let globalConfig = settings.pageBackgroundConfig(for: .global)
-                    let globalStored = globalConfig.imageOpacity(for: scheme)
-                    if globalStored != 1.0 { return globalStored }
+                    let globalRaw: Double? = scheme == .dark ? globalConfig.darkImageOpacity : globalConfig.lightImageOpacity
+                    if let globalRaw { return globalRaw }
                 }
                 return 1.0
             },

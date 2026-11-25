@@ -797,6 +797,7 @@ struct VideoDetailView: View {
     private func addToShelf() {
         guard !alreadyInShelf, !addingToShelf, !chapters.isEmpty, let source else { return }
         addingToShelf = true
+        let requestBook = currentBook
         let copy = ShelfWorkService.OnlineCopy(
             name: displayName,
             author: displayAuthor,
@@ -811,11 +812,13 @@ struct VideoDetailView: View {
             defer { addingToShelf = false }
             do {
                 let outcome = try await ShelfWorkService(store: bookStore, dependencies: dependencies).add(copy)
+                guard isCurrentRequest(requestBook) else { return }
                 addedBookId = outcome.book.id
                 alreadyInShelf = true
                 if case .alreadyOnShelf = outcome { return }
                 SourceCallBackService.notify(.addBookShelf, book: outcome.book)
             } catch {
+                guard isCurrentRequest(requestBook) else { return }
                 AppLogger.error("[Video] shelf add failed", error: error, context: ["book": currentBook.bookUrl])
                 loadError = error.localizedDescription
             }

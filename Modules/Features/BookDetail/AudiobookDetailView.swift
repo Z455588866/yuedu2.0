@@ -758,6 +758,7 @@ struct AudiobookDetailView: View {
     private func addToShelfOnly() {
         guard !alreadyInShelf, !addingToShelf, !chapters.isEmpty, let source else { return }
         addingToShelf = true
+        let requestBook = currentBook
         // One book per work: an audiobook already on the shelf from another source switches to
         // this one rather than being added twice (`ShelfWorkService`).
         let copy = ShelfWorkService.OnlineCopy(
@@ -774,12 +775,14 @@ struct AudiobookDetailView: View {
             defer { addingToShelf = false }
             do {
                 let outcome = try await ShelfWorkService(store: bookStore, dependencies: dependencies).add(copy)
+                guard isCurrentRequest(requestBook) else { return }
                 addedBookId = outcome.book.id
                 activePlayerBookId = outcome.book.id
                 alreadyInShelf = true
                 if case .alreadyOnShelf = outcome { return }
                 SourceCallBackService.notify(.addBookShelf, book: outcome.book)
             } catch {
+                guard isCurrentRequest(requestBook) else { return }
                 loadError = error.localizedDescription
             }
         }
@@ -834,9 +837,10 @@ struct AudiobookDetailView: View {
                 chapters: chapters,
                 runtimeVariables: runtimeVars
             )
-            bookStore.updateAudioPosition(
-                bookId: existing, chapter: chapterIndex, time: 0,
-                totalChapters: chapters.count, forceSave: true)
+            let saved = bookStore.shelfRecord(id: existing)
+            let time = saved?.audioChapterIndex == chapterIndex ? saved?.audioTimeSeconds ?? 0 : 0
+            bookStore.updateAudioPosition(bookId: existing, chapter: chapterIndex, time: time,
+                                          totalChapters: chapters.count, forceSave: true)
             preparePlayerCoverFallback(bookId: existing, source: source)
             activePlayerBookId = existing
             openingPlayer = false
