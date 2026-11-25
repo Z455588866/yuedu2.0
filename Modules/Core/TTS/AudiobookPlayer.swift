@@ -380,12 +380,17 @@ final class AudiobookPlayer: NSObject, ObservableObject {
         }
 
         let shouldAutoplay = isPlaying || error != nil
+        let previousChapterIndex = chapterIndex
         chapters = updatedChapters
         loadedRuntimeVariables = book.runtimeVariables
         if !chapters.indices.contains(chapterIndex) {
             chapterIndex = min(max(0, book.audioChapterIndex), max(0, chapters.count - 1))
         }
-        pendingResumeTime = max(0, book.audioTimeSeconds)
+        // A TOC refresh during playback used to resume from `audioTimeSeconds`, the
+        // throttled write from up to ten seconds earlier — the playhead jumped back.
+        // When this chapter is still playing, its in-memory playhead is authoritative.
+        let resumesLiveChapter = isPlaying && chapterIndex == previousChapterIndex && currentTime.isFinite
+        pendingResumeTime = resumesLiveChapter ? max(0, currentTime) : max(0, book.audioTimeSeconds)
         currentTime = 0
         duration = 0
         audiobookLog("start: refreshed active book=\(book.title) chapters=\(chapters.count)")
@@ -1486,6 +1491,7 @@ final class AudiobookPlayer: NSObject, ObservableObject {
             chapter: chapterIndex,
             time: currentTime,
             totalChapters: chapters.count,
+            chapterProgress: duration > 0 ? currentTime / duration : nil,
             forceSave: force
         )
         // legado `AudioPlay` sends the source `saveRead` from its own progress save.

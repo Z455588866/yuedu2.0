@@ -156,12 +156,21 @@ final class VideoPlaybackController {
 
     func play(chapterIndex: Int, at time: Double = 0) {
         guard guide.route(containing: chapterIndex) != nil else { return }
-        if chapterIndex != self.chapterIndex { saveProgress(force: true) }
+        let switchingEpisode = chapterIndex != self.chapterIndex
+        if switchingEpisode { saveProgress(force: true) }
         // 换集是人主动做的，断流计数不该带到下一集。
         recoveryTask?.cancel()
         dropRecovery.reset()
         self.chapterIndex = chapterIndex
         if refetchedChapter != chapterIndex { refetchedChapter = nil }
+        if switchingEpisode {
+            // The save above wrote the outgoing episode's tail. Commit the incoming
+            // episode's opening position immediately: the five-second throttle would
+            // otherwise leave the old 集=片尾 position on disk until the new one has
+            // played that long, so quitting early reopened at the wrong place.
+            currentTime = time
+            saveProgress(force: true, chapterProgress: 0)
+        }
         load(at: time)
     }
 
@@ -424,7 +433,7 @@ final class VideoPlaybackController {
 
     // MARK: Progress
 
-    func saveProgress(force: Bool) {
+    func saveProgress(force: Bool, chapterProgress: Double? = nil) {
         lastSavedTime = currentTime
         book.audioChapterIndex = chapterIndex
         book.audioTimeSeconds = currentTime
@@ -435,9 +444,14 @@ final class VideoPlaybackController {
         case .book(_, persists: false):
             return
         case .book(let store, persists: true):
+            // The player knows this episode's duration; the shelf's progress fraction
+            // should move inside a chapter too. On a live stream (duration 0) pass nil
+            // and keep the chapter-count behaviour.
+            let fraction: Double? = chapterProgress ?? (duration > 0 ? currentTime / duration : nil)
             store.updateAudioPosition(
                 bookId: book.id, chapter: chapterIndex, time: currentTime,
-                totalChapters: book.onlineChapters?.count ?? 0, forceSave: force
+                totalChapters: book.onlineChapters?.count ?? 0,
+                chapterProgress: fraction, forceSave: force
             )
         }
     }

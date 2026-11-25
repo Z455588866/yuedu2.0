@@ -161,11 +161,33 @@ struct ReadingStatsSessionTracker {
 
 // MARK: - ReadingStatsStore
 
+/// File-scope so the nonisolated `Codable` decoder below can bound an old or
+/// hand-edited goal without crossing into the store's MainActor isolation.
+private func boundedReadingGoal(_ minutes: Int) -> Int {
+    min(ReadingStatsStore.maximumDailyGoalMinutes,
+        max(ReadingStatsStore.minimumDailyGoalMinutes, minutes))
+}
+
 @MainActor
 class ReadingStatsStore: ObservableObject {
     static let shared = ReadingStatsStore()
 
     @Published var sessions: [ReadingSession] = []
+
+    // MARK: - Daily goal & streak
+
+    /// Reader-settable daily target, in whole minutes. The bounds keep a mistyped
+    /// value from making the goal impossible or the progress bar meaningless.
+    static let minimumDailyGoalMinutes = 5
+    static let maximumDailyGoalMinutes = 240
+    static let defaultDailyGoalMinutes = 30
+
+    @Published var dailyGoalMinutes: Int = ReadingStatsStore.defaultDailyGoalMinutes {
+        didSet {
+            let bounded = boundedReadingGoal(dailyGoalMinutes)
+            if bounded != dailyGoalMinutes { dailyGoalMinutes = bounded }
+        }
+    }
 
     private static let defaultFileURL: URL = {
         let lib = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
@@ -203,8 +225,11 @@ class ReadingStatsStore: ObservableObject {
         recordSession(session)
     }
 
+    /// Sessions starting in the half-open interval `[from, to)`. The upper bound is
+    /// exclusive so a session at exactly `00:00:00` belongs to the next day only,
+    /// never to both — `readingMinutes(on:)` passes the following day's start as `to`.
     func sessionsInRange(from: Date, to: Date) -> [ReadingSession] {
-        sessions.filter { $0.startDate >= from && $0.startDate <= to }
+        sessions.filter { $0.startDate >= from && $0.startDate < to }
     }
 
     func totalDuration(in sessions: [ReadingSession]) -> TimeInterval {
@@ -226,18 +251,111 @@ class ReadingStatsStore: ObservableObject {
             .map { (bookTitle: $0.key, duration: $0.value) }
     }
 
+    /// Persists a new daily target alongside the sessions. Local file only.
+    func setDailyGoalMinutes(_ minutes: Int) {
+        let bounded = boundedReadingGoal(minutes)
+        guard bounded != dailyGoalMinutes else { return }
+        dailyGoalMinutes = bounded
+        save()
+    }
+
+    /// Whole minutes read on `date` in the device's current calendar.
+    func readingMinutes(on date: Date = Date(), calendar: Calendar = .current) -> Int {
+        let start = calendar.startOfDay(for: date)
+        let end = calendar.date(byAdding: .day, value: 1, to: start)
+            ?? start.addingTimeInterval(24 * 60 * 60)
+        let seconds = sessionsInRange(from: start, to: end).reduce(0) { $0 + $1.duration }
+        return seconds.isFinite ? max(0, Int(seconds / 60)) : 0
+    }
+
+    /// Consecutive days with at least one recorded session, ending today — or,
+    /// before today's first session, yesterday. A day without reading breaks it.
+    func currentStreakDays(now: Date = Date(), calendar: Calendar = .current) -> Int {
+        var activeDays = Set<Date>()
+        for session in sessions where session.duration > 0 {
+            activeDays.insert(calendar.startOfDay(for: session.startDate))
+        }
+        guard !activeDays.isEmpty else { return 0 }
+
+        var cursor = calendar.startOfDay(for: now)
+        if !activeDays.contains(cursor) {
+            guard let yesterday = calendar.date(byAdding: .day, value: -1, to: cursor),
+                  activeDays.contains(yesterday) else { return 0 }
+            cursor = yesterday
+        }
+        var streak = 0
+        while activeDays.contains(cursor) {
+            streak += 1
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor),
+                  previous < cursor else { break }
+            cursor = previous
+        }
+        return streak
+    }
+
     // MARK: - Persistence
 
+    /// One local file holds sessions and the reader's target. Files written by older
+    /// builds are a bare `[ReadingSession]` array and are still accepted below.
+    private struct ReadingStatsFile: Codable {
+        var sessions: [ReadingSession] = []
+        var dailyGoalMinutes: Int = ReadingStatsStore.defaultDailyGoalMinutes
+
+        private enum CodingKeys: String, CodingKey {
+            case sessions, dailyGoalMinutes
+        }
+
+        init(sessions: [ReadingSession], dailyGoalMinutes: Int) {
+            self.sessions = sessions
+            self.dailyGoalMinutes = boundedReadingGoal(dailyGoalMinutes)
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            sessions = try values.decodeIfPresent([ReadingSession].self, forKey: .sessions) ?? []
+            dailyGoalMinutes = boundedReadingGoal(
+                try values.decodeIfPresent(Int.self, forKey: .dailyGoalMinutes)
+                    ?? ReadingStatsStore.defaultDailyGoalMinutes
+            )
+        }
+    }
+
     private func load() {
-        guard FileManager.default.fileExists(atPath: fileURL.path),
-              let data = try? Data(contentsOf: fileURL),
-              let decoded = try? JSONDecoder().decode([ReadingSession].self, from: data)
-        else { return }
-        sessions = decoded
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        do {
+            let data = try Data(contentsOf: fileURL)
+            do {
+                let file = try JSONDecoder().decode(ReadingStatsFile.self, from: data)
+                sessions = file.sessions
+                dailyGoalMinutes = file.dailyGoalMinutes
+            } catch {
+                // Legacy format: a bare array of sessions, written before the goal existed.
+                sessions = try JSONDecoder().decode([ReadingSession].self, from: data)
+            }
+        } catch {
+            // A missing or damaged stats file must not interrupt reading, but the
+            // failure is no longer invisible in the exported diagnostic log.
+            AppLogger.error(
+                "[ReadingStats] 读取统计失败",
+                error: error,
+                context: ["file": fileURL.lastPathComponent],
+                level: .error
+            )
+        }
     }
 
     private func save() {
-        guard let data = try? JSONEncoder().encode(sessions) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+        let file = ReadingStatsFile(sessions: sessions, dailyGoalMinutes: dailyGoalMinutes)
+        do {
+            let data = try JSONEncoder().encode(file)
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            AppLogger.error(
+                "[ReadingStats] 写入统计失败",
+                error: error,
+                context: ["file": fileURL.lastPathComponent],
+                level: .error
+            )
+        }
     }
 }

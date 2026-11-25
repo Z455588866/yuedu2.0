@@ -237,7 +237,9 @@ final class CatVodService {
         if playURL.isEmpty, items.count > 0 {
             var visited: Set<String> = [id]
             var candidates: [(order: Int, id: String)] = []
-            for (order, item) in items.prefix(3).enumerated() {
+            // 从用户点中的那一条起步。以前固定 `items.prefix(3)`，按片名命中第 4 条之后
+            // 的条目时会拿前面无关片子的线路去解析，选集全对不上。保持原始来源顺序。
+            for (order, item) in items.dropFirst(first.index).prefix(3).enumerated() {
                 guard let nextID = item["vod_id"] as? String, !nextID.isEmpty,
                       !visited.contains(nextID) else { continue }
                 visited.insert(nextID)
@@ -335,21 +337,23 @@ final class CatVodService {
     /// 三级匹配：`vod_id` 完全一致 → 片名一致 → 只有一条时就用它。都失败说明这是
     /// 片单/合集（一次返回整张片单），返回 nil 让上层走「合集」分支。
     private static func pickItem(_ items: [[String: Any]], requestedID: String,
-                                 expectedName: String?) -> (element: [String: Any], isFallbackForCollection: Bool)? {
-        if let exact = items.first(where: { item in
+                                 expectedName: String?) -> (element: [String: Any], index: Int, isFallbackForCollection: Bool)? {
+        if let exact = items.enumerated().first(where: { _, item in
             let raw = item["vod_id"]
             if let text = raw as? String { return text == requestedID }
             if let number = raw as? NSNumber { return number.stringValue == requestedID }
             return false
         }) {
-            return (exact, false)
+            return (exact.element, exact.offset, false)
         }
         if let name = expectedName.map(normalizeTitle) {
-            if let sameName = items.first(where: { normalizeTitle($0["vod_name"] as? String ?? "") == name }) {
-                return (sameName, false)
+            if let sameName = items.enumerated().first(where: { _, item in
+                normalizeTitle(item["vod_name"] as? String ?? "") == name
+            }) {
+                return (sameName.element, sameName.offset, false)
             }
         }
-        if items.count == 1, let only = items.first { return (only, false) }
+        if items.count == 1, let only = items.first { return (only, 0, false) }
         return nil
     }
 

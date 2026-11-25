@@ -359,6 +359,15 @@ extension ReaderView {
         }
     }
 
+    /// Releases the pipeline gate only while `generation` still owns it. A newer
+    /// `loadContent()` may have taken the gate while this load was in flight; its
+    /// completion must not clear that newer load's flag.
+    private func clearPipelineGateIfCurrent(_ generation: UInt64) {
+        guard generation == contentLoadGeneration else { return }
+        isLoadingPipeline = false
+        isRestoringPosition = false
+    }
+
     func loadContent() {
         // ⟐ infinite-loading probe: if reloads are being swallowed here, the
         // pipeline flag was left dangling by an earlier aborted load.
@@ -367,6 +376,8 @@ extension ReaderView {
             return
         }
         isLoadingPipeline = true
+        contentLoadGeneration &+= 1
+        let generation = contentLoadGeneration
         txtIndexReady = false
         showTXTIndexFailure = false
         // 重试 on 「无法开启书籍」 comes through here, back to the opening state.
@@ -403,7 +414,16 @@ extension ReaderView {
                         markdownText = try TXTFileReader.readTextFile(url: txtURL)
                     } catch {
                         Task { @MainActor in
-                            guard self.book?.id == targetBook.id else { return }
+                            guard self.book?.id == targetBook.id,
+                                  generation == self.contentLoadGeneration
+                            else {
+                                // The reader moved on, or a newer load took the gate, while
+                                // this read was in flight. Only release the flag if this
+                                // task still owns it — otherwise a fresh load's gate is
+                                // cleared out from under it.
+                                self.clearPipelineGateIfCurrent(generation)
+                                return
+                            }
                             self.applyDocument(nil)
                             self.isLoadingPipeline = false
                             self.isRestoringPosition = false
@@ -418,9 +438,10 @@ extension ReaderView {
                     let markdownChapters = markdownBuilder.unifiedChapters
 
                     Task { @MainActor in
-                        guard self.book?.id == targetBook.id else {
-                            self.isLoadingPipeline = false
-                            self.isRestoringPosition = false
+                        guard self.book?.id == targetBook.id,
+                              generation == self.contentLoadGeneration
+                        else {
+                            self.clearPipelineGateIfCurrent(generation)
                             return
                         }
 
@@ -470,9 +491,10 @@ extension ReaderView {
                         )
                     }.value
 
-                    guard self.book?.id == targetBook.id else {
-                        self.isLoadingPipeline = false
-                        self.isRestoringPosition = false
+                    guard self.book?.id == targetBook.id,
+                          generation == self.contentLoadGeneration
+                    else {
+                        self.clearPipelineGateIfCurrent(generation)
                         return
                     }
 
@@ -509,7 +531,14 @@ extension ReaderView {
                     )
                     let mappedChapterIndexes = completion.indexes
 
-                    guard self.book?.id == targetBook.id else { return }
+                    guard self.book?.id == targetBook.id,
+                          generation == self.contentLoadGeneration
+                    else {
+                        // Same stranded-flag case as the Markdown guards above, but a
+                        // stale load must release the gate only if no newer load owns it.
+                        self.clearPipelineGateIfCurrent(generation)
+                        return
+                    }
                     txtIndexReady = true
                     // Re-read the canonical migrated location before the final
                     // engine can restore/settle against the corrected index.
@@ -533,7 +562,12 @@ extension ReaderView {
                         settings: self.readerRenderSettings(for: self.activeReaderDisplayMode)
                     )
                 } catch {
-                    guard self.book?.id == targetBook.id else { return }
+                    guard self.book?.id == targetBook.id,
+                          generation == self.contentLoadGeneration
+                    else {
+                        self.clearPipelineGateIfCurrent(generation)
+                        return
+                    }
                     AppLogger.error("TXT reader preparation failed", error: error)
                     showTXTIndexFailure = true
                     setReaderChromeVisible(true)

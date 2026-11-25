@@ -381,6 +381,10 @@ struct ReaderView: View {
     @State var showSourceVariableEditor = false
     @State private var isApplyingCoreTextRestore = false
     @State var isLoadingPipeline = false
+    /// Bumped once per `loadContent()` so an in-flight load can tell whether it still
+    /// owns the single pipeline gate before releasing it on completion. Without this,
+    /// a stale task finishing after a newer load started would clear the newer load's flag.
+    @State var contentLoadGeneration: UInt64 = 0
     @State var txtIndexReady = false
     @State var showTXTIndexFailure = false
     /// Set when a local EPUB fails to open; cleared when the next load starts.

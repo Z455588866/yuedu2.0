@@ -52,6 +52,7 @@ struct ReadingStatsView: View {
                 ScrollView {
                     VStack(spacing: DSSpacing.lg) {
                         summarySection
+                        goalSection
                         barChartSection
                         topBooksSection
                     }
@@ -132,6 +133,55 @@ struct ReadingStatsView: View {
                 .foregroundColor(DSColor.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+        }
+        .padding(DSSpacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .interfaceCardSurface()
+        .clipShape(RoundedRectangle(cornerRadius: DSRadius.lg))
+    }
+
+    // MARK: - Goal & Streak Section
+
+    private var goalSection: some View {
+        let goal = store.dailyGoalMinutes
+        let today = store.readingMinutes(on: Date())
+        let progress = goal > 0 ? min(1, Double(today) / Double(goal)) : 0
+        let streak = store.currentStreakDays()
+
+        return VStack(alignment: .leading, spacing: DSSpacing.md) {
+            HStack(spacing: DSSpacing.xs) {
+                Image(systemName: "target")
+                    .foregroundColor(DSColor.accent)
+                    .font(DSFont.caption)
+                Text(localized("每日阅读目标"))
+                    .font(DSFont.caption)
+                    .foregroundColor(DSColor.textSecondary)
+                Spacer()
+                Text(String(format: localized("%d／%d 分钟"), today, goal))
+                    .font(DSFont.caption)
+                    .foregroundColor(DSColor.textSecondary)
+                    .monospacedDigit()
+            }
+            ProgressView(value: progress)
+                .tint(DSColor.accent)
+            HStack(spacing: DSSpacing.xs) {
+                Label(String(format: localized("连续打卡 %d 天"), streak), systemImage: "flame.fill")
+                    .font(DSFont.caption)
+                    .foregroundColor(DSColor.accent)
+                Spacer()
+                Stepper(
+                    value: Binding(
+                        get: { store.dailyGoalMinutes },
+                        set: { store.setDailyGoalMinutes($0) }
+                    ),
+                    in: ReadingStatsStore.minimumDailyGoalMinutes...ReadingStatsStore.maximumDailyGoalMinutes,
+                    step: 5
+                ) {
+                    Text(String(format: localized("目标 %d 分钟"), goal))
+                        .font(DSFont.caption)
+                        .foregroundColor(DSColor.textPrimary)
+                }
+            }
         }
         .padding(DSSpacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)

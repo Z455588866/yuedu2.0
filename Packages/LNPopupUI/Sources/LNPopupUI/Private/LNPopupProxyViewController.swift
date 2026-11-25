@@ -385,7 +385,18 @@ internal class LNPopupProxyViewController<Content, PopupContent> : UIHostingCont
 			
 			if newSmallState.isBarPresented == true {
 				target.popupBar.setValue(self, forKey: "_barLayoutDelegate")
-				let targetPresentationState: UIViewController.PopupPresentationState = UIViewController.PopupPresentationState(rawValue: target.value(forKeyPath: "ln_popupController.popupControllerTargetState") as! Int)!
+				// Private KVC path: an iOS change to this key must not crash the popup bar.
+				// Fall back to `.barHidden` deliberately: the vendored header defines
+				// barHidden = 0, barPresented = 1, open = 3, so raw 0 fails the
+				// `>= barPresented` test below and takes the `presentPopupBar` branch.
+				// That converges on the outer `isBarPresented == true` state. Using
+				// `.barPresented` here would instead take the open/close branch and leave
+				// a genuinely hidden bar hidden. Neither fallback can dismiss the bar:
+				// `dismissPopupBar` lives only in the outer `isBarPresented == false` branch.
+				let rawState = target.value(forKeyPath: "ln_popupController.popupControllerTargetState") as? Int
+					?? UIViewController.PopupPresentationState.barHidden.rawValue
+				let targetPresentationState = UIViewController.PopupPresentationState(rawValue: rawState)
+					?? .barHidden
 				
 				if targetPresentationState.rawValue >= UIViewController.PopupPresentationState.barPresented.rawValue {
 					if let isPopupOpen = newSmallState.isPopupOpen {

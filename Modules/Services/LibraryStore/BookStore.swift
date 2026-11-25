@@ -1028,13 +1028,32 @@ class BookStore: @MainActor ObservableObject, BookProvider {
         chapter: Int,
         time: Double,
         totalChapters: Int,
+        chapterProgress: Double? = nil,
         forceSave: Bool = false
     ) {
         applyPositionUpdate(bookId: bookId, force: forceSave) { book in
             book.audioChapterIndex = chapter
             book.audioTimeSeconds = max(0, time)
             if totalChapters > 0 {
-                book.currentPosition = min(1.0, Double(chapter) / Double(totalChapters))
+                // A chapter's elapsed time moves the shelf bar only when the chapter's
+                // length is known. The players pass their AVPlayer duration; a TOC that
+                // carries `audioDurationSeconds` covers callers that don't. With neither,
+                // keep the previous chapter-count fraction — inventing a length would
+                // change the progress semantics of every other book.
+                let within: Double?
+                if let chapterProgress, chapterProgress.isFinite {
+                    within = chapterProgress
+                } else if let refs = book.onlineChapters, refs.indices.contains(chapter),
+                          let seconds = refs[chapter].audioDurationSeconds,
+                          seconds.isFinite, seconds > 0 {
+                    within = max(0, time) / seconds
+                } else {
+                    within = nil
+                }
+                let fraction = within.map {
+                    (Double(chapter) + min(1, max(0, $0))) / Double(totalChapters)
+                } ?? Double(chapter) / Double(totalChapters)
+                book.currentPosition = min(1.0, max(0, fraction))
             }
         }
     }
