@@ -208,20 +208,6 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         isPlaying = player.isPlaying
     }
 
-    /// 元数据解析完才拿得到片源宽高。VLCKit 的已知行为：在 `.playing` 之前设的
-    /// `scaleFactor` / `videoAspectRatio` 常被忽略（首次播放尤其明显），
-    /// 所以要在这里再设一次。参数含义见 `open(url:headers:startAt:)` 里的注释。
-    nonisolated func mediaPlayer(_ player: VLCMediaPlayer, mediaDidParse media: VLCMedia) {
-        Task { @MainActor [weak self] in
-            guard let self, let current = self.player else { return }
-            current.scaleFactor = 0
-            // 元数据解析会重置 aspect，这里按当前档位重新应用一次。
-            self.applyAspectRatio(self.aspectOverride)
-            let size = current.videoSize
-            if size.width > 0, size.height > 0 { self.videoSize = size }
-        }
-    }
-
     nonisolated func mediaPlayerStateChanged(_ aNotification: Notification) {
         Task { @MainActor [weak self] in self?.stateChanged() }
     }
@@ -234,6 +220,13 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         case .playing:
             isPreparing = false
             isPlaying = true
+            // VLCKit 3.6 没有 mediaDidParse 回调（委托里只有 StateChanged / MediaChanged /
+            // TimeChanged 等），而 libvlc 在装载媒体时会把之前设的缩放参数重置掉。
+            // 社区通行做法就是在进入 playing 之后再设一次——首帧之前设的常被忽略。
+            player.scaleFactor = 0
+            applyAspectRatio(aspectOverride)
+            let size = player.videoSize
+            if size.width > 0, size.height > 0, size != videoSize { videoSize = size }
         case .paused:
             isPreparing = false
             isPlaying = false
