@@ -199,13 +199,33 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         if length.isFinite, length > 0 { duration = length }
         // 片源尺寸到手后弹幕/字幕才有参照；只在真的变了才发，避免每 500ms 触发重排。
         let size = player.videoSize
-        if size.width > 0, size.height > 0, size != videoSize { videoSize = size }
+        if size.width > 0, size.height > 0, size != videoSize {
+            videoSize = size
+            // 诊断：尺寸决定弹幕矩形和字号，首次解析到时打一条，便于定位「弹幕不显示」。
+            AppLogger.info("[CatVod][VLC] videoSize=\(Int(size.width))x\(Int(size.height)) t=\(Int(current))s state=\(String(describing: player.state))", level: .notice)
+        }
         if pendingSeek > 0, current > 0.5 {
             let target = pendingSeek
             pendingSeek = 0
             seek(to: target)
         }
-        isPlaying = player.isPlaying
+        // 照成熟项目 tvbox-Swift 的 refreshPlaybackFlags：部分源会长时间停留在
+        // opening/buffering 回调，但实际画面已经在渲染。state 回调单独决定
+        // isPreparing 会让转圈永远不消失（用户反馈「播着播着一直转圈」）。
+        // 用底层 player.isPlaying 兜底：真在出画面就按播放中处理，清掉转圈。
+        if player.isPlaying {
+            isPreparing = false
+            isPlaying = true
+        } else {
+            isPlaying = false
+            // 没在播、时间也没前进、又等过了首包，才确实还在缓冲。
+            switch player.state {
+            case .opening, .buffering:
+                isPreparing = true
+            default:
+                isPreparing = false
+            }
+        }
     }
 
     nonisolated func mediaPlayerStateChanged(_ aNotification: Notification) {
@@ -315,10 +335,15 @@ struct CatVodVLCVideoView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     // 弹幕压在画面上、控制条下面，且不接管触摸——否则点不到进度条。
                     if danmakuController.enabled, let track = danmakuController.track {
+                        // textScale 按画面比例缩放字号：横屏片源装在竖屏窗口里时会缩到
+                        // 4pt 以下，弹幕看着就像没显示。成熟播放器（弹弹play/DanmakuKit）
+                        // 的字号是有下限的固定像素值，不会随画面缩到读不出来。这里给个 0.6
+                        // 的下限，保证躺倒/未转向时弹幕依然可见；转向后按正常比例放大。
+                        let scaledFont = danmakuController.fontSize * Double(max(textScale, 0.6))
                         DanmakuOverlay(clock: clock, track: track,
                                        opacity: danmakuController.opacity,
                                        area: danmakuController.area,
-                                       fontSize: danmakuController.fontSize * Double(textScale),
+                                       fontSize: scaledFont,
                                        speed: danmakuController.speed)
                             .allowsHitTesting(false)
                     }
@@ -398,6 +423,14 @@ struct CatVodVLCVideoView: View {
             // 字幕按片名匹配本地/在线字幕源——这块与用哪个解码内核无关。
             subtitle.attach(title: title, episodeNumber: nil)
             scheduleHide()
+        }
+        // 照系统播放器 VideoPlayerView：画面尺寸到手后按宽高比自动转向——
+        // 用户明确要的「像系统那样自动识别横屏竖屏」。manual 横/竖选择优先，
+        // 未手动选过时跟随片源比例（高>宽→竖屏，否则横屏）。
+        .onChange(of: model.videoSize) { _, size in
+            guard size.width > 0, size.height > 0 else { return }
+            if let override = orientationOverride { turn(to: override) }
+            else { turn(to: size.height > size.width ? .portrait : .landscape) }
         }
         .onDisappear {
             clock.detach()
