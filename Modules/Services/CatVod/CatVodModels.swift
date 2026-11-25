@@ -17,6 +17,22 @@ struct CatVodSite: Codable, Identifiable, Hashable, Sendable {
 
     var id: String { key }
 
+    /// 自定义 `init(from:)` 会让编译器不再自动合成成员初始化器；而 py 站点面板
+    /// 等处会用 `CatVodSite(key:name:type:api:...)` 直接构造，补上这个初始化器
+    /// 才能让那些调用点编译通过。参数都带默认值，兼容只传部分字段的调用。
+    init(key: String, name: String, type: Int? = nil, api: String? = nil,
+         searchable: Bool? = nil, filterable: Bool? = nil, quickSearch: Bool? = nil,
+         ext: String = "") {
+        self.key = key
+        self.name = name
+        self.type = type
+        self.api = api
+        self.searchable = searchable
+        self.filterable = filterable
+        self.quickSearch = quickSearch
+        self.ext = ext
+    }
+
     enum CodingKeys: String, CodingKey {
         case key, name, type, api
         case searchable, filterable, quickSearch, ext
