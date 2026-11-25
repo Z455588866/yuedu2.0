@@ -15,6 +15,7 @@ enum CatVodVLCKernel {
 #if canImport(VLCKitSPM)
 import VLCKitSPM
 import UIKit
+import Dispatch
 // iOS 26 SDK 起 SwiftUI 不再把 Combine 转出（re-export），@Published /
 // ObservableObject 的成员必须显式 import，否则报 "missing import of defining
 // module 'Combine'"。
@@ -206,9 +207,19 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
     func stop() {
         tickTask?.cancel()
         tickTask = nil
-        player?.stop()
-        player?.drawable = nil
+        guard let old = player else { return }
         player = nil
+        // libvlc_media_player_destroy 会同步等解码线程收尾。MetricKit 实测它在主线程
+        // 卡 2.1s（23:39 的 hang），表现就是"点了关闭/返回，界面几秒什么都点不动"。
+        // 把 player 的 stop + 释放整段挪到后台队列：主线程只把属性置 nil 立刻返回，
+        // 局部强引用 old 跟着闭包活到销毁结束，再自然释放、触发 deinit。
+        // nonisolated(unsafe) 是 Swift 6 下把非 Sendable 对象跨并发域携带的标准写法。
+        nonisolated(unsafe) let playerToRelease = old
+        DispatchQueue.global(qos: .userInitiated).async {
+            playerToRelease.stop()
+            // 闭包结束时 playerToRelease 释放 → libvlc_media_player_destroy 在后台完成，
+            // drawable 的引用随之断开，不必在主线程手动置 nil（那也会带来 UIKit 线程问题）。
+        }
     }
 
     private func startTicker() {

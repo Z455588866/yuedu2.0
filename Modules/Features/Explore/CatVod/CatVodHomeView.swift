@@ -192,6 +192,8 @@ struct CatVodHomeView: View {
                     showsLive = true
                 } label: {
                     Image(systemName: "tv")
+                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                        .barButtonGlass(in: Circle())
                 }
                 .disabled(currentBundleURL == nil)
                 .accessibilityLabel(localized("直播"))
@@ -201,6 +203,8 @@ struct CatVodHomeView: View {
                     CatVodSourceSettingsView()
                 } label: {
                     Image(systemName: "slider.horizontal.3")
+                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                        .barButtonGlass(in: Circle())
                 }
                 .accessibilityLabel(localized("管理猫源"))
             }
@@ -318,8 +322,9 @@ struct CatVodHomeView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(DSColor.surfaceTertiary, in: Capsule())
-        .contentShape(Capsule())
+        // 对齐书源/探索页的成熟范式：浮在纸面上的控件走统一玻璃材质，
+        // 总闸关闭或降低透明度时自动回退实色，不自己判断。
+        .glassButtonChrome(in: Capsule())
     }
 
     private var searchBar: some View {
@@ -352,8 +357,7 @@ struct CatVodHomeView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 9)
-                .background(DSColor.surfaceTertiary,
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .glassButtonChrome(in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                 Button { Task { await search() } } label: {
                     if isLoading && activeSearchTerm == nil {
@@ -363,8 +367,10 @@ struct CatVodHomeView: View {
                             .font(DSFont.subheadline.weight(.semibold))
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
+                .buttonStyle(.plain)
+                .foregroundStyle(DSColor.accent)
+                .glassButtonChrome(in: Capsule(), tint: DSColor.accent)
+                .frame(minHeight: DSLayout.capsuleControlHeight)
                 .disabled(keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
@@ -400,7 +406,7 @@ struct CatVodHomeView: View {
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)
-                            .background(DSColor.surfaceTertiary, in: Capsule())
+                            .glassButtonChrome(in: Capsule())
                             .contextMenu {
                                 Button(role: .destructive) {
                                     removeSearchTerm(term)
@@ -483,11 +489,10 @@ struct CatVodHomeView: View {
                                 } label: {
                                     Text(option.name)
                                         .font(DSFont.caption2)
-                                        .foregroundStyle(selected ? Color.white : DSColor.textPrimary)
+                                        .foregroundStyle(selected ? DSColor.accent : DSColor.textPrimary)
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 5)
-                                        .background(selected ? Color.accentColor : DSColor.surfaceTertiary,
-                                                    in: Capsule())
+                                        .glassButtonChrome(in: Capsule(), tint: selected ? DSColor.accent : nil)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -526,11 +531,11 @@ struct CatVodHomeView: View {
         Button(action: action) {
             Text(title)
                 .font(DSFont.caption.weight(.semibold))
-                .foregroundStyle(selected ? Color.white : DSColor.textPrimary)
+                .foregroundStyle(selected ? DSColor.accent : DSColor.textPrimary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
-                .background(selected ? Color.accentColor : DSColor.surfaceTertiary,
-                            in: Capsule())
+                // 选中态用主题色薄雾玻璃，未选中用中性玻璃——与书源页 chip 一致。
+                .glassButtonChrome(in: Capsule(), tint: selected ? DSColor.accent : nil)
         }
         .buttonStyle(.plain)
     }
