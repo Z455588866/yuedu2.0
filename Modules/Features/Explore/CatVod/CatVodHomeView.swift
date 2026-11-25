@@ -79,8 +79,6 @@ struct CatVodHomeView: View {
     @State private var lastPlayedEpisodeID: String?
     /// 有多档清晰度时先让用户选一次；nil 表示没有待选。
     @State private var qualityPrompt: QualityPrompt?
-    /// 直播页的开关。
-    @State private var showsLive = false
 
     /// 渲染用的启用源快照。和设置页同样的理由：不把「导入后上面能不能看见」
     /// 押在 SwiftUI 对 @Observable 的自动追踪上，改为显式同步。
@@ -186,19 +184,6 @@ struct CatVodHomeView: View {
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                // 直播由接口的 `lives` 提供，多数 JS 猫源没有；点进去会说明情况，
-                // 所以按钮不隐藏，避免"同一个接口在别人那儿有直播、我这儿没有入口"。
-                Button {
-                    showsLive = true
-                } label: {
-                    Image(systemName: "tv")
-                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
-                        .barButtonGlass(in: Circle())
-                }
-                .disabled(currentBundleURL == nil)
-                .accessibilityLabel(localized("直播"))
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
                 NavigationLink {
                     CatVodSourceSettingsView()
                 } label: {
@@ -208,9 +193,6 @@ struct CatVodHomeView: View {
                 }
                 .accessibilityLabel(localized("管理猫源"))
             }
-        }
-        .sheet(isPresented: $showsLive) {
-            CatVodLiveView(bundleURL: currentBundleURL ?? "", title: currentSource?.name ?? "")
         }
     }
 
