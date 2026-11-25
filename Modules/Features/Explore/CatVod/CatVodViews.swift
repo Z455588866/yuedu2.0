@@ -252,18 +252,24 @@ struct CatVodSourceSettingsView: View {
             }
         }
         .themedAppSurface(for: .settings)
-        .fileImporter(isPresented: $showsImporter,
-                      allowedContentTypes: [.plainText, .json, .sourceCode],
-                      allowsMultipleSelection: true) { result in
+        // 与全 App 其它导入入口（书源/RSS/模组/字幕源/字体…）走同一个优化选择器：
+        // 原生 UIDocumentPicker(asCopy:true) + 回调里立刻复制进沙盒，绕开部分签名/
+        // 企业签/自签环境下 SwiftUI .fileImporter 的 security-scoped 授权失败
+        // （表现为「选了没反应 / 读不到」）。回调拿到的 URL 已是沙盒内副本，
+        // 不需要也不能再 startAccessingSecurityScopedResource。
+        .copiedFileImporter(
+            isPresented: $showsImporter,
+            allowedContentTypes: [.plainText, .json, .sourceCode],
+            allowsMultipleSelection: true
+        ) { result in
             guard case let .success(urls) = result, !urls.isEmpty else { return }
             // .js 接口是一个文本文件，进 store；.py 是脚本，落点是
             // Documents/PythonSources，由内嵌解释器扫描，两条路不能混。
             let scripts = urls.filter { $0.pathExtension.lowercased() == "py" }
             if !scripts.isEmpty { importPython(scripts) }
-            if let textURL = urls.first(where: { $0.pathExtension.lowercased() != "py" }) {
-                guard textURL.startAccessingSecurityScopedResource() else { return }
-                defer { textURL.stopAccessingSecurityScopedResource() }
-                if let data = try? Data(contentsOf: textURL) { applyImport(data) }
+            if let textURL = urls.first(where: { $0.pathExtension.lowercased() != "py" }),
+               let data = try? Data(contentsOf: textURL) {
+                applyImport(data)
             }
         }
         .sheet(isPresented: $showsPaste) { pasteSheet }
