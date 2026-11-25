@@ -3,29 +3,27 @@ import CoreGraphics
 
 /// 画面在播放器窗口里的摆放方式。
 ///
-/// 四档完整照搬 ijkplayer 的 `IJKMPMovieScalingMode`（它又沿自 Apple 的
-/// `MPMovieScalingMode`），这是 ijkplayer / VLC / MX Player / nPlayer 给用户的
-/// 通用档位，也是用户认可的成熟项目标准：
-/// - `Original`：`None`，保持片源比例、完整显示、不放大超过原始像素；
-/// - `Fit`：`AspectFit`，等比缩放到某一维刚好装下，完整画面，多出的方向留黑边；
-/// - `Fill`：`AspectFill`，等比缩放到铺满窗口，某一维被裁掉；
-/// - `Stretch`：`Fill`，非等比拉伸，两维都精确贴合窗口。
+/// 四档完整对齐 ijkplayer 的 `IJKMPMovieScalingMode`（它又沿自 Apple 的
+/// `MPMovieScalingMode`），也是 tvbox-silicon / VLC / Infuse 给用户的通用档位：
+/// - `original`：原画，等比完整显示、不裁切，且不放大超过片源的 1:1 像素；
+/// - `fit`：适应，等比缩放到装下，完整画面，多出的方向留黑边；
+/// - `fill`：铺满（裁剪），等比缩放到铺满窗口，某一维被裁掉；
+/// - `stretch`：拉伸，非等比拉伸，两维都精确贴合窗口。
 ///
-/// 说明：ijkplayer 的 `None` 严格语义是 1:1 原始像素、居中、超出裁切。移动端片源
-/// 普遍大于屏幕，1:1 会把画面裁成中间一块特写（用户明确反馈过这是「原始比例有问题」）。
-/// 因此这里把 `original` 落地为「等比完整显示、且绝不放大超过 1:1」：片源大于窗口时
-/// 等比缩小装下（完整不裁切），片源小于窗口时保持原始像素不放大。既保留了原画档，
-/// 又不会出现裁成特写的 bug；「严格 1:1 裁切」若确实需要，可由后续版本再补。
+/// 矩形计算整套照搬成熟项目 tvbox-silicon 的 `SubtitleOverlay`：用 Apple 官方
+/// `AVMakeRect(aspectRatio:insideRect:)`，并区分两个矩形——
+/// - `pictureRect`：画面的「可见区域」，弹幕容器、外挂字幕按它摆放；铺满/拉伸后
+///   整窗都是画面，所以它返回整窗（旧实现错误地返回超出屏幕的放大矩形，弹幕会
+///   跑到屏外，这正是「铺满档没优化好」的根因）；
+/// - `videoRect`：片源的「完整矩形」（含被裁掉的部分），画面层（VLC drawable）
+///   按它铺满，需要把片源坐标映射到屏幕时用。
 ///
-/// 弹幕与字幕的跟随方式照搬成熟引擎：
-/// - 字节 `DanmakuRenderEngine`：弹幕视图尺寸必须与视频画面尺寸一致；
-/// - `CommentCoreLibrary`：画面缩放时拉伸弹幕容器、字号等比放大。
-/// 所以本枚举同时决定三件事：`AVPlayerLayer.videoGravity`、画面实际矩形（弹幕/字幕
-/// 照着摆放）、以及字号倍数。三者用同一套缩放，保证画面和弹幕永远对得上。
+/// 画面层与弹幕/字幕层的矩形都由本枚举同一套算法算出，严格对应各自的
+/// `videoGravity` / libvlc aspect，因此画面与弹幕永远对得上。
 enum VideoScalingMode: String, CaseIterable, Identifiable {
-    /// 原画：保持片源比例、完整显示、不放大超过原始像素。
+    /// 原画：等比完整显示、不裁切，且不放大超过 1:1 像素。
     case original
-    /// 适应：等比缩放到某一维刚好装下，完整画面，多出的方向留黑边。
+    /// 适应：等比缩放到装下，完整画面，多出的方向留黑边。
     case fit
     /// 铺满（裁剪）：等比缩放到铺满窗口，某一维被裁掉。
     case fill
@@ -47,15 +45,15 @@ enum VideoScalingMode: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .original: return "square.dashed"
-        case .fit: return "rectangle.arrowtriangle.2.inward"
-        case .fill: return "rectangle.arrowtriangle.2.outward"
-        case .stretch: return "rectangle.expand.vertical"
+        case .fit: return "rectangle.center.inset.filled"
+        case .fill: return "arrow.up.left.and.arrow.down.right"
+        case .stretch: return "arrow.left.and.right"
         }
     }
 
-    /// 给 `AVPlayerLayer.videoGravity` 用。AVPlayerLayer 没有 1:1 档，
-    /// `original` 用 `.resizeAspect`（等比装下），配合 `pictureRect` 的「不放大」
-    /// 上限，实际表现就是等比完整、不超原始像素。
+    /// 给 `AVPlayerLayer.videoGravity` 用。四档映射照搬 tvbox-silicon 的
+    /// `VideoFill.gravity`（fit=.resizeAspect / fill=.resizeAspectFill /
+    /// stretch=.resize），原画档同 fit，用等比装下保证完整不裁切。
     var videoGravity: AVLayerVideoGravity {
         switch self {
         case .original, .fit: return .resizeAspect
@@ -64,47 +62,57 @@ enum VideoScalingMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// 画面在窗口里实际占的矩形。弹幕层、字幕层都按这个矩形摆放。
+    /// 等比装下（AspectFit）的矩形，用 Apple 官方 `AVMakeRect`。
+    /// `capAtNative` 为 true 时缩放上限 1：片源大于窗口就缩小装下，片源小于窗口
+    /// 保持原始像素不放大——这是「原画」相对「适应」的唯一区别，避免小片源被
+    /// 拉成大块而糊掉。画面层与弹幕层共用它，保证两者严格一致。
+    private func fittedRect(native: CGSize, in bounds: CGSize, capAtNative: Bool) -> CGRect {
+        let whole = CGRect(origin: .zero, size: bounds)
+        let fit = AVMakeRect(aspectRatio: native, insideRect: whole)
+        guard capAtNative, native.width > 0, native.height > 0,
+              fit.width > 0, fit.height > 0 else { return fit }
+        let scale = min(1, fit.width / native.width, fit.height / native.height)
+        let size = CGSize(width: native.width * scale, height: native.height * scale)
+        return CGRect(x: whole.midX - size.width / 2,
+                      y: whole.midY - size.height / 2,
+                      width: size.width, height: size.height)
+    }
+
+    /// 画面在窗口里「可见」的矩形——弹幕容器、外挂字幕按它摆放。
+    /// 照搬 tvbox-silicon 的 `pictureRect(in:fills:)`：
+    /// - 等比装下（原画/适应）用 `AVMakeRect` 算出带黑边的画面矩形；
+    /// - 铺满/拉伸后整窗都是画面，可见区域即整窗，弹幕铺满全屏。
     /// 片源尺寸未知时退回整窗，避免第一帧闪一下空白。
     func pictureRect(native: CGSize, in bounds: CGSize) -> CGRect {
+        let whole = CGRect(origin: .zero, size: bounds)
         guard native.width > 0, native.height > 0,
-              bounds.width > 0, bounds.height > 0 else {
-            return CGRect(origin: .zero, size: bounds)
-        }
-        let drawn = drawnSize(native: native, in: bounds)
-        return CGRect(x: (bounds.width - drawn.width) / 2,
-                      y: (bounds.height - drawn.height) / 2,
-                      width: drawn.width,
-                      height: drawn.height)
-    }
-
-    /// 实际绘制尺寸，四档共用；`pictureRect` 和 `textScale` 都基于它，确保一致。
-    private func drawnSize(native: CGSize, in bounds: CGSize) -> CGSize {
-        let sx = bounds.width / native.width
-        let sy = bounds.height / native.height
+              bounds.width > 0, bounds.height > 0 else { return whole }
         switch self {
         case .original:
-            // 等比装下，但缩放上限为 1：片源大于窗口时缩小装下（完整不裁切），
-            // 片源小于窗口时保持 1:1 不放大。
-            let scale = min(1, sx, sy)
-            return CGSize(width: native.width * scale, height: native.height * scale)
+            return fittedRect(native: native, in: bounds, capAtNative: true)
         case .fit:
-            let scale = min(sx, sy)
-            return CGSize(width: native.width * scale, height: native.height * scale)
-        case .fill:
-            let scale = max(sx, sy)
-            return CGSize(width: native.width * scale, height: native.height * scale)
-        case .stretch:
-            return bounds
+            return fittedRect(native: native, in: bounds, capAtNative: false)
+        case .fill, .stretch:
+            // 铺满/拉伸：画面铺满整窗，可见区域就是整窗。
+            // 旧实现返回放大矩形（超过 bounds），弹幕帧被放到屏幕外——已修正。
+            return whole
         }
     }
 
-    /// 弹幕字号要乘的倍数：画面放大多少，字就放大多少（CommentCoreLibrary 的做法）。
-    /// 拉伸模式下两维比例不同，取较小的一维，免得字幕被拉成巨字。
-    func textScale(native: CGSize, in bounds: CGSize) -> CGFloat {
+    /// 片源的「完整矩形」（含被裁掉的部分）——VLC 画面层按它铺满，
+    /// 需要把片源坐标映射到屏幕时也用它（如 ASS 脚本字幕按片源分辨率定位）。
+    /// 照搬 tvbox-silicon 的 `videoRect(in:fills:stretches:)`。
+    func videoRect(native: CGSize, in bounds: CGSize) -> CGRect {
+        let whole = CGRect(origin: .zero, size: bounds)
         guard native.width > 0, native.height > 0,
-              bounds.width > 0, bounds.height > 0 else { return 1 }
-        let drawn = drawnSize(native: native, in: bounds)
-        return min(drawn.width / native.width, drawn.height / native.height)
+              bounds.width > 0, bounds.height > 0 else { return whole }
+        if self == .stretch { return whole }
+        let fit = fittedRect(native: native, in: bounds, capAtNative: self == .original)
+        guard self == .fill, fit.width > 0, fit.height > 0 else { return fit }
+        let scale = max(bounds.width / fit.width, bounds.height / fit.height)
+        let size = CGSize(width: fit.width * scale, height: fit.height * scale)
+        return CGRect(x: whole.midX - size.width / 2,
+                      y: whole.midY - size.height / 2,
+                      width: size.width, height: size.height)
     }
 }

@@ -385,34 +385,44 @@ struct CatVodVLCVideoView: View {
                 // 旋转时强制按「适应」算矩形和字号，与 VideoPlayerLayerView 的判断一致，
                 // 避免画面转了、弹幕矩形却还按铺满算导致的错位。
                 let mode: VideoScalingMode = pictureRotation % 2 == 1 ? .fit : scalingMode
-                let rect = mode.pictureRect(native: native, in: size)
+                // 画面层用「片源完整矩形」：铺满档是放大矩形，超出窗口的部分由外层
+                // clipped 裁掉，从而实现等比铺满裁剪；弹幕/字幕层用「可见矩形」：
+                // 铺满/拉伸档是整窗。这正是 tvbox-silicon 分离 videoRect / pictureRect
+                // 的目的——两者严格对应各自 gravity，弹幕不会再跑到屏幕外。
+                let pictureBounds = mode.videoRect(native: native, in: size)
+                let visibleRect = mode.pictureRect(native: native, in: size)
                 // 「拉伸」档要靠 VLC 的 aspect 实现，其余档位恢复片源原始比例。
                 let aspect = mode == .stretch && size.width > 0 && size.height > 0
                     ? "\(Int(size.width.rounded())):\(Int(size.height.rounded()))"
                     : nil
                 ZStack {
                     VLCVideoSurface(view: model.drawable, rotation: pictureRotation)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    // 弹幕压在画面上、控制条下面，且不接管触摸——否则点不到进度条。
-                    if danmakuController.enabled, let track = danmakuController.track {
-                        // 与系统播放器一致：字号交给引擎按「画面矩形」短边自适应（含下限），
-                        // 传用户在设置里选的点数，避免外部再乘画面缩放造成双重缩放。
-                        DanmakuOverlay(clock: clock, track: track,
-                                       opacity: danmakuController.opacity,
-                                       area: danmakuController.area,
-                                       fontSize: danmakuController.fontSize,
-                                       speed: danmakuController.speed)
-                            .allowsHitTesting(false)
+                        .frame(width: max(1, pictureBounds.width),
+                               height: max(1, pictureBounds.height))
+                        .position(x: pictureBounds.midX, y: pictureBounds.midY)
+                    ZStack {
+                        // 弹幕压在画面上、控制条下面，且不接管触摸——否则点不到进度条。
+                        if danmakuController.enabled, let track = danmakuController.track {
+                            // 与系统播放器一致：字号交给引擎按「画面矩形」短边自适应（含下限），
+                            // 传用户在设置里选的点数，避免外部再乘画面缩放造成双重缩放。
+                            DanmakuOverlay(clock: clock, track: track,
+                                           opacity: danmakuController.opacity,
+                                           area: danmakuController.area,
+                                           fontSize: danmakuController.fontSize,
+                                           speed: danmakuController.speed)
+                                .allowsHitTesting(false)
+                        }
+                        // 外挂字幕压在弹幕之上、控制条之下；时钟与系统播放器共用，
+                        // 因此 VLC 解码的画面里拖动进度后字幕照样逐句跟随。
+                        if subtitle.enabled, let entry = subtitle.activeEntry {
+                            SubtitleOverlay(clock: clock, entry: entry, opacity: 1,
+                                            coverBuiltin: subtitle.coverBuiltin)
+                        }
                     }
-                    // 外挂字幕压在弹幕之上、控制条之下；时钟与系统播放器共用，
-                    // 因此 VLC 解码的画面里拖动进度后字幕照样逐句跟随。
-                    if subtitle.enabled, let entry = subtitle.activeEntry {
-                        SubtitleOverlay(clock: clock, entry: entry, opacity: 1,
-                                        coverBuiltin: subtitle.coverBuiltin)
-                    }
+                    .frame(width: max(1, visibleRect.width), height: max(1, visibleRect.height))
+                    .position(x: visibleRect.midX, y: visibleRect.midY)
                 }
-                .frame(width: max(1, rect.width), height: max(1, rect.height))
-                .position(x: rect.midX, y: rect.midY)
+                .clipped()
                 .task(id: aspect) {
                     model.applyAspectRatio(aspect)
                 }
