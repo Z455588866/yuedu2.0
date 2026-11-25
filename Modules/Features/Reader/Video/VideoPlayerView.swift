@@ -59,6 +59,11 @@ struct VideoPlayerView: View {
     @State private var scrubTime: Double?
     /// A drag on the picture in progress.
     @State private var pan: VideoPan?
+    /// 屏幕亮度/系统音量（左边缘上滑调亮度、右边缘上滑调音量）。
+    /// 系统音量无公开 API，借 MPVolumeView 的 slider 设置，须常驻在视图树里。
+    @State private var systemControls = VideoSystemControls()
+    /// 锁定后手势层只剩点击（唤出/隐藏解锁按钮），拖动/双指都禁用。
+    @State private var isLocked = false
     /// 画面摆放方式：适应 / 铺满（裁剪）/ 拉伸 / 原始尺寸，四档与 ijkplayer 一致。
     @State private var scalingMode: VideoScalingMode = .fit
     /// Manual quarter-turn correction for sideways-encoded streams (0/1/2/3).
@@ -125,6 +130,28 @@ struct VideoPlayerView: View {
                 if let pan, pan.kind == .seek, let range = controller.seekableRange {
                     VideoSeekBadge(time: pan.value, end: range.upperBound, delta: pan.value - pan.origin)
                 }
+                // 亮度/音量调节浮层，照 tvbox 的 indicator（图标 + 百分比）。
+                if let pan, pan.kind == .brightness {
+                    VideoAdjustBadge(kind: .brightness, value: pan.value)
+                }
+                if let pan, pan.kind == .volume {
+                    VideoAdjustBadge(kind: .volume, value: pan.value)
+                }
+                // 锁屏后控制条淡出，中央只留一个解锁按钮（点画面先叫出控制条也可以）。
+                if isLocked {
+                    Button {
+                        isLocked = false
+                        showsControls = true
+                        touched()
+                    } label: {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(16)
+                            .background(.black.opacity(0.45), in: Circle())
+                    }
+                    .accessibilityLabel(localized("解锁屏幕"))
+                }
             } else {
                 ProgressView()
                     .tint(DSColor.textOnFixedFill)
@@ -134,6 +161,10 @@ struct VideoPlayerView: View {
         .statusBarHidden(!showsControls)
         .persistentSystemOverlays(.hidden)
         .environment(\.colorScheme, .dark)
+        .background {
+            // 亮度/音量手势依赖它常驻：MPVolumeView 必须在视图树里，其 slider 才能改系统音量。
+            VideoVolumeHost(controls: systemControls).frame(width: 1, height: 1)
+        }
         .animation(DSAnimation.fast, value: showsControls)
         .task {
             guard controller == nil, let controller = makeController() else { return }
@@ -200,6 +231,8 @@ struct VideoPlayerView: View {
         .onDisappear {
             clock.detach()
             controller?.close()
+            // 退出播放器把用户调过的屏幕亮度还原，别让阅读页也跟着变暗。
+            systemControls.restoreBrightness()
             if turnsWindow { ReaderOrientationController.shared.restoreDefault(in: window.windowScene) }
         }
         .sheet(isPresented: $showsEpisodes) {
@@ -310,8 +343,10 @@ struct VideoPlayerView: View {
     /// has a control too: VoiceOver, which cannot reach the surface, keeps the labeled timeline.
     private func gestureSurface(_ controller: VideoPlaybackController) -> some View {
         VideoGestureSurface(
-            isLocked: false,
+            isLocked: isLocked,
             onTap: {
+                // 锁屏时点击只把控制条叫回来（里面有解锁按钮）；拖动/双指已被
+                // VideoGestureSurface 禁用，避免误触改进度或亮度。
                 showsControls.toggle()
                 touched()
             },
@@ -329,14 +364,39 @@ struct VideoPlayerView: View {
             let kind = VideoPanKind(start: start, translation: translation, in: size)
             // A stream with nothing to seek in (live, or still loading) ignores a swipe across.
             guard kind != .seek || controller.seekableRange != nil else { return }
-            pan = VideoPan(kind: kind, origin: controller.currentTime, value: controller.currentTime)
+            // 起点按手势类型取当前值：横向从播放进度、左边缘从亮度、右边缘从系统音量。
+            let origin: Double = {
+                switch kind {
+                case .seek: return controller.currentTime
+                case .brightness: return systemControls.brightness
+                case .volume: return systemControls.volume
+                case .episodes: return 0
+                }
+            }()
+            pan = VideoPan(kind: kind, origin: origin, value: origin)
             touched()
         case .changed(let translation, let size):
-            guard var current = pan, current.kind == .seek, let range = controller.seekableRange else { return }
-            current.value = VideoPan.seekTime(origin: current.origin, translation: translation.width,
-                                              width: size.width, in: range)
-            pan = current
-            scrubTime = current.value
+            guard var current = pan else { return }
+            switch current.kind {
+            case .seek:
+                guard let range = controller.seekableRange else { return }
+                current.value = VideoPan.seekTime(origin: current.origin, translation: translation.width,
+                                                  width: size.width, in: range)
+                pan = current
+                scrubTime = current.value
+            case .brightness:
+                current.value = VideoPan.level(origin: current.origin, translation: translation.height,
+                                               height: size.height)
+                pan = current
+                systemControls.setBrightness(current.value)
+            case .volume:
+                current.value = VideoPan.level(origin: current.origin, translation: translation.height,
+                                               height: size.height)
+                pan = current
+                systemControls.setVolume(current.value)
+            case .episodes:
+                break
+            }
         case .ended(let translation, _):
             guard let finished = pan else { return }
             pan = nil
@@ -344,9 +404,10 @@ struct VideoPlayerView: View {
             case .seek:
                 controller.seek(to: finished.value)
                 scrubTime = nil
-            // The edges' brightness and volume are not wired in yet: an up-down drag anywhere
-            // keeps opening the episodes, as it did before the seek.
-            case .episodes, .brightness, .volume:
+            case .brightness, .volume:
+                // 值已在 .changed 逐帧写入系统，松手无需再做动作。
+                break
+            case .episodes:
                 if hasEpisodes(controller), translation.height < -DSLayout.videoSwipeThreshold {
                     showsEpisodes = true
                 }
@@ -494,6 +555,19 @@ struct VideoPlayerView: View {
                     .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
             }
             .accessibilityLabel(localized("横屏/竖屏切换"))
+            // 锁定播放器：锁住后画面手势不再响应拖动/亮度/音量，只留点击唤出解锁按钮，
+            // 防止握持时误触。与 B站/腾讯视频的「锁屏」同一个功能。
+            Button {
+                isLocked.toggle()
+                // 锁上就立刻收起控制条，只留中央解锁按钮。
+                if isLocked { showsControls = false }
+                touched()
+            } label: {
+                Image(systemName: isLocked ? "lock.fill" : "lock.open")
+                    .font(DSFont.toolbarIcon)
+                    .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+            }
+            .accessibilityLabel(isLocked ? localized("解锁屏幕") : localized("锁定屏幕"))
             if hasEpisodes(controller) {
                 Button {
                     showsEpisodes = true
@@ -714,6 +788,31 @@ struct VideoSeekBadge: View {
         .background(DSColor.videoControlScrim, in: RoundedRectangle(cornerRadius: DSRadius.md))
         .allowsHitTesting(false)
         // The surface that drives it is hidden from VoiceOver, whose timeline announces itself.
+        .accessibilityHidden(true)
+    }
+}
+
+/// 亮度/音量调节时的居中提示，照 tvbox-Swift 的 PlayerGestureLayer indicator：
+/// 上半图标（太阳/喇叭）、下半百分比，毛玻璃圆角底。与 VideoSeekBadge 一样不接管触摸。
+struct VideoAdjustBadge: View {
+    enum Kind { case brightness, volume }
+    let kind: Kind
+    let value: Double  // 0...1
+
+    var body: some View {
+        VStack(spacing: DSSpacing.xxs) {
+            Image(systemName: kind == .brightness ? "sun.max.fill" : "speaker.wave.2.fill")
+                .font(.title2)
+                .foregroundStyle(kind == .brightness ? .yellow : DSColor.textOnFixedFill)
+            Text("\(Int((value * 100).rounded()))%")
+                .font(DSFont.subheadline)
+                .monospacedDigit()
+        }
+        .foregroundStyle(DSColor.textOnFixedFill)
+        .padding(.horizontal, DSSpacing.lg)
+        .padding(.vertical, DSSpacing.sm)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: DSRadius.md))
+        .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 }

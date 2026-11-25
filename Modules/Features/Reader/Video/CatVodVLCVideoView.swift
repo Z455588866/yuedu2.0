@@ -335,6 +335,12 @@ struct CatVodVLCVideoView: View {
     @State private var onlineSubtitleSources = OnlineSubtitleSourceStore.shared
     @State private var showsControls = true
     @State private var scrubbing: Double?
+    /// 画面上左右拖动进度：与系统播放器共用 VideoPan / VideoGestureSurface。
+    @State private var pan: VideoPan?
+    /// 左边缘上滑调亮度、右边缘上滑调音量（与系统播放器同一套 VideoSystemControls）。
+    @State private var systemControls = VideoSystemControls()
+    /// 锁定后手势层禁用拖动/双指，只留点击唤出解锁按钮。
+    @State private var isLocked = false
     @State private var hideTask: Task<Void, Never>?
     /// 本播放器所在窗口。横竖屏请求必须发给它的 scene（iPad 多窗口/外接屏时不是 keyWindow）。
     @State private var window = ReaderWindowReference()
@@ -405,6 +411,8 @@ struct CatVodVLCVideoView: View {
                 }
             }
             .ignoresSafeArea()
+            // 画面手势在控制条之下：控制条显示时它拦自己的触摸，其余区域透过手势层。
+            gestureSurface
             if model.isPreparing {
                 ProgressView()
                     .progressViewStyle(.circular)
@@ -429,14 +437,30 @@ struct CatVodVLCVideoView: View {
                 .opacity(showsControls ? 1 : 0)
                 .allowsHitTesting(showsControls)
                 .accessibilityHidden(!showsControls)
-            if !showsControls {
-                // 控制条收起后，点画面任何地方把它叫回来。
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        showsControls = true
-                        scheduleHide()
-                    }
+            if let pan, pan.kind == .seek {
+                VideoSeekBadge(time: pan.value, end: max(model.duration, 0.1),
+                               delta: pan.value - pan.origin)
+            }
+            if let pan, pan.kind == .brightness {
+                VideoAdjustBadge(kind: .brightness, value: pan.value)
+            }
+            if let pan, pan.kind == .volume {
+                VideoAdjustBadge(kind: .volume, value: pan.value)
+            }
+            // 锁屏后只留中央解锁按钮。
+            if isLocked {
+                Button {
+                    isLocked = false
+                    showsControls = true
+                    scheduleHide()
+                } label: {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(16)
+                        .background(.black.opacity(0.45), in: Circle())
+                }
+                .accessibilityLabel(localized("解锁屏幕"))
             }
         }
         .readerWindowProbe(window)
@@ -468,6 +492,10 @@ struct CatVodVLCVideoView: View {
             subtitle.attach(title: title, episodeNumber: nil)
             scheduleHide()
         }
+        .background {
+            // 亮度/音量手势依赖它常驻：MPVolumeView 必须在视图树里才能改系统音量。
+            VideoVolumeHost(controls: systemControls).frame(width: 1, height: 1)
+        }
         // 照系统播放器 VideoPlayerView：画面尺寸到手后按宽高比自动转向——
         // 用户明确要的「像系统那样自动识别横屏竖屏」。manual 横/竖选择优先，
         // 未手动选过时跟随片源比例（高>宽→竖屏，否则横屏）。
@@ -481,6 +509,8 @@ struct CatVodVLCVideoView: View {
             model.stop()
             danmakuController.stop()
             subtitle.stop()
+            // 还原用户调过的屏幕亮度，别让其他页面跟着变暗。
+            systemControls.restoreBrightness()
             if turnsWindow { ReaderOrientationController.shared.restoreDefault(in: window.windowScene) }
         }
     }
@@ -496,6 +526,77 @@ struct CatVodVLCVideoView: View {
             guard let scene = uiWindow.windowScene,
                   scene.traitCollection.userInterfaceIdiom == .phone else { return }
             ReaderOrientationController.shared.request(orientation, in: scene)
+        }
+    }
+
+    // MARK: Gestures
+
+    /// 画面手势层：点按唤出/收起控制条，左右拖进度、左边缘调亮度、右边缘调音量。
+    /// 与系统播放器共用 VideoGestureSurface / VideoPan，锁屏时只留点击。
+    private var gestureSurface: some View {
+        VideoGestureSurface(
+            isLocked: isLocked,
+            onTap: {
+                showsControls.toggle()
+                scheduleHide()
+            },
+            onPan: { panned($0) },
+            onPinch: { _ in }
+        )
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+    }
+
+    private func panned(_ event: VideoGestureSurface.PanEvent) {
+        switch event {
+        case .began(let start, let translation, let size):
+            let kind = VideoPanKind(start: start, translation: translation, in: size)
+            let seekable = !model.isLive && model.duration > 0
+            guard kind != .seek || seekable else { return }
+            let origin: Double = {
+                switch kind {
+                case .seek: return model.time
+                case .brightness: return systemControls.brightness
+                case .volume: return systemControls.volume
+                case .episodes: return 0
+                }
+            }()
+            pan = VideoPan(kind: kind, origin: origin, value: origin)
+            scheduleHide()
+        case .changed(let translation, let size):
+            guard var current = pan else { return }
+            switch current.kind {
+            case .seek:
+                guard !model.isLive, model.duration > 0 else { return }
+                let range = 0...model.duration
+                current.value = VideoPan.seekTime(origin: current.origin, translation: translation.width,
+                                                  width: size.width, in: range)
+                pan = current
+                scrubbing = current.value
+            case .brightness:
+                current.value = VideoPan.level(origin: current.origin, translation: translation.height,
+                                               height: size.height)
+                pan = current
+                systemControls.setBrightness(current.value)
+            case .volume:
+                current.value = VideoPan.level(origin: current.origin, translation: translation.height,
+                                               height: size.height)
+                pan = current
+                systemControls.setVolume(current.value)
+            case .episodes:
+                break
+            }
+        case .ended(_, _):
+            guard let finished = pan else { return }
+            pan = nil
+            if finished.kind == .seek {
+                model.seek(to: finished.value)
+                scrubbing = nil
+            }
+            scheduleHide()
+        case .cancelled:
+            pan = nil
+            scrubbing = nil
         }
     }
 
@@ -592,6 +693,17 @@ struct CatVodVLCVideoView: View {
                         .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
                 }
                 .accessibilityLabel(localized("横屏/竖屏切换"))
+                // 锁定播放器：锁住后画面手势不再响应拖动/亮度/音量，只留点击唤出解锁按钮。
+                Button {
+                    isLocked.toggle()
+                    if isLocked { showsControls = false }
+                    scheduleHide()
+                } label: {
+                    Image(systemName: isLocked ? "lock.fill" : "lock.open")
+                        .font(DSFont.toolbarIcon)
+                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                }
+                .accessibilityLabel(isLocked ? localized("解锁屏幕") : localized("锁定屏幕"))
                 Text("VLC")
                     .font(.system(size: 11, weight: .bold))
                     .padding(.horizontal, 7)
@@ -666,8 +778,9 @@ struct CatVodVLCVideoView: View {
         hideTask = Task {
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
-            // 面板开着、正在拖动进度或没在播放时都保持控制条可见。
-            if model.isPlaying, !showsDanmakuPanel, !showsSubtitlePanel, scrubbing == nil {
+            // 面板开着、正在拖动（进度/亮度/音量）或没在播放时都保持控制条可见。
+            if model.isPlaying, !showsDanmakuPanel, !showsSubtitlePanel,
+               scrubbing == nil, pan == nil, !isLocked {
                 showsControls = false
             }
         }
