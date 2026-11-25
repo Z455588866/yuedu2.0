@@ -644,7 +644,15 @@ struct CatVodHomeView: View {
                 // Position identity: even if a source returns duplicate/empty
                 // vod_id, SwiftUI never crashes on duplicate Identifiable ids.
                 ForEach(Array(list.media.enumerated()), id: \.offset) { _, item in
-                    Button { if !isOpeningDetail { Task { await openDetail(item, from: resultSites[item.id]) } } } label: {
+                    Button {
+                        if isLiveBrowsing {
+                            // 直播站点的条目就是一条直播流，没有「选集」概念：
+                            // 直接解析地址交给原来的播放内核，跳过详情页那套。
+                            if !isResolvingPlayback { Task { await openLiveItem(item) } }
+                        } else if !isOpeningDetail {
+                            Task { await openDetail(item, from: resultSites[item.id]) }
+                        }
+                    } label: {
                         CatVodPosterCard(item: item)
                     }
                     .buttonStyle(.plain)
@@ -1155,6 +1163,86 @@ struct CatVodHomeView: View {
             // 说清楚是「没搜到」，不是「源没响应」。
             await MainActor.run { keyword = item.name }
             await search()
+        }
+    }
+
+    /// 分类名里带这些字样即视为直播分类。苹果 CMS / 猫源里常叫
+    /// “直播”“电视直播”“IPTV”“卫视”“虎牙|直播”等。
+    private static let liveNameKeywords = ["直播", "iptv", "卫视", "live"]
+
+    /// 当前是否处在直播浏览场景：站点 `meta.type == 3`（猫源协议里 3 = 直播，
+    /// 如「虎牙|直播」「📺 直播源」），或站点/分类名字带直播关键字。
+    /// 只认站点 type 还不够——不少直播站点名字带「直播」但 type 是别的，反之亦然。
+    private var isLiveBrowsing: Bool {
+        if let site = selectedSite {
+            if site.type == 3 { return true }
+            let name = site.name.lowercased()
+            if Self.liveNameKeywords.contains(where: { name.contains($0) }) { return true }
+        }
+        if let category = currentCategory {
+            let name = category.name.lowercased()
+            if Self.liveNameKeywords.contains(where: { name.contains($0) }) { return true }
+        }
+        return false
+    }
+
+    /// 直播分类下的条目直播：解析第一条线路的第一集（直播流），直接交给原来的
+    /// 播放内核。不走点播那套（流探测会误判直播 HLS、清晰度弹窗无处挂载、
+    /// 网盘降级提示也不适用），也不弹详情页。
+    private func openLiveItem(_ item: CatVodMedia) async {
+        let busy = await MainActor.run { () -> Bool in
+            if isResolvingPlayback { return true }
+            isResolvingPlayback = true
+            playingEpisodeID = item.id
+            message = nil
+            return false
+        }
+        if busy { return }
+        guard let bundle = currentBundleURL, let site = resultSites[item.id] ?? selectedSite else {
+            await MainActor.run {
+                isResolvingPlayback = false
+                playingEpisodeID = nil
+            }
+            return
+        }
+        do {
+            let result = try await CatVodService.shared.detail(bundleURL: bundle, site: site,
+                                                               id: item.id, expectedName: item.name)
+            guard let episode = result.groups.first?.episodes.first else {
+                await MainActor.run {
+                    message = localized("这个直播源没有返回可播放地址")
+                    isResolvingPlayback = false
+                    playingEpisodeID = nil
+                }
+                return
+            }
+            let playback = try await CatVodService.shared.player(bundleURL: bundle, site: site,
+                                                                 episode: episode)
+            guard let urlString = playback.url, !urlString.isEmpty,
+                  let url = URL(string: urlString) else {
+                await MainActor.run {
+                    message = localized("该片源没有返回可播放地址")
+                    isResolvingPlayback = false
+                    playingEpisodeID = nil
+                }
+                return
+            }
+            let headers = playback.header ?? [:]
+            let danmaku = playback.danmaku
+            await MainActor.run {
+                lastPlayedEpisodeID = episode.id
+                CatVodPlayerPresenter.present(url: url, headers: headers, title: item.name,
+                                              danmaku: danmaku)
+                isResolvingPlayback = false
+                playingEpisodeID = nil
+            }
+        } catch {
+            let text = error.localizedDescription
+            await MainActor.run {
+                message = text
+                isResolvingPlayback = false
+                playingEpisodeID = nil
+            }
         }
     }
 
