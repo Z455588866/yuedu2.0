@@ -23,6 +23,11 @@ struct CatVodHomeView: View {
     /// poster and a rating but no episode list). Shown inside the sheet instead of
     /// closing it — a sheet that disappears on its own reads as a crash.
     @State private var detailMissing = false
+    /// 详情海报（解码后）与其底部取色，供书源风格的详情页做全宽 hero 和深色背景。
+    @State private var detailPoster: UIImage?
+    @State private var detailPosterFoot: CoverTint.RGB?
+    /// 书源风格详情页当前选中的线路（对应 detailGroups 下标）。
+    @State private var detailRouteIndex = 0
     /// Filter groups from the last `home` response, keyed by category id. Kept
     /// separately from `list` because `category` responses do not carry filters.
     @State private var allFilters: [String: [CatVodFilter]] = [:]
@@ -1180,7 +1185,12 @@ struct CatVodHomeView: View {
             if let known { detailCache[cacheKey] = known }
             detailGroups = known ?? []
             // 换了一部剧就清掉上一部的高亮；同一部重开时保留。
-            if detailItem?.id != item.id { lastPlayedEpisodeID = nil }
+            if detailItem?.id != item.id {
+                lastPlayedEpisodeID = nil
+                detailPoster = nil
+                detailPosterFoot = nil
+                detailRouteIndex = 0
+            }
             // With a stored copy on screen the spinner must not cover it; it only
             // signals that the episodes are being refreshed in the background.
             isLoadingDetail = true
@@ -1353,68 +1363,22 @@ struct CatVodHomeView: View {
     private func detailSheet(_ item: CatVodMedia) -> some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // Header: poster + title + metadata + synopsis.
-                    HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: DSSpacing.xl) {
+                    // 书源视频详情页同款 hero：全宽海报淡入页面底色，标题 + 简介在海报下方。
+                    // 用 VideoDetailHero（泛型、不绑定书源模型），海报来自猫源封面缓存。
+                    VideoDetailHero(poster: detailPoster, title: item.name,
+                                    facts: detailFacts(item)) {
                         CatVodCoverImage(url: item.cover)
-                            .frame(width: 96, height: 136)
-                            .clipped()
-                            .cornerRadius(10)
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(item.name)
-                                .font(DSFont.title3.weight(.bold))
-                                .foregroundStyle(DSColor.textPrimary)
-                            if !item.typeName.isEmpty {
-                                Text(item.typeName)
-                                    .font(DSFont.caption)
-                                    .foregroundStyle(DSColor.textSecondary)
-                            }
-                            if !item.year.isEmpty {
-                                Text(item.year)
-                                    .font(DSFont.caption)
-                                    .foregroundStyle(DSColor.textSecondary)
-                            }
-                            if !item.remark.isEmpty {
-                                Text(item.remark)
-                                    .font(DSFont.caption2.weight(.semibold))
-                                    .foregroundStyle(Color.accentColor)
-                            }
-                            Spacer(minLength: 0)
+                    } actions: {
+                        detailHeroActions(item)
+                    } intro: {
+                        if !item.detail.isEmpty {
+                            Text(item.detail)
+                                .font(DSFont.caption)
+                                .foregroundStyle(DSColor.textSecondary)
+                                .lineLimit(4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                    }
-
-                    if !item.detail.isEmpty {
-                        Text(item.detail)
-                            .font(DSFont.caption)
-                            .foregroundStyle(DSColor.textSecondary)
-                            .lineLimit(4)
-                    }
-
-                    // 主要动作放最显眼的位置。原来只有下面的集数网格，几十集里
-                    // 找「上次看到哪」全靠翻——给一个直接开播的按钮。
-                    if let episode = preferredEpisode {
-                        Button {
-                            if !isResolvingPlayback { Task { await play(episode, title: item.name) } }
-                        } label: {
-                            HStack(spacing: 8) {
-                                if playingEpisodeID == episode.id {
-                                    ProgressView().tint(.white)
-                                } else {
-                                    Image(systemName: "play.fill")
-                                }
-                                Text(lastPlayedEpisodeID == nil
-                                     ? localized("播放第一集")
-                                     : localized("继续播放") + " · " + episodeTitle(episode.title))
-                                    .font(DSFont.subheadline.weight(.semibold))
-                                    .lineLimit(1)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .disabled(isResolvingPlayback)
                     }
 
                     if isLoadingDetail && detailGroups.isEmpty {
@@ -1489,8 +1453,6 @@ struct CatVodHomeView: View {
                         .padding(.vertical, 30)
                     } else {
                         if isLoadingDetail {
-                            // Episodes from the cache are already on screen; this is
-                            // just an inline hint that a refresh is in flight.
                             HStack(spacing: 6) {
                                 ProgressView().scaleEffect(0.6)
                                 Text(localized("正在刷新剧集…"))
@@ -1498,52 +1460,9 @@ struct CatVodHomeView: View {
                                     .foregroundStyle(DSColor.textSecondary)
                             }
                         }
-                        ForEach(detailGroups) { group in
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack {
-                                    Label(group.name, systemImage: "list.bullet.rectangle")
-                                        .font(DSFont.subheadline.weight(.semibold))
-                                        .foregroundStyle(DSColor.textPrimary)
-                                    Spacer()
-                                    Text(String(format: localized("%d 集"), group.episodes.count))
-                                        .font(DSFont.caption2)
-                                        .foregroundStyle(DSColor.textSecondary)
-                                }
-                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 10)], spacing: 10) {
-                                    ForEach(episodes(for: group)) { episode in
-                                        // 回到详情页时把刚看过的那一集标出来：几十集的
-                                        // 列表里，光靠记忆找「上次看到哪」是不现实的。
-                                        let isLastPlayed = lastPlayedEpisodeID == episode.id
-                                        Button { if !isResolvingPlayback { Task { await play(episode, title: item.name) } } } label: {
-                                            ZStack {
-                                                if playingEpisodeID == episode.id {
-                                                    ProgressView()
-                                                        .scaleEffect(0.7)
-                                                } else {
-                                                    Text(episodeTitle(episode.title))
-                                                        .font(DSFont.caption.weight(isLastPlayed ? .semibold : .regular))
-                                                        .foregroundStyle(isLastPlayed ? DSColor.accent : DSColor.textPrimary)
-                                                        .lineLimit(2)
-                                                        .minimumScaleFactor(0.7)
-                                                        .multilineTextAlignment(.center)
-                                                }
-                                            }
-                                            .frame(maxWidth: .infinity, minHeight: 44)
-                                            .padding(.horizontal, 4)
-                                            .background(isLastPlayed ? DSColor.accent.opacity(0.14) : DSColor.surfaceTertiary,
-                                                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                            .overlay {
-                                                if isLastPlayed {
-                                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                                        .strokeBorder(DSColor.accent.opacity(0.55), lineWidth: 1)
-                                                }
-                                            }
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                            }
-                        }
+                        // 书源视频详情页同款：线路名做标题（多条线路时用 Menu 切换），
+                        // 下面是横向滚动的选集卡片，再下面是作品信息。
+                        detailEpisodesSection(item)
                     }
 
                     if let message {
@@ -1554,9 +1473,8 @@ struct CatVodHomeView: View {
                 }
                 .padding()
             }
-            // The header already carries the title at title3; repeating it in the
-            // navigation bar put the same line on screen twice.
-            .navigationTitle(localized("选集"))
+            // 书源视频详情页同款：整页取海报底色、深色文字。
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -1574,7 +1492,9 @@ struct CatVodHomeView: View {
                     }
                 }
             }
-            .themedAppSurface(for: .explore)
+            // 海报底部取色，压暗到白字可读，和书源 VideoDetailView.pageTint 一致。
+            .background(detailPageTint.ignoresSafeArea())
+            .environment(\.colorScheme, .dark)
         }
         .confirmationDialog(
             qualityPrompt?.title ?? localized("选择清晰度"),
@@ -1601,6 +1521,215 @@ struct CatVodHomeView: View {
         // 每次都得往上拖一把才能点集。直接给整页。
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+        .task(id: item.cover) {
+            let image = await CatVodCoverStore.shared.image(for: item.cover)
+            guard !Task.isCancelled else { return }
+            detailPoster = image
+            if let image {
+                let foot = await Task.detached(priority: .utility) {
+                    CoverTint.average(of: image, bottomFraction: DSLayout.videoPosterFootFraction)
+                }.value
+                detailPosterFoot = foot
+            } else {
+                detailPosterFoot = nil
+            }
+        }
+    }
+
+    // MARK: - 书源视频详情页风格（猫源复用 VideoDetailHero / BookDetailInfoSection）
+
+    /// 整页底色：海报底部取色压暗；没取到时用中性深灰。
+    private var detailPageTint: Color {
+        guard let foot = detailPosterFoot else { return CoverTint.placeholder.color }
+        return CoverTint.background(for: foot, minimumContrast: 4.5).color
+    }
+
+    /// hero 标题下的一行事实：年份 / 类型 / 集数。
+    private func detailFacts(_ item: CatVodMedia) -> [String] {
+        var facts: [String] = []
+        if !item.year.isEmpty { facts.append(item.year) }
+        if !item.typeName.isEmpty { facts.append(item.typeName) }
+        let count = detailGroups.reduce(0) { $0 + $1.episodes.count }
+        if count > 0 { facts.append(String(format: localized("共 %d 集"), count)) }
+        return facts
+    }
+
+    /// hero 的动作行：白色播放胶囊 + 玻璃胶囊里的倒序/选集按钮，和书源详情页一致。
+    @ViewBuilder
+    private func detailHeroActions(_ item: CatVodMedia) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: DSSpacing.lg) { detailPlayButton(item); detailActionCapsule }
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: DSSpacing.md) { detailPlayButton(item); detailActionCapsule }
+        }
+    }
+
+    private func detailPlayButton(_ item: CatVodMedia) -> some View {
+        let episode = preferredEpisode
+        return Button {
+            guard let episode, !isResolvingPlayback else { return }
+            Task { await play(episode, title: item.name) }
+        } label: {
+            HStack(spacing: DSLayout.videoPlayIconSpacing) {
+                if playingEpisodeID == episode?.id {
+                    ProgressView().tint(.secondary)
+                } else {
+                    Image(systemName: "play.fill").font(DSFont.subheadline)
+                }
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(lastPlayedEpisodeID == nil ? localized("播放第一集") : localized("继续播放"))
+                        .font(DSFont.footnote.weight(.semibold))
+                    if let episode, lastPlayedEpisodeID != nil {
+                        Text(episodeTitle(episode.title))
+                            .font(DSFont.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .lineLimit(1)
+            }
+            .padding(.vertical, DSSpacing.sm)
+            .padding(.horizontal, DSSpacing.lg)
+            .frame(maxWidth: DSLayout.videoPlayButtonMaxWidth)
+        }
+        .buttonStyle(BookDetailCardActionStyle(fill: DSColor.cardPrimaryActionFill,
+                                               label: DSColor.cardPrimaryActionLabel,
+                                               minHeight: DSLayout.videoPlayButtonHeight))
+        .disabled(episode == nil || isResolvingPlayback)
+        .accessibilityLabel(lastPlayedEpisodeID == nil ? localized("播放第一集") : localized("继续播放"))
+    }
+
+    private var detailActionCapsule: some View {
+        HStack(spacing: 0) {
+            Button { episodesReversed.toggle() } label: {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(DSFont.title3)
+                    .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel(localized("倒序"))
+        }
+        .foregroundStyle(DSColor.textPrimary)
+        .buttonStyle(.borderless)
+        .modifier(CardButtonGlass())
+    }
+
+    /// 选集区：线路标题（多线路 Menu）+ 横向选集卡片 + 作品信息。
+    @ViewBuilder
+    private func detailEpisodesSection(_ item: CatVodMedia) -> some View {
+        VStack(alignment: .leading, spacing: DSSpacing.lg) {
+            detailRouteHeader
+            if detailGroups.indices.contains(detailRouteIndex) {
+                let group = detailGroups[detailRouteIndex]
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: DSSpacing.md) {
+                        ForEach(episodes(for: group)) { episode in
+                            detailEpisodeCard(episode, item: item)
+                        }
+                    }
+                    .padding(.vertical, DSLayout.videoEpisodeResumeRingOutset)
+                }
+                .scrollIndicators(.hidden)
+                .contentMargins(.horizontal, DSSpacing.lg, for: .scrollContent)
+                .scrollTargetBehavior(.viewAligned)
+            }
+            BookDetailInfoSection(items: detailInfoItems(item))
+        }
+    }
+
+    @ViewBuilder
+    private var detailRouteHeader: some View {
+        if detailGroups.count > 1, detailGroups.indices.contains(detailRouteIndex) {
+            Menu {
+                Picker(localized("线路"), selection: $detailRouteIndex) {
+                    ForEach(detailGroups.indices, id: \.self) { index in
+                        Text(detailGroups[index].name).tag(index)
+                    }
+                }
+            } label: {
+                HStack(spacing: DSLayout.videoPlayIconSpacing) {
+                    Text(detailGroups[detailRouteIndex].name)
+                        .font(DSFont.headline.weight(.bold))
+                    Image(systemName: "chevron.down").font(DSFont.title3)
+                }
+                .foregroundStyle(DSColor.textPrimary)
+                .frame(minHeight: DSLayout.minimumTapTarget)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(localized("线路"))
+        } else {
+            Text(localized("选集"))
+                .font(DSFont.headline.weight(.bold))
+                .foregroundStyle(DSColor.textPrimary)
+                .accessibilityAddTraits(.isHeader)
+        }
+    }
+
+    private func detailEpisodeCard(_ episode: CatVodEpisode, item: CatVodMedia) -> some View {
+        let isLastPlayed = lastPlayedEpisodeID == episode.id
+        let title = episodeTitle(episode.title)
+        return Button {
+            guard !isResolvingPlayback else { return }
+            Task { await play(episode, title: item.name) }
+        } label: {
+            VStack(alignment: .leading, spacing: DSSpacing.sm) {
+                ZStack {
+                    if let poster = detailPoster {
+                        Image(uiImage: poster).resizable().scaledToFill()
+                    } else {
+                        Text(episode.index.formatted())
+                            .font(DSFont.title.weight(.bold).monospacedDigit())
+                            .foregroundStyle(DSColor.textPrimary)
+                    }
+                    if playingEpisodeID == episode.id {
+                        ProgressView().tint(.white)
+                    }
+                }
+                .frame(width: DSLayout.videoEpisodeCardWidth, height: DSLayout.videoEpisodeCardHeight)
+                .background(DSColor.neutralControlFill)
+                .clipShape(RoundedRectangle(cornerRadius: DSRadius.md, style: .continuous))
+                .overlay {
+                    if isLastPlayed {
+                        RoundedRectangle(cornerRadius: DSRadius.md + DSLayout.videoEpisodeResumeRingOutset,
+                                         style: .continuous)
+                            .stroke(DSColor.textPrimary, lineWidth: DSLayout.videoEpisodeResumeStroke)
+                            .padding(-DSLayout.videoEpisodeResumeRingOutset)
+                    }
+                }
+                VStack(alignment: .leading, spacing: DSSpacing.xxs) {
+                    Text(String(format: localized("第 %d 集"), episode.index + 1))
+                        .font(DSFont.subheadline.weight(.semibold))
+                        .foregroundStyle(DSColor.textSecondary)
+                    if !title.isEmpty {
+                        Text(title)
+                            .font(DSFont.title3.weight(.bold))
+                            .foregroundStyle(DSColor.textPrimary)
+                    }
+                }
+                .lineLimit(1)
+                .frame(width: DSLayout.videoEpisodeCardWidth, alignment: .leading)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title.isEmpty ? String(format: localized("第 %d 集"), episode.index + 1) : title)
+    }
+
+    private func detailInfoItems(_ item: CatVodMedia) -> [BookDetailInfoItem] {
+        var items: [BookDetailInfoItem] = []
+        let count = detailGroups.reduce(0) { $0 + $1.episodes.count }
+        if count > 0 {
+            items.append(BookDetailInfoItem(id: "episodes", label: localized("集数"), value: count.formatted()))
+        }
+        if detailGroups.count > 1 {
+            items.append(BookDetailInfoItem(id: "routes", label: localized("线路"),
+                                            value: detailGroups.count.formatted()))
+        }
+        let sourceName = detailSite?.name ?? detailSite?.key ?? item.typeName
+        if !sourceName.isEmpty {
+            items.append(BookDetailInfoItem(id: "source", label: localized("来源"), value: sourceName))
+        }
+        return items
     }
 
     private func episodes(for group: CatVodGroup) -> [CatVodEpisode] {
