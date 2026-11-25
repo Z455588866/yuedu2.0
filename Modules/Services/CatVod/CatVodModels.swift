@@ -42,12 +42,36 @@ struct CatVodSite: Codable, Identifiable, Hashable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         key = try c.decodeIfPresent(String.self, forKey: .key) ?? ""
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? key
-        type = try c.decodeIfPresent(Int.self, forKey: .type)
+        type = Self.flexibleInt(c, .type)
         api = try c.decodeIfPresent(String.self, forKey: .api)
-        searchable = try c.decodeIfPresent(Bool.self, forKey: .searchable)
-        filterable = try c.decodeIfPresent(Bool.self, forKey: .filterable)
-        quickSearch = try c.decodeIfPresent(Bool.self, forKey: .quickSearch)
+        // 猫源网关把 `searchable`/`filterable`/`quickSearch` 发成数字 1/0
+        // （实测 smdl/lmentor/douer 全是 number，只有极少数站点是 bool）。
+        // JSONDecoder 的 decodeIfPresent(Bool.self) 遇到数字 1 会直接抛错，
+        // 让整个站点被 compactMap 丢弃——79 个站点只剩 19 个网盘/Python 站点，
+        // 界面就是「这个接口没有可用的站点」。照 CatVodMedia.string() 的容错
+        // 模式改成先试 Bool、再试 Int、最后试字符串，任一类型都能读懂。
+        searchable = Self.flexibleBool(c, .searchable)
+        filterable = Self.flexibleBool(c, .filterable)
+        quickSearch = Self.flexibleBool(c, .quickSearch)
         ext = (try? c.decodeIfPresent(String.self, forKey: .ext)) ?? ""
+    }
+
+    /// 站点标志位可能是 Bool、数字(1/0)或字符串("1"/"true")，逐个尝试，
+    /// 都不匹配时按「未声明」处理（nil），绝不让一个字段毁掉整个站点。
+    private static func flexibleBool(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> Bool? {
+        if let b = try? c.decodeIfPresent(Bool.self, forKey: key) { return b }
+        if let i = try? c.decodeIfPresent(Int.self, forKey: key) { return i != 0 }
+        if let s = try? c.decodeIfPresent(String.self, forKey: key) {
+            if let i = Int(s) { return i != 0 }
+            if let b = Bool(s) { return b }
+        }
+        return nil
+    }
+
+    private static func flexibleInt(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> Int? {
+        if let i = try? c.decodeIfPresent(Int.self, forKey: key) { return i }
+        if let s = try? c.decodeIfPresent(String.self, forKey: key) { return Int(s) }
+        return nil
     }
 
     /// Replaces `ext` with the JSON text of whatever shape the catalog declared.
