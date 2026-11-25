@@ -282,6 +282,8 @@ struct CatVodVLCVideoView: View {
     @State private var showsSubtitlePanel = false
     /// 画面摆放方式：适应 / 铺满（裁剪）/ 拉伸 / 原始尺寸，与系统播放器同一套档位。
     @State private var scalingMode: VideoScalingMode = .fit
+    /// 手动四分之一转，修正横置编码的片源（0/1/2/3），与系统播放器同一个按钮。
+    @State private var pictureRotation = 0
 
     var body: some View {
         ZStack {
@@ -292,14 +294,20 @@ struct CatVodVLCVideoView: View {
             // 与视频画面尺寸一致；CommentCoreLibrary 则是拉伸弹幕容器、字号同步放大。
             GeometryReader { geo in
                 let size = geo.size
-                let rect = scalingMode.pictureRect(native: model.videoSize, in: size)
-                let textScale = scalingMode.textScale(native: model.videoSize, in: size)
+                // 旋转 90/270° 时片源的宽高对调，与系统播放器的 rotatedPictureSize 一致。
+                var native = model.videoSize
+                if pictureRotation % 2 == 1 { swap(&native.width, &native.height) }
+                // 旋转时强制按「适应」算矩形和字号，与 VideoPlayerLayerView 的判断一致，
+                // 避免画面转了、弹幕矩形却还按铺满算导致的错位。
+                let mode: VideoScalingMode = pictureRotation % 2 == 1 ? .fit : scalingMode
+                let rect = mode.pictureRect(native: native, in: size)
+                let textScale = mode.textScale(native: native, in: size)
                 // 「拉伸」档要靠 VLC 的 aspect 实现，其余档位恢复片源原始比例。
-                let aspect = scalingMode == .stretch && size.width > 0 && size.height > 0
+                let aspect = mode == .stretch && size.width > 0 && size.height > 0
                     ? "\(Int(size.width.rounded())):\(Int(size.height.rounded()))"
                     : nil
                 ZStack {
-                    VLCVideoSurface(view: model.drawable)
+                    VLCVideoSurface(view: model.drawable, rotation: pictureRotation)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     // 弹幕压在画面上、控制条下面，且不接管触摸——否则点不到进度条。
                     if danmakuController.enabled, let track = danmakuController.track {
@@ -360,6 +368,11 @@ struct CatVodVLCVideoView: View {
         }
         .readerWindowProbe(window)
         .statusBarHidden(!showsControls)
+        .persistentSystemOverlays(.hidden)
+        // 与系统播放器同样把整棵视图（含弹幕/字幕的 sheet）设为深色环境。
+        // 少了这一行，sheet 用系统浅色环境、文字却又继承顶栏的 .white，
+        // 就成了「白底白字、看起来一片空白但其实有内容」。
+        .environment(\.colorScheme, .dark)
         .task {
             model.open(url: url, headers: headers, startAt: startAt)
             clock.attach { [model] in (model.rawTime, model.isPlaying) }
@@ -407,14 +420,15 @@ struct CatVodVLCVideoView: View {
 
     private var controls: some View {
         VStack {
-            HStack(spacing: 12) {
+            HStack(spacing: DSSpacing.md) {
                 Button { onClose() } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 38, height: 38)
+                        .font(DSFont.toolbarIconLarge)
+                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
                 }
+                .accessibilityLabel(localized("关闭"))
                 Text(title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(DSFont.headline)
                     .lineLimit(1)
                 Spacer()
                 // 弹幕设置：与系统播放器同一控件，可开关、选源、手动搜剧。
@@ -465,10 +479,19 @@ struct CatVodVLCVideoView: View {
                     .pickerStyle(.inline)
                 } label: {
                     Image(systemName: scalingMode.systemImage)
-                        .font(.system(size: 16))
-                        .frame(width: 38, height: 38)
+                        .font(DSFont.toolbarIcon)
+                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
                 }
                 .accessibilityLabel(String(format: localized("画面缩放：%1$@"), localized(scalingMode.labelKey)))
+                // 旋转画面 90°：与系统播放器同一个 arrow.clockwise 按钮、同一语义。
+                Button {
+                    pictureRotation = (pictureRotation + 1) % 4
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(DSFont.toolbarIcon)
+                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                }
+                .accessibilityLabel(localized("旋转画面"))
                 // 横/竖屏切换：用户反馈的痛点——VLC 内核此前竖屏无法转横屏。
                 Button {
                     let next: FixedLayoutOrientation = {
@@ -484,8 +507,8 @@ struct CatVodVLCVideoView: View {
                 } label: {
                     Image(systemName: orientationOverride == .portrait
                           ? "rectangle.portrait" : "rectangle.landscape")
-                        .font(.system(size: 16))
-                        .frame(width: 38, height: 38)
+                        .font(DSFont.toolbarIcon)
+                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
                 }
                 .accessibilityLabel(localized("横屏/竖屏切换"))
                 Text("VLC")
@@ -583,6 +606,8 @@ struct CatVodVLCVideoView: View {
 
 private struct VLCVideoSurface: UIViewRepresentable {
     let view: UIView
+    /// 四分之一转，语义与系统播放器的 VideoPlayerLayerView 一致。
+    let rotation: Int
 
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
@@ -593,6 +618,11 @@ private struct VLCVideoSurface: UIViewRepresentable {
         return container
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) {
+        // 与 AVPlayerLayer 同样把 transform 加在 backing view 上：UIKit 布局会重写
+        // frame/bounds，但不会碰 transform，所以旋转在尺寸变化后依然成立。
+        let angle = CGFloat(rotation) * .pi / 2
+        uiView.transform = CGAffineTransform(rotationAngle: angle)
+    }
 }
 #endif

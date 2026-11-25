@@ -38,10 +38,24 @@ enum CatVodPlaybackRoute: Sendable, Equatable {
         if ["m3u8", "m3u", "ts", "mpd"].contains(ext) {
             return .system
         }
-        if let kind = await sniff(url: url, headers: headers), vlcOnlyExtensions.contains(kind) {
-            return .vlc(reason: kind.uppercased())
+        if let kind = await sniff(url: url, headers: headers) {
+            if vlcOnlyExtensions.contains(kind) { return .vlc(reason: kind.uppercased()) }
+            // 本地网关把 m3u8 直播也代理成无扩展名的 127.0.0.1。sniff 认出是 HLS
+            // 后要明确交给系统，不能掉进下面的 loopback→VLC 兜底（否则直播会走错内核）。
+            if kind == "hls" { return .system }
         }
+        // sniff 读不到（超时/空/非容器指纹）时怎么办，是这次真机日志定位到的关键：
+        //   带 Cookie 的网盘线（headers=3）代理后 sniff 稳定 3 秒超时 → 落到这里；
+        //   旧代码一律 return .system，而 AVFoundation 根本解不了网盘的 MKV，
+        //   结果就是「无可用资源」黑屏（FongMi/TV 的做法是默认用能力最强的内核，
+        //   只有明确认出是系统强项才给系统，而不是反过来）。
+        // 本地网关代理（127.0.0.1）来源几乎都是网盘/转码容器，读不到头也该交给 VLC。
+        if isLoopback(url) { return .vlc(reason: "PROXY") }
         return .system
+    }
+
+    private static func isLoopback(_ url: URL) -> Bool {
+        ["127.0.0.1", "localhost", "::1"].contains(url.host ?? "")
     }
 
     /// 读文件头，返回容器种类；读不到（超时、拒绝、直播流）就返回 nil，交给系统试。
@@ -51,7 +65,7 @@ enum CatVodPlaybackRoute: Sendable, Equatable {
         // 两个字节就够判 RIFF/EBML，但要读满 12 才能确认 AVI。范围小，源站不会因此传整个文件。
         request.setValue("bytes=0-15", forHTTPHeaderField: "Range")
         request.timeoutInterval = 3
-        let isLoopback = ["127.0.0.1", "localhost", "::1"].contains(url.host ?? "")
+        let isLoopback = Self.isLoopback(url)
         if !isLoopback {
             for (field, value) in headers where field.lowercased() != "range" {
                 request.setValue(value, forHTTPHeaderField: field)
@@ -70,8 +84,15 @@ enum CatVodPlaybackRoute: Sendable, Equatable {
             // 读到一半断开也算拿到指纹；一个字节没读到就交给系统播放器。
         }
         if let kind = container(of: data) { return kind }
+        // HLS 播放列表是文本，前几个字节就是 #EXTM3U；本地网关代理后扩展名丢失，
+        // 靠这个把它和网盘二进制容器区分开，避免直播被 loopback 兜底塞给 VLC。
+        if let head = String(data: data.prefix(16), encoding: .utf8),
+           head.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXT") {
+            return "hls"
+        }
         // 指纹认不出来时再看 MIME：有些源站把 MKV 直接标成 video/x-matroska。
         if let mime = (response as? HTTPURLResponse)?.mimeType?.lowercased() {
+            if mime.contains("mpegurl") { return "hls" }
             if mime.contains("matroska") { return "mkv" }
             if mime.contains("msvideo") { return "avi" }
             if mime.contains("x-flv") { return "flv" }
