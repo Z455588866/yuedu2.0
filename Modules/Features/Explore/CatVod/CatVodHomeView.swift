@@ -700,7 +700,7 @@ struct CatVodHomeView: View {
             let cachedList = CatVodService.shared.cachedHome(bundleURL: bundle, site: firstSite)
             await MainActor.run {
                 guard token == loadToken else { return }
-                sites = CatVodSourceHealth.shared.arranged(cachedSites, bundleURL: bundle)
+                sites = cachedArranged
                 selectedSite = firstSite
                 currentCategory = nil
                 filterChoices = [:]
