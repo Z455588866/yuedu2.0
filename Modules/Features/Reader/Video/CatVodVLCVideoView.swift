@@ -42,6 +42,9 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
     private var player: VLCMediaPlayer?
     private var tickTask: Task<Void, Never>?
     private var pendingSeek: Double = 0
+    /// 「拉伸」档要覆盖的宽高比，nil 表示按片源原始比例。
+    /// libvlc 的 aspect 语义就是「按这个比例渲染」，设成窗口比例即非等比拉伸铺满。
+    private var aspectOverride: String?
     /// 播完之后要能重来一遍：VLC 停在 `.ended` 时再调 `play()` 不会动，
     /// 必须换一个新的 media 对象。
     private var sourceURL: URL?
@@ -71,10 +74,10 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         player.drawable = drawable
         // MobileVLCKit 的语义：scaleFactor 只有在 0（自动）时才会跟随 drawable 的尺寸变化。
         // 写死成别的值，之后改 drawable 的 frame 画面不会重排 —— 这也是「填满萤幕后画面没变」
-        // 这类问题的常见根因。videoAspectRatio 交给系统按片源原始比例算。
+        // 这类问题的常见根因。宽高比按当前档位应用（「拉伸」才需要覆盖）。
         player.scaleFactor = 0
-        player.videoAspectRatio = nil
         self.player = player
+        applyAspectRatio(aspectOverride)
 
         player.media = makeMedia(url: url, headers: headers)
         player.play()
@@ -154,6 +157,20 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         player?.rate = value
     }
 
+    /// 画面档位里只有「拉伸」需要瓶子自己出力：VLC 默认永远保持片源比例，
+    /// 想非等比铺满只能把 `videoAspectRatio` 设成窗口比例 = W:H。
+    /// 语义与 libvlc 的 `libvlc_video_set_aspect_ratio` 一致（内部会拷贝字符串）；
+    /// 传 nil 恢复片源原始比例。这是 VLC 系播放器做「拉伸」的通用做法。
+    func applyAspectRatio(_ value: String?) {
+        aspectOverride = value
+        guard let player else { return }
+        if let value {
+            value.withCString { player.videoAspectRatio = UnsafeMutablePointer(mutating: $0) }
+        } else {
+            player.videoAspectRatio = nil
+        }
+    }
+
     func stop() {
         tickTask?.cancel()
         tickTask = nil
@@ -198,7 +215,8 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         Task { @MainActor [weak self] in
             guard let self, let current = self.player else { return }
             current.scaleFactor = 0
-            current.videoAspectRatio = nil
+            // 元数据解析会重置 aspect，这里按当前档位重新应用一次。
+            self.applyAspectRatio(self.aspectOverride)
             let size = current.videoSize
             if size.width > 0, size.height > 0 { self.videoSize = size }
         }
@@ -283,6 +301,10 @@ struct CatVodVLCVideoView: View {
                 let size = geo.size
                 let rect = scalingMode.pictureRect(native: model.videoSize, in: size)
                 let textScale = scalingMode.textScale(native: model.videoSize, in: size)
+                // 「拉伸」档要靠 VLC 的 aspect 实现，其余档位恢复片源原始比例。
+                let aspect = scalingMode == .stretch && size.width > 0 && size.height > 0
+                    ? "\(Int(size.width.rounded())):\(Int(size.height.rounded()))"
+                    : nil
                 ZStack {
                     VLCVideoSurface(view: model.drawable)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -304,6 +326,9 @@ struct CatVodVLCVideoView: View {
                 }
                 .frame(width: max(1, rect.width), height: max(1, rect.height))
                 .position(x: rect.midX, y: rect.midY)
+                .task(id: aspect) {
+                    model.applyAspectRatio(aspect)
+                }
             }
             .ignoresSafeArea()
             if model.isPreparing {
