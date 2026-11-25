@@ -97,9 +97,20 @@ struct CatVodPythonSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var pyStore = PythonSourceStore.shared
+    @State private var query = ""
 
-    private var enabledSources: [PythonSourceInfo] {
+    /// 所有启用的源（不过滤），用来区分「一个源都没有」和「搜索没结果」两种空态。
+    private var allEnabledSources: [PythonSourceInfo] {
         pyStore.sources.filter(\.enabled)
+    }
+
+    /// 列表数据：和上面的在线站点选择器同款过滤——按名称或文件名不区分大小写匹配。
+    private var enabledSources: [PythonSourceInfo] {
+        let all = allEnabledSources
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return all }
+        return all.filter { $0.name.localizedCaseInsensitiveContains(term)
+            || $0.file.localizedCaseInsensitiveContains(term) }
     }
 
     private func site(for source: PythonSourceInfo) -> CatVodSite {
@@ -114,15 +125,23 @@ struct CatVodPythonSheet: View {
                 if enabledSources.isEmpty {
                     Section {
                         VStack(spacing: 10) {
-                            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                            Image(systemName: query.isEmpty
+                                  ? "chevron.left.forwardslash.chevron.right" : "magnifyingglass")
                                 .font(.system(size: 34))
                                 .foregroundStyle(DSColor.textSecondary)
-                            Text(localized("还没有启用的 Python 源"))
-                                .font(DSFont.headline)
-                            Text(localized("到「管理猫源 → Python 源」导入 .py 文件，或把已关闭的源打开。"))
-                                .font(DSFont.caption)
-                                .foregroundStyle(DSColor.textSecondary)
-                                .multilineTextAlignment(.center)
+                            if allEnabledSources.isEmpty {
+                                Text(localized("还没有启用的 Python 源"))
+                                    .font(DSFont.headline)
+                                Text(localized("到「管理猫源 → Python 源」导入 .py 文件，或把已关闭的源打开。"))
+                                    .font(DSFont.caption)
+                                    .foregroundStyle(DSColor.textSecondary)
+                                    .multilineTextAlignment(.center)
+                            } else {
+                                Text(localized("没有匹配的 Python 源"))
+                                    .font(DSFont.headline)
+                                Button(localized("清除搜索")) { query = "" }
+                                    .font(DSFont.caption)
+                            }
                         }
                         .padding(.vertical, 24)
                     }
@@ -169,7 +188,9 @@ struct CatVodPythonSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle(localized("Python 源"))
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: localized("搜索源名称或文件名"))
+            .navigationTitle(String(format: localized("Python 源（%ld）"), enabledSources.count))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
