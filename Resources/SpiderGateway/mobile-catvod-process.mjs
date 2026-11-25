@@ -95,33 +95,19 @@ export function createMobileCatVodProcess({ bundlePath, runtimeDir, maxLineBytes
     final(callback) { worker.postMessage({ close: true }); callback(); }
   });
   result.stdio = [result.stdin, null, null, control];
-  // SIGABRT (uv__io_poll -> err() -> abort()) came from terminating a worker
-  // while its libuv loop was still inside messagesServer.close()/stop(). On
-  // iOS the worker shares the OS process with native code, so that abort kills
-  // the whole app. Ask it to close gracefully instead: stdin.end() already
-  // posts {close:true} (see result.stdin.final), the runner drains its queue,
-  // then closes BOTH servers and stops its provider before the thread ends.
-  //
-  // The 5s safety net was still firing during a real shutdown: closing two
-  // listening servers plus a bundle's async stop() can take longer than 5s,
-  // so terminate() hit uv__io_poll mid-loop and aborted the process. Extend it
-  // well past any cooperative path and re-check the exit before using it —
-  // a worker that is already winding down must never be cut.
-  let terminateTimer = null;
+  // SIGABRT (Worker::Run → uv_run → uv__io_poll.cold → err() → abort()) came
+  // from worker.terminate() landing while the worker's own libuv loop was still
+  // polling a handle. On iOS the worker shares the OS process with native code,
+  // so that abort kills the whole app — crash reports show exactly this stack,
+  // repeatedly (07:33, 07:40 twice, 14:33). The only safe policy is never to
+  // terminate a worker from outside: ask it to close cooperatively (stdin.end()
+  // → runner drains its queue, closes both servers, stops the provider, thread
+  // ends naturally). Mirrors FongMi/TV's "unify crawler lifecycle, never kill
+  // mid-flight". A worker that ignores the request leaks one thread until app
+  // exit — far better than crashing the reader.
   result.kill = () => {
     if (closed) return;
     try { result.stdin.end(); } catch { /* already ended */ }
-    if (terminateTimer) return;
-    terminateTimer = setTimeout(() => {
-      terminateTimer = null;
-      if (!closed) {
-        try { void worker.terminate(); } catch { /* already gone */ }
-      }
-    }, 30_000);
-    terminateTimer.unref();
   };
-  worker.once('exit', () => {
-    if (terminateTimer) { clearTimeout(terminateTimer); terminateTimer = null; }
-  });
   return result;
 }

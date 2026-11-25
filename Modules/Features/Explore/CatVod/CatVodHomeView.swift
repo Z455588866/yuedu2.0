@@ -46,6 +46,8 @@ struct CatVodHomeView: View {
     /// stack a dozen detail sheets on top of each other.
     @State private var isOpeningDetail = false
     @State private var showsSitePicker = false
+    /// Python 源有自己独立固定的面板（见 CatVodPythonSheet），不和在线站点混在一起。
+    @State private var showsPythonSheet = false
     /// Same guard for episode taps — a slow `player` resolve must not let a
     /// dozen taps each present a player the moment they finally answer.
     @State private var isResolvingPlayback = false
@@ -167,6 +169,16 @@ struct CatVodHomeView: View {
                 Task { await loadHome() }
             }
         }
+        .sheet(isPresented: $showsPythonSheet) {
+            CatVodPythonSheet(onSelect: { site in
+                selectedSite = site
+                currentCategory = nil
+                filterChoices = [:]
+                filtersExpanded = false
+                activeSearchTerm = nil
+                Task { await loadHome() }
+            }, selectedKey: selectedSite?.key)
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 // 直播由接口的 `lives` 提供，多数 JS 猫源没有；点进去会说明情况，
@@ -245,6 +257,18 @@ struct CatVodHomeView: View {
                 .disabled(sites.count <= 1)
                 .accessibilityLabel(localized("选择站点"))
             }
+
+            // Python 源固定入口：独立面板，数据来自本地 manifest，不随网关
+            // 实时 catalog 的 1.5s 超时闪现/消失。当前选中的是 py 源时高亮。
+            Button {
+                showsPythonSheet = true
+            } label: {
+                headerPill(icon: "chevron.left.forwardslash.chevron.right",
+                           title: localized("Python 源"),
+                           showsChevron: false)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(localized("Python 源"))
 
             Spacer(minLength: 0)
         }
@@ -694,9 +718,11 @@ struct CatVodHomeView: View {
         // Cold start: paint the site list and the last 推荐 from disk before the
         // gateway has downloaded (or verified) and booted the bundle. Without this
         // the whole page is one spinner for the length of the process start.
+        // Python 源走独立面板，不进在线站点列表。网关 catalog 里仍会带 py- 站点，
+        // 这里一律剔除，避免它们混进默认首页/搜索池、以及失效源沉底时被顶来顶去。
         let cachedArranged = CatVodService.shared.cachedCatalog(bundleURL: bundle)
-            .map { CatVodSourceHealth.shared.arranged($0, bundleURL: bundle) } ?? []
-        if let firstSite = cachedArranged.first(where: { !$0.key.hasPrefix("py-") }) ?? cachedArranged.first {
+            .map { CatVodSourceHealth.shared.arranged($0, bundleURL: bundle).filter { !$0.key.hasPrefix("py-") } } ?? []
+        if let firstSite = cachedArranged.first {
             let cachedList = CatVodService.shared.cachedHome(bundleURL: bundle, site: firstSite)
             await MainActor.run {
                 guard token == loadToken else { return }
@@ -719,12 +745,10 @@ struct CatVodHomeView: View {
             // 排在第一个就等于每次打开都要等一遍。
             CatVodSourceHealth.shared.prune(bundleURL: bundle)
             let ordered = CatVodSourceHealth.shared.arranged(loaded, bundleURL: bundle)
+                .filter { !$0.key.hasPrefix("py-") }
             await MainActor.run {
                 sites = ordered
-                // py 源响应动辄 1-2 分钟（search/category 实测 150s），若被选成
-                // 默认首页，切任何接口都要先卡一轮超时，看着就是「一直加载中」。
-                // 默认站点永远挑在线站点；py 源仍留在列表里，想用再手动点。
-                selectedSite = ordered.first { !$0.key.hasPrefix("py-") } ?? ordered.first
+                selectedSite = ordered.first
                 currentCategory = nil
                 filterChoices = [:]
                 allFilters = [:]
@@ -947,6 +971,7 @@ struct CatVodHomeView: View {
         if pool.isEmpty {
             if let cached = CatVodService.shared.cachedCatalog(bundleURL: bundle), !cached.isEmpty {
                 pool = CatVodSourceHealth.shared.arranged(cached, bundleURL: bundle)
+                    .filter { !$0.key.hasPrefix("py-") }
                 await MainActor.run {
                     guard token == searchToken else { return }
                     sites = pool
@@ -954,6 +979,7 @@ struct CatVodHomeView: View {
                 }
             } else if let loaded = try? await CatVodService.shared.catalog(bundleURL: bundle), !loaded.isEmpty {
                 pool = CatVodSourceHealth.shared.arranged(loaded, bundleURL: bundle)
+                    .filter { !$0.key.hasPrefix("py-") }
                 await MainActor.run {
                     guard token == searchToken else { return }
                     sites = pool

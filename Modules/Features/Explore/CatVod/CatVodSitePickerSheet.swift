@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// 站点选择器。
+/// 站点选择器（只显示在线站点）。
 ///
-/// 一个接口动辄几十上百个站点（实测 niuer 99 个），`Picker(.menu)` 会退化成一个
-/// 几十行的滚动菜单：没有搜索、看不出哪个最近连不上、名字一长就被截断。这里换成
-/// 一个带搜索的列表，并把健康状态直接标在行上——和沉底排序是同一份数据。
+/// Python 源已经移到独立的「Python 源」面板（见 CatVodPythonSheet），不再和
+/// 在线站点混在这一个列表里——混在一起时 py 源的显示依赖网关实时请求
+/// `/v1/pyspider/sites`，服务冷启动那 1.5 秒会返回空，表现就是「一会显示一会
+/// 不显示」，而且失效站点沉底后 py 会被顶到奇怪的位置。
 struct CatVodSitePickerSheet: View {
     let sites: [CatVodSite]
     let selected: CatVodSite?
@@ -18,17 +19,14 @@ struct CatVodSitePickerSheet: View {
         site.key.hasPrefix("py-")
     }
 
+    /// 过滤掉 py 源——它们有自己的固定面板。
     private var filtered: [CatVodSite] {
+        let online = sites.filter { !Self.isPython($0) }
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !term.isEmpty else { return sites }
-        return sites.filter { $0.name.localizedCaseInsensitiveContains(term)
+        guard !term.isEmpty else { return online }
+        return online.filter { $0.name.localizedCaseInsensitiveContains(term)
             || $0.key.localizedCaseInsensitiveContains(term) }
     }
-
-    /// Python 源单独成组并置顶——它们是用户自己导入的 .py 脚本，和接口的在线
-    /// 站点不是一回事。放在一个独立 Section 里，导入后一眼就能找到、直接选播。
-    private var pythonSites: [CatVodSite] { filtered.filter { Self.isPython($0) } }
-    private var regularSites: [CatVodSite] { filtered.filter { !Self.isPython($0) } }
 
     @ViewBuilder
     private func row(_ site: CatVodSite) -> some View {
@@ -38,20 +36,10 @@ struct CatVodSitePickerSheet: View {
         } label: {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        if Self.isPython(site) {
-                            Text("PY")
-                                .font(DSFont.caption2.weight(.bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(DSColor.accent, in: Capsule())
-                        }
-                        Text(site.name)
-                            .font(DSFont.body)
-                            .foregroundStyle(DSColor.textPrimary)
-                            .lineLimit(2)
-                    }
+                    Text(site.name)
+                        .font(DSFont.body)
+                        .foregroundStyle(DSColor.textPrimary)
+                        .lineLimit(2)
                     if CatVodSourceHealth.shared.isDown(bundleURL: bundleURL, siteKey: site.key) {
                         Text(localized("最近连接失败，已排到后面"))
                             .font(DSFont.caption2)
@@ -74,16 +62,9 @@ struct CatVodSitePickerSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                if !pythonSites.isEmpty {
+                if !filtered.isEmpty {
                     Section {
-                        ForEach(pythonSites) { site in row(site) }
-                    } header: {
-                        Text(localized("Python 源（已导入）"))
-                    }
-                }
-                if !regularSites.isEmpty {
-                    Section {
-                        ForEach(regularSites) { site in row(site) }
+                        ForEach(filtered) { site in row(site) }
                     } header: {
                         Text(localized("在线站点"))
                     }
@@ -92,13 +73,110 @@ struct CatVodSitePickerSheet: View {
             .listStyle(.insetGrouped)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: localized("搜索站点名"))
-            .navigationTitle(String(format: localized("站点（%ld）"), sites.count))
+            .navigationTitle(String(format: localized("站点（%ld）"), filtered.count))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(localized("关闭")) { dismiss() }
                 }
             }
+        }
+    }
+}
+
+/// 独立的 Python 源面板——固定、稳定，和在线站点完全分开。
+///
+/// 数据源是本地磁盘上的 `PythonSourceStore.sources`（manifest），不经过网关
+/// `/v1/pyspider/sites` 那个 1.5 秒超时的实时请求，所以导入后立即显示、不会
+/// 「一会显示一会不显示」。每个源构造 `py-<token>` 站点，网关靠这个前缀路由到
+/// Python 服务，不依赖 catalog 是否碰巧返回了它。
+struct CatVodPythonSheet: View {
+    /// 点击某个 py 源后回调，交给主页选中并加载。
+    let onSelect: (CatVodSite) -> Void
+    let selectedKey: String?
+
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var pyStore = PythonSourceStore.shared
+
+    private var enabledSources: [PythonSourceInfo] {
+        pyStore.sources.filter(\.enabled)
+    }
+
+    private func site(for source: PythonSourceInfo) -> CatVodSite {
+        let key = "py-" + source.token
+        return CatVodSite(key: key, name: source.name, type: 4,
+                          api: "/spider/\(key)/4", searchable: true)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if enabledSources.isEmpty {
+                    Section {
+                        VStack(spacing: 10) {
+                            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                                .font(.system(size: 34))
+                                .foregroundStyle(DSColor.textSecondary)
+                            Text(localized("还没有启用的 Python 源"))
+                                .font(DSFont.headline)
+                            Text(localized("到「管理猫源 → Python 源」导入 .py 文件，或把已关闭的源打开。"))
+                                .font(DSFont.caption)
+                                .foregroundStyle(DSColor.textSecondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(.vertical, 24)
+                    }
+                } else {
+                    Section {
+                        ForEach(enabledSources) { source in
+                            let item = site(for: source)
+                            Button {
+                                onSelect(item)
+                                dismiss()
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "chevron.left.forwardslash.chevron.right")
+                                        .font(DSFont.caption)
+                                        .foregroundStyle(DSColor.accent)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(source.name)
+                                            .font(DSFont.body)
+                                            .foregroundStyle(DSColor.textPrimary)
+                                        Text(source.file)
+                                            .font(DSFont.caption2)
+                                            .foregroundStyle(DSColor.textSecondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                    }
+                                    Spacer(minLength: 8)
+                                    if item.key == selectedKey {
+                                        Image(systemName: "checkmark")
+                                            .font(DSFont.caption.weight(.semibold))
+                                            .foregroundStyle(DSColor.accent)
+                                    }
+                                }
+                                .frame(minHeight: 44)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    } header: {
+                        Text(localized("Python 源"))
+                    } footer: {
+                        Text(localized("这些是导入的 .py 脚本，独立于在线站点。选中后即可浏览、搜索和播放。"))
+                            .dsSectionFooter()
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle(localized("Python 源"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(localized("关闭")) { dismiss() }
+                }
+            }
+            .task { pyStore.refresh() }
         }
     }
 }

@@ -161,12 +161,13 @@ class CatVodSession {
     this.#fail(new GatewayError("CATVOD_STOPPED", "CatVod stopped", 502));
     this.lines.close();
     const child = this.process;
-    child.stdin.end();
-    child.kill("SIGTERM");
-    const forceKill = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    }, 1_000);
-    forceKill.unref();
+    // 只走协作式关闭：stdin.end() → runner 收到 {close:true} → 关掉两个 server、
+    // 排空队列、stop provider，worker 自然退出。不再 SIGTERM/SIGKILL 强杀——
+    // 在 iOS 上 Node worker 和 App 共进程，任何 terminate/SIGKILL 撞上 libuv
+    // 的 uv__io_poll 都会 err()→abort 带崩整个 App（崩溃堆栈已多次证实）。
+    // 对齐 FongMi/TV「统一爬虫生命周期、不主动杀死线程」：宁可一次会话失败、
+    // 线程稍晚退出，也不能让整个阅读器闪退。
+    try { child.stdin.end(); } catch { /* already ended */ }
   }
 }
 

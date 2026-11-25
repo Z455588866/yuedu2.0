@@ -412,8 +412,8 @@ final class CatVodService {
                 else { headers[k] = "\(v)" }
             }
         }
-        let parse = Self.flexibleInt(object["parse"])
-        let jx = Self.flexibleInt(object["jx"])
+        var parse = Self.flexibleInt(object["parse"])
+        var jx = Self.flexibleInt(object["jx"])
         let rawURL = Self.firstURL(object["url"])
         // 网盘线路会带清晰度与降级说明：哪些档位真的能播、当前用的是哪一档。
         // 以前这两个字段被丢掉，用户只能看到「画面很糊」却没有任何解释。
@@ -438,6 +438,13 @@ final class CatVodService {
             let recovered = Self.recoverPlayerURL(from: object)
             if !recovered.isEmpty {
                 resolvedURL = recovered
+                // 从 qualityOptions/values 取到的已是直链，源站却常同时带 parse=1 /
+                // jx=1（意思是「url  needs parsing」）。直链不需要再嗅探，否则会把
+                // 一个能播的地址丢去做二次解析然后失败。FongMi 的 setDirect() 同理。
+                if recovered.hasPrefix("http://") || recovered.hasPrefix("https://") {
+                    parse = 0
+                    jx = 0
+                }
             } else if parse == 0, jx == 0, Self.isDirectMedia(episode.playID) {
                 resolvedURL = episode.playID
             } else {
@@ -579,9 +586,27 @@ final class CatVodService {
         }
     }
 
+    /// 判断一个字符串是否真的是可播放地址，而不是线路名/清晰度名。
+    ///
+    /// 实测多多等网盘源：`player` 结果的 `url` 字段可能是「代理」「高清 720P」
+    /// 这类线路名文字，真地址在 `qualityOptions[{name,url}]` 里。旧代码把线路名
+    /// 当 URL 解析，日志就是 `player url 无法解析 raw=代理`，然后抛「没有可播放
+    /// 地址」——其实走不到下面已经写好的清晰度选择窗。FongMi/TV 的 `Url` 把
+    /// 名称(n)和地址(v)分开、只把 v 当地址（getRealUrl），这里对齐同一语义。
+    private static func isPlayableAddress(_ value: String) -> Bool {
+        let s = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return false }
+        if s.contains("://") || s.hasPrefix("parse:") || s.hasPrefix("json:")
+            || s.hasPrefix("magnet:") || s.hasPrefix("thunder:")
+            || s.hasPrefix("ed2k:") { return true }
+        return isDirectMedia(s)
+    }
+
     private static func firstURL(_ value: Any?) -> String {
-        if let s = value as? String { return s }
-        if let arr = value as? [String] { return arr.first(where: { !$0.isEmpty }) ?? "" }
+        if let s = value as? String { return isPlayableAddress(s) ? s : "" }
+        if let arr = value as? [String] {
+            return arr.first(where: { isPlayableAddress($0) }) ?? ""
+        }
         // TVBox 各家 spider 的 player 返回字段不统一：`url` 有时是
         // `{url, playUrl, links}` 的字典，或嵌在 `data` 里。结果网关拿到的
         // `url` 是空串，App 就抛「没有可播放地址」，表现是网盘线路点了没反应。
@@ -617,6 +642,25 @@ final class CatVodService {
     /// 位置和普通源不同，不能只看 `url` 一个键就判死。键名做白名单，避免把
     /// `header`/`danmaku` 之类误当成地址。
     private static func recoverPlayerURL(from object: [String: Any]) -> String {
+        // 网盘多档位：url 字段常是线路名/清晰度名（"代理"、"高清 720P"），
+        // 真地址在 qualityOptions[{name,url}]。FongMi 的 Result 把名称与地址
+        // 分开、只把地址交给播放器，这里优先取档位里的真实地址。
+        var containers: [[String: Any]] = [object]
+        if let data = object["data"] as? [String: Any] { containers.append(data) }
+        for container in containers {
+            if let options = container["qualityOptions"] as? [[String: Any]] {
+                for option in options {
+                    if let url = option["url"] as? String, isPlayableAddress(url) { return url }
+                }
+            }
+            // 名称/地址对数组：[{name,v}...] 或 [[name,url],...]（FongMi Url.values）
+            if let values = container["values"] as? [[String: Any]] {
+                for entry in values {
+                    if let url = entry["v"] as? String, isPlayableAddress(url) { return url }
+                    if let url = entry["url"] as? String, isPlayableAddress(url) { return url }
+                }
+            }
+        }
         let keys = ["url", "playUrl", "play_url", "m3u8", "link", "links", "vod_play_url"]
         for key in keys {
             let found = firstURL(object[key])
