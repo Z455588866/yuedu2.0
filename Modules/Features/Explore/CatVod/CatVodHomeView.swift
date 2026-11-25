@@ -1421,8 +1421,11 @@ struct CatVodHomeView: View {
                                     } label: {
                                         Label(localized("重试"), systemImage: "arrow.clockwise")
                                             .font(DSFont.caption)
+                                            .padding(.horizontal, DSSpacing.md)
+                                            .padding(.vertical, DSSpacing.sm)
                                     }
-                                    .buttonStyle(.bordered)
+                                    .buttonStyle(.plain)
+                                    .catVodGlass(in: Capsule())
                                     Button {
                                         let name = item.name
                                         // Closing the sheet is now something the person
@@ -1435,17 +1438,25 @@ struct CatVodHomeView: View {
                                     } label: {
                                         Label(localized("全网搜索"), systemImage: "magnifyingglass")
                                             .font(DSFont.caption)
+                                            .padding(.horizontal, DSSpacing.md)
+                                            .padding(.vertical, DSSpacing.sm)
                                     }
-                                    .buttonStyle(.borderedProminent)
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(DSColor.cardPrimaryActionLabel)
+                                    .catVodGlass(in: Capsule(), fill: DSColor.cardPrimaryActionFill)
                                 }
                                 .padding(.top, 2)
                             } else {
                                 NavigationLink {
                                     CatVodCloudAccountView()
                                 } label: {
-                                    Text(localized("网盘账号配置")).font(DSFont.caption)
+                                    Text(localized("网盘账号配置"))
+                                        .font(DSFont.caption)
+                                        .padding(.horizontal, DSSpacing.md)
+                                        .padding(.vertical, DSSpacing.sm)
                                 }
-                                .buttonStyle(.bordered)
+                                .buttonStyle(.plain)
+                                .catVodGlass(in: Capsule())
                                 .padding(.top, 2)
                             }
                         }
@@ -1590,10 +1601,12 @@ struct CatVodHomeView: View {
             .padding(.vertical, DSSpacing.sm)
             .padding(.horizontal, DSSpacing.lg)
             .frame(maxWidth: DSLayout.videoPlayButtonMaxWidth)
+            .frame(minHeight: DSLayout.videoPlayButtonHeight)
         }
-        .buttonStyle(BookDetailCardActionStyle(fill: DSColor.cardPrimaryActionFill,
-                                               label: DSColor.cardPrimaryActionLabel,
-                                               minHeight: DSLayout.videoPlayButtonHeight))
+        // 玻璃播放胶囊：跟随全局玻璃开关与降低透明度，accent 底色作回退/叠色。
+        .buttonStyle(.plain)
+        .foregroundStyle(DSColor.cardPrimaryActionLabel)
+        .catVodGlass(in: Capsule(), fill: DSColor.cardPrimaryActionFill)
         .disabled(episode == nil || isResolvingPlayback)
         .accessibilityLabel(lastPlayedEpisodeID == nil ? localized("播放第一集") : localized("继续播放"))
     }
@@ -1652,10 +1665,11 @@ struct CatVodHomeView: View {
                     Image(systemName: "chevron.down").font(DSFont.title3)
                 }
                 .foregroundStyle(DSColor.textPrimary)
+                .padding(.horizontal, DSSpacing.md)
                 .frame(minHeight: DSLayout.minimumTapTarget)
-                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .catVodGlass(in: Capsule())
             .accessibilityLabel(localized("线路"))
         } else {
             Text(localized("选集"))
@@ -1686,8 +1700,8 @@ struct CatVodHomeView: View {
                     }
                 }
                 .frame(width: DSLayout.videoEpisodeCardWidth, height: DSLayout.videoEpisodeCardHeight)
-                .background(DSColor.neutralControlFill)
                 .clipShape(RoundedRectangle(cornerRadius: DSRadius.md, style: .continuous))
+                .catVodGlass(in: RoundedRectangle(cornerRadius: DSRadius.md, style: .continuous))
                 .overlay {
                     if isLastPlayed {
                         RoundedRectangle(cornerRadius: DSRadius.md + DSLayout.videoEpisodeResumeRingOutset,
@@ -1838,6 +1852,15 @@ private struct CatVodGridSkeleton: View {
     }
 }
 
+
+private extension View {
+    /// 猫源详情页按钮的玻璃表面。复用项目统一的 `floatingSurfaceBackground(in:fill:)`——
+    /// 它已内置全局玻璃总闸、系统「降低透明度」回退与 iOS 26 `glassEffect`，低版本/关总闸
+    /// 时自动退回 `fill` 实色，不重复实现判断逻辑。`fill` 传入希望固化的底色。
+    func catVodGlass<S: Shape>(in shape: S, fill: Color = DSColor.surface) -> some View {
+        floatingSurfaceBackground(in: shape, fill: fill)
+    }
+}
 
 /// 多档清晰度的待选状态。只在这一个页面用，放文件末尾避免污染模块命名空间。
 private struct QualityPrompt: Identifiable {
