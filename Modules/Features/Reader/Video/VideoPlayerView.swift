@@ -153,6 +153,31 @@ struct VideoPlayerView: View {
                     }
                     .accessibilityLabel(localized("解锁屏幕"))
                 }
+                // 左上角常驻退出键：控制条几秒后自动收起，顶栏那个 X 会跟着消失，
+                // 竖屏窄屏又没有系统返回手势，就没法退出这一集。这个 X 不依赖
+                // showsControls——控制条显示时常驻键也在（与顶栏 X 同位置、同功能，
+                // 由这一层负责点击），控制条收起后更不会消失。锁屏时隐藏，交给中央解锁键。
+                // 用容器 + Spacer 贴左上角，容器不接点击、只有圆形按钮可点，避免整屏误关。
+                if !isLocked {
+                    VStack {
+                        HStack {
+                            Button { onClose() } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                                    .background(.black.opacity(0.45), in: Circle())
+                            }
+                            .accessibilityLabel(localized("关闭"))
+                            .allowsHitTesting(true)
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(.leading, 14)
+                    .padding(.top, 8)
+                    .allowsHitTesting(false)
+                }
             } else {
                 ProgressView()
                     .tint(DSColor.textOnFixedFill)
@@ -452,12 +477,10 @@ struct VideoPlayerView: View {
 
     private func topBar(_ controller: VideoPlaybackController) -> some View {
         HStack(spacing: DSSpacing.md) {
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(DSFont.toolbarIconLarge)
-                    .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
-            }
-            .accessibilityLabel(localized("关闭"))
+            // 关闭键改由 body 层的常驻 X 统一提供：它不随控制条收起而消失，
+            // 竖屏窄屏也始终可点。这里留等宽占位，保持标题位置不变、避免两个 X 重叠。
+            Color.clear
+                .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
             VStack(alignment: .leading, spacing: DSSpacing.xxs) {
                 Text(controller.book.title)
                     .font(DSFont.headline)

@@ -469,10 +469,12 @@ struct CatVodVLCVideoView: View {
                 }
                 .accessibilityLabel(localized("解锁屏幕"))
             }
-            // 竖屏时常驻左上角退出键：控制条几秒后自动收起，顶栏那个 X 会跟着
-            // 消失，竖屏窄屏又没有系统返回手势，用户就没法退出这一集。这里补一个
-            // 只有控制条收起、且未锁屏时才出现的 X，保证任何时刻都能退出。
-            if !showsControls && !isLocked {
+            // 左上角常驻退出键：控制条几秒后就会自动收起，顶栏那个 X 会跟着消失，
+            // 竖屏窄屏又没有系统返回手势，用户就没法退出这一集。这个 X 不依赖
+            // showsControls——控制条显示时常驻键也在（与控制条顶栏的 X 同位置、同
+            // 功能，由这一层负责点击），控制条收起后更不会消失。锁屏时隐藏，交给
+            // 中央解锁按钮，与 B站/腾讯视频的锁屏语义一致。
+            if !isLocked {
                 // 用容器 + Spacer 贴到左上角，而不是给 Button 加 infinity frame——
                 // 后者会把整块屏幕都变成按钮的点击区，点画面任意处都会误关。
                 // 容器的空白区（Spacer/HStack）不接收点击，事件照常穿透到手势层。
@@ -636,12 +638,10 @@ struct CatVodVLCVideoView: View {
     private var controls: some View {
         VStack {
             HStack(spacing: DSSpacing.md) {
-                Button { onClose() } label: {
-                    Image(systemName: "xmark")
-                        .font(DSFont.toolbarIconLarge)
-                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
-                }
-                .accessibilityLabel(localized("关闭"))
+                // 关闭键改由 body 层的常驻 X 统一提供：它不随控制条收起而消失，
+                // 竖屏窄屏也始终可点。这里留等宽占位，保持标题位置不变、避免两个 X 重叠。
+                Color.clear
+                    .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
                 Text(title)
                     .font(DSFont.headline)
                     .lineLimit(1)

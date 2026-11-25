@@ -322,9 +322,9 @@ struct CatVodHomeView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        // 对齐书源/探索页的成熟范式：浮在纸面上的控件走统一玻璃材质，
+        // 与书源详情页按钮同一套玻璃（floatingSurfaceBackground / iOS26 glassEffect），
         // 总闸关闭或降低透明度时自动回退实色，不自己判断。
-        .glassButtonChrome(in: Capsule())
+        .catVodGlass(in: Capsule())
     }
 
     private var searchBar: some View {
@@ -357,7 +357,7 @@ struct CatVodHomeView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 9)
-                .glassButtonChrome(in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .catVodGlass(in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                 Button { Task { await search() } } label: {
                     if isLoading && activeSearchTerm == nil {
@@ -369,7 +369,7 @@ struct CatVodHomeView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(DSColor.accent)
-                .glassButtonChrome(in: Capsule(), tint: DSColor.accent)
+                .catVodGlassTinted(in: Capsule(), tint: DSColor.accent)
                 .frame(minHeight: DSLayout.capsuleControlHeight)
                 .disabled(keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -406,7 +406,7 @@ struct CatVodHomeView: View {
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)
-                            .glassButtonChrome(in: Capsule())
+                            .catVodGlass(in: Capsule())
                             .contextMenu {
                                 Button(role: .destructive) {
                                     removeSearchTerm(term)
@@ -492,7 +492,7 @@ struct CatVodHomeView: View {
                                         .foregroundStyle(selected ? DSColor.accent : DSColor.textPrimary)
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 5)
-                                        .glassButtonChrome(in: Capsule(), tint: selected ? DSColor.accent : nil)
+                                        .catVodGlassTinted(in: Capsule(), tint: selected ? DSColor.accent : nil)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -535,7 +535,7 @@ struct CatVodHomeView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
                 // 选中态用主题色薄雾玻璃，未选中用中性玻璃——与书源页 chip 一致。
-                .glassButtonChrome(in: Capsule(), tint: selected ? DSColor.accent : nil)
+                .catVodGlassTinted(in: Capsule(), tint: selected ? DSColor.accent : nil)
         }
         .buttonStyle(.plain)
     }
@@ -1859,11 +1859,26 @@ private struct CatVodGridSkeleton: View {
 
 
 private extension View {
-    /// 猫源详情页按钮的玻璃表面。复用项目统一的 `floatingSurfaceBackground(in:fill:)`——
+    /// 猫源页按钮的玻璃表面。复用项目统一的 `floatingSurfaceBackground(in:fill:)`——
     /// 它已内置全局玻璃总闸、系统「降低透明度」回退与 iOS 26 `glassEffect`，低版本/关总闸
     /// 时自动退回 `fill` 实色，不重复实现判断逻辑。`fill` 传入希望固化的底色。
     func catVodGlass<S: Shape>(in shape: S, fill: Color = DSColor.surface) -> some View {
         floatingSurfaceBackground(in: shape, fill: fill)
+    }
+
+    /// 选中 / 主操作用的玻璃：主题色只是一层薄雾，底下仍是通透玻璃，
+    /// 对齐书源详情页 `CardButtonGlass` 的 tint 做法（`tint.opacity` 垫在 regularMaterial 上），
+    /// 而不是 `glassButtonChrome` 那层白雾——白雾在米白纸面上会发白、看起来不透。
+    /// 总闸关闭时整层退回实色 tint，与全 App 一致。
+    func catVodGlassTinted<S: Shape>(in shape: S, tint: Color?) -> some View {
+        Group {
+            if let tint {
+                self.background(tint.opacity(DSLayout.cardHeaderGlassTintOpacity), in: shape)
+                    .catVodGlass(in: shape, fill: tint.opacity(0.18))
+            } else {
+                self.catVodGlass(in: shape)
+            }
+        }
     }
 }
 
