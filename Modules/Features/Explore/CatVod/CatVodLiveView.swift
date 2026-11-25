@@ -137,18 +137,24 @@ struct CatVodLiveView: View {
 
     @State private var model = CatVodLiveModel()
     @Environment(\.dismiss) private var dismiss
+    /// 手动输入的直播地址。直播走 App 自己的播放内核（AVPlayer/VLC 都支持 HLS），
+    /// 不依赖当前猫源的 `lives` 字段——多数猫源没有直播源，这个输入框保证入口始终可用。
+    @State private var manualAddress = ""
 
     var body: some View {
         @Bindable var model = model
         return NavigationStack {
-            Group {
-                if model.isLoading {
-                    ProgressView(localized("正在读取直播列表…"))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if model.channels.isEmpty {
-                    emptyState
-                } else {
-                    list
+            VStack(spacing: 0) {
+                manualPlayBar
+                Group {
+                    if model.isLoading {
+                        ProgressView(localized("正在读取直播列表…"))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if model.channels.isEmpty {
+                        emptyState
+                    } else {
+                        list
+                    }
                 }
             }
             .navigationTitle(title.isEmpty ? localized("直播") : title)
@@ -163,11 +169,44 @@ struct CatVodLiveView: View {
         .task { await model.load(bundleURL: bundleURL) }
     }
 
+    /// 粘贴任意直播地址（m3u8/mp4 等）直接交给 App 原来的播放内核。
+    private var manualPlayBar: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                TextField(localized("粘贴直播地址（m3u8 / mp4 等）"), text: $manualAddress)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                Button {
+                    playManualAddress()
+                } label: {
+                    Label(localized("播放"), systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(manualAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            Text(localized("直播流直接调用本 App 播放器，支持 m3u8 等；也可直接用下面接口自带的频道。"))
+                .font(DSFont.caption2)
+                .foregroundStyle(DSColor.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private func playManualAddress() {
+        let text = manualAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let url = URL(string: text), url.scheme != nil else { return }
+        CatVodPlayerPresenter.present(url: url, headers: [:], title: localized("直播"))
+    }
+
     private var emptyState: some View {
         ContentUnavailableView {
             Label(localized("没有直播"), systemImage: "tv.slash")
         } description: {
-            Text(model.error ?? localized("这个接口没有直播源。直播一般由接口的 lives 字段提供，多数 JS 猫源没有。"))
+            Text(model.error ?? localized("这个接口没有声明直播源。可在上方粘贴直播地址直接播放，或换一个带 lives 的接口。"))
         }
     }
 
