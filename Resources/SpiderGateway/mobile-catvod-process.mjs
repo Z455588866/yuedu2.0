@@ -61,7 +61,20 @@ export function createMobileCatVodProcess({ bundlePath, runtimeDir, maxLineBytes
   });
   let closed = false;
   worker.stdout.resume();
-  worker.stderr.resume();
+  // 不要丢弃 worker/bundle 的 stderr：配置中心源在 iOS 上启动失败时，真实原因
+  // （CATVOD_CONFIG / CATVOD_UNCAUGHT / bundle 自己的 console.error）只出现在这里。
+  // 累积一个有界尾部，catalog 降级时由 manager 附到诊断信息里，Swift 写进 App 日志。
+  const stderrTail = [];
+  result.stderrTail = stderrTail;
+  worker.stderr.setEncoding('utf8');
+  worker.stderr.on('data', (chunk) => {
+    for (const line of String(chunk).split('\n')) {
+      const text = line.trim();
+      if (!text) continue;
+      stderrTail.push(text.slice(0, 300));
+      if (stderrTail.length > 40) stderrTail.shift();
+    }
+  });
   worker.on('message', line => {
     // The bundle's own server is being used (player segments on its loopback
     // port); forward it so the session is not swept away as idle.

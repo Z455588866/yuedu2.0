@@ -354,6 +354,13 @@ export class CatVodManager {
       }
       return session;
     } catch (error) {
+      // 把 bundle/worker 的错误输出尾部附到异常上，供 server.mjs 的 catalog
+      // 降级诊断使用。配置中心源在 iOS 上启动失败的真实原因（CATVOD_CONFIG /
+      // CATVOD_UNCAUGHT / bundle console.error）只存在于这段 stderr 里。
+      const tail = Array.isArray(child?.stderrTail) ? child.stderrTail.slice(-12) : [];
+      if (tail.length) {
+        error.message = `${error.message || "CatVod failed"} | stderr: ${tail.join(" ⏎ ")}`.slice(0, 900);
+      }
       session.close();
       throw error;
     } finally {

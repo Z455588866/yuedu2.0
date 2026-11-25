@@ -374,11 +374,14 @@ export function createGateway(config, dependencies = {}) {
         // py 源（callPythonSite）和内置网盘站点根本不依赖这个 bundle，改为降级：
         // JS 站点为空，但仍把独立可用的站点返回给界面。
         let result = { sites: [] };
+        let catalogDiagnostic = "";
         try {
           const artifact = await nodeBundleCache.resolve(catalog.bundle);
           result = await catVod.catalog(artifact);
-        } catch {
-          // 静默降级：独立站点照常返回，JS 站点这一轮为空。
+        } catch (error) {
+          // 降级时不再静默：把真实失败原因（下载/校验/启动/config）放进响应，
+          // 由 Swift 侧写进 App 日志。这样才能定位「右边站点空白」到底卡在哪一步。
+          catalogDiagnostic = `${error?.code || "CATALOG_ERROR"}: ${error?.message || String(error)}`;
         }
         // Some bundles (e.g. the "配置"/config pseudo-site) declare `api` as an
         // object or omit it. Downstream requires a string route, so drop those
@@ -423,7 +426,21 @@ export function createGateway(config, dependencies = {}) {
         // Python 源：本机 Python 服务自己知道有哪些，这里只把它并进目录。
         const pythonSites = await pythonCatalog(config, catalog.bundle);
         if (pythonSites.length) sites = [...sites, ...pythonSites];
-        sendJSON(response, 200, { sites, lives });
+        const jsSiteCount = Array.isArray(result?.sites) ? result.sites.length : 0;
+        // 两种情况都要让 Swift 日志看得见：① 抛错降级（含真实原因）；
+        // ② bundle 启动成功但 /config 返回 0 站点（配置中心源最可能的表现）。
+        let diagnostic = catalogDiagnostic;
+        // 只有明确请求了 JS bundle（.js / .js.md5）却一个在线站点都没产出时
+        // 才算异常——内置网盘 / py 场景本来就没有 bundle 站点，不要刷屏。
+        const requestedJS = /\.js(\.md5)?(?:[?#]|$)/i.test(String(catalog.bundle || ""));
+        if (!diagnostic && jsSiteCount === 0 && requestedJS) {
+          diagnostic = "BUNDLE_EMPTY_SITES: bundle 启动成功但 /config 未产出在线站点";
+        }
+        sendJSON(response, 200, {
+          sites,
+          lives,
+          ...(diagnostic ? { diagnostic, jsSiteCount } : {})
+        });
         return;
       }
 

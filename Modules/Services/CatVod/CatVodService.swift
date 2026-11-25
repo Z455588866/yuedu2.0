@@ -35,6 +35,16 @@ final class CatVodService {
         let base = try await CatVodGateway.shared.ensureStarted(allowedBundleURL: bundleURL)
         let endpoint = base.appendingPathComponent("/v1/catvod/catalog")
         let object = try await post(endpoint, body: ["bundle": bundleURL])
+        // 网关在 bundle 下载/校验/启动/config 失败时会降级返回独立站点，并把真实
+        // 原因放进 diagnostic。以前这里完全静默，界面只剩「右边空白」无从排查；
+        // 现在把原因写进 App 日志（用户可导出），按接口 URL 与站点数一起打印。
+        if let diagnostic = object["diagnostic"] as? String, !diagnostic.isEmpty {
+            let jsCount = (object["jsSiteCount"] as? Int) ?? -1
+            AppLogger.error(
+                "[CatVod] catalog 降级 bundle=\(bundleURL) jsSites=\(jsCount) reason=\(String(diagnostic.prefix(300)))",
+                level: .error
+            )
+        }
         guard let sites = object["sites"] as? [[String: Any]] else { return [] }
         let parsed = sites.compactMap { dict -> CatVodSite? in
             guard let data = try? JSONSerialization.data(withJSONObject: dict),

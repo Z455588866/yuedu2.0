@@ -746,18 +746,32 @@ struct CatVodHomeView: View {
             CatVodSourceHealth.shared.prune(bundleURL: bundle)
             let ordered = CatVodSourceHealth.shared.arranged(loaded, bundleURL: bundle)
                 .filter { !$0.key.hasPrefix("py-") }
+            // 网关在这一轮可能只带回 py- 站点：JS bundle 下载/校验/启动失败时，
+            // server.mjs 的 catalog 会静默降级成空 sites，只剩独立的 py 站点。
+            // 此时 loaded 非空但 ordered 为空——旧代码判断的是 loaded.isEmpty，
+            // 于是既清空了右边站点列表，又不给任何提示，表现就是「右边完全空白」。
+            // 正确做法：按「过滤后的在线站点」判空；为空时保留上一次缓存的站点，
+            // 并明确告知用户这一接口本轮没加载出在线站点，而不是静默空白。
+            let hasOnlineSites = !ordered.isEmpty
             await MainActor.run {
-                sites = ordered
-                selectedSite = ordered.first
-                currentCategory = nil
-                filterChoices = [:]
-                allFilters = [:]
-                if loaded.isEmpty {
-                    message = localized("这个接口没有可用的站点，换一个接口试试")
+                if hasOnlineSites {
+                    sites = ordered
+                    selectedSite = ordered.first
+                    currentCategory = nil
+                    filterChoices = [:]
+                    allFilters = [:]
+                } else {
+                    // 沿用 cold-start 已经画上的缓存站点（sites 未在别处被清空），
+                    // 只补一句可见的说明；没有缓存时才落到空列表提示。
+                    if sites.isEmpty {
+                        message = localized("这个接口没有可用的站点，换一个接口试试")
+                    } else {
+                        message = localized("这个接口的在线站点这次没加载出来，显示的是上次缓存；点重试或换一个接口")
+                    }
                     isLoading = false
                 }
             }
-            if loaded.isEmpty { return }
+            if !hasOnlineSites { return }
             await loadHome()
         } catch {
             // 「这个接口加载失败」比「猫源请求失败（400）」有用得多：列表里常有
