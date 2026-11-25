@@ -286,10 +286,12 @@ export class CatVodManager {
   async #create(artifact) {
     if (this.sessions.size >= this.maxSessions) this.#evictOldest();
     await mkdir(this.runtimeRoot, { recursive: true, mode: 0o700 });
-    // Provider databases are disposable session state. Reusing a bundle-wide
-    // directory lets a truncated db.json poison every future homepage, and
-    // simultaneous app instances can overwrite each other's database.
-    const runtimeDir = await mkdtemp(path.join(this.runtimeRoot, `${artifact.digest}-`));
+    // 对齐 FongMi(NodeBundle dataDirectory) / tvbox-silicon(Profiles/<key>)：
+    // 配置中心型源把站点列表写进按 bundle 持久化的 db，下次启动要能读回来。
+    // 之前用 mkdtemp + close 时 rm，等于每次都丢掉插件存下的 /sites，配置中心
+    // 源因此每次都是空站点（右边列表空白）。改为按 digest 固定目录、退出不删。
+    const runtimeDir = path.join(this.runtimeRoot, artifact.digest);
+    await mkdir(runtimeDir, { recursive: true, mode: 0o700 });
     if (this.closed) {
       await rm(runtimeDir, { recursive: true, force: true });
       throw new GatewayError("CATVOD_STOPPED", "CatVod manager is stopped", 503);
@@ -334,9 +336,9 @@ export class CatVodManager {
         process.stderr.write(`CATVOD_CHILD_EXIT code=${code} signal=${signal} path=${artifact.path}\n`);
       });
     }
-    child.once("close", () => {
-      void rm(runtimeDir, { recursive: true, force: true }).catch(() => {});
-    });
+    // 会话结束不再删除 runtimeDir：里面是插件持久化的 db（含配置中心源的
+    // /sites 站点列表），删掉会让这类源每次冷启动都回到空站点。目录按 digest
+    // 隔离，单个源最多几百 KB，长期运行不会失控。
     const session = new CatVodSession(child, { timeoutMs: this.timeoutMs, maxLineBytes: this.maxLineBytes });
     this.startingSessions.add(session);
     try {

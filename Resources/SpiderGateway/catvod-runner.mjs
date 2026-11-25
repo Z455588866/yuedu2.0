@@ -1,7 +1,8 @@
 import { createRequire } from "node:module";
 import { writeSync } from "node:fs";
 import http from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import path from "node:path";
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { readBoundedText } from "./bounded-response.mjs";
@@ -61,21 +62,43 @@ function bundleAccounts() {
   return out;
 }
 
-function createHostDB(seed) {
+async function createHostDB(seed, persistDir) {
   const store = new Map();
-  const path = (value) => String(value || "").replace(/\/+$/, "") || "/";
-  const depthOf = (value) => path(value).split("/").filter(Boolean).length;
-  const put = (key, value) => {
-    // 深层键同时写进父对象，插件两种读法（`/baidu` 取整对象、`/baidu/x`
-    // 取单值）都能命中。
-    store.set(path(key), value);
+  const dbPath = persistDir ? path.join(persistDir, "host-db.json") : "";
+  const key = (value) => String(value || "").replace(/\/+$/, "") || "/";
+  const put = (k, value) => { store.set(key(k), value); };
+  // 成熟项目（FongMi NodeBundle / tvbox-silicon Profiles）把插件的 db 按 bundle
+  // 持久化：配置中心源把站点列表写进 /sites，下次启动要能读回来。这里同样在
+  // 启动时先载入磁盘 db（优先于账号 seed），每次写入后合并落盘。
+  // 注意：本地变量名不能叫 `path`（会遮蔽上面 import 的 node:path），故用 key()。
+  if (dbPath) {
+    try {
+      const raw = JSON.parse(await readFile(dbPath, "utf8"));
+      if (raw && typeof raw === "object") for (const [k, value] of Object.entries(raw)) put(k, value);
+    } catch { /* 首次启动没有 db，用账号 seed */ }
+  }
+  for (const [k, value] of Object.entries(seed || {})) {
+    if (!store.has(key(k))) put(k, value);
+  }
+  let persistTimer = null;
+  const persist = () => {
+    if (!dbPath) return;
+    // 合并写：spider 会连续写多个键，节流到末尾一次落盘。
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      const obj = Object.fromEntries(store);
+      Promise.resolve()
+        .then(() => (persistDir ? mkdir(persistDir, { recursive: true }) : null))
+        .then(() => writeFile(dbPath, JSON.stringify(obj)))
+        .catch(() => {});
+    }, 200);
   };
-  for (const [key, value] of Object.entries(seed || {})) put(key, value);
 
-  const get = (key) => {
-    if (store.has(path(key))) return store.get(path(key));
+  const get = (k) => {
+    if (store.has(key(k))) return store.get(key(k));
     // A parent object may carry the child as a property.
-    const parts = path(key).split("/").filter(Boolean);
+    const parts = key(k).split("/").filter(Boolean);
     for (let cut = parts.length - 1; cut > 0; cut -= 1) {
       const parent = store.get("/" + parts.slice(0, cut).join("/"));
       if (parent && typeof parent === "object") {
@@ -86,15 +109,16 @@ function createHostDB(seed) {
     return undefined;
   };
 
-  const setDeep = (key, value) => {
-    const parts = path(key).split("/").filter(Boolean);
-    if (parts.length <= 1) { put(key, value); return; }
+  const setDeep = (k, value) => {
+    const parts = key(k).split("/").filter(Boolean);
+    if (parts.length <= 1) { put(k, value); persist(); return; }
     const parentKey = "/" + parts.slice(0, parts.length - 1).join("/");
     const parent = get(parentKey);
     const next = parent && typeof parent === "object" && !Array.isArray(parent) ? { ...parent } : {};
     next[parts[parts.length - 1]] = value;
     put(parentKey, next);
-    put(key, value);
+    put(k, value);
+    persist();
   };
 
   return {
@@ -112,8 +136,8 @@ function createHostDB(seed) {
     async exists(key) { return get(key) !== undefined; },
     push(key, value) { setDeep(key, value); },
     async setObject(key, value) { setDeep(key, value); },
-    async delete(key) {
-      const parts = path(key).split("/").filter(Boolean);
+    async delete(k) {
+      const parts = key(k).split("/").filter(Boolean);
       const parentKey = "/" + parts.slice(0, Math.max(1, parts.length - 1)).join("/");
       const parent = get(parentKey);
       if (parent && typeof parent === "object") {
@@ -121,10 +145,21 @@ function createHostDB(seed) {
         delete next[parts[parts.length - 1]];
         put(parentKey, next);
       }
-      store.delete(path(key));
+      store.delete(key(k));
+      persist();
       return true;
     },
-    snapshot() { return Object.fromEntries(store); }
+    snapshot() { return Object.fromEntries(store); },
+    // 退出前强制落盘：节流的 200ms 定时器可能赶不上 worker 关闭，导致刚写入的
+    // 站点/cookie 丢失（正是配置中心源 /sites 需要的持久化数据）。
+    async flush() {
+      if (!dbPath) return;
+      if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+      try {
+        await mkdir(persistDir, { recursive: true });
+        await writeFile(dbPath, JSON.stringify(Object.fromEntries(store)));
+      } catch { /* best effort */ }
+    }
   };
 }
 
@@ -403,7 +438,7 @@ export async function runCatVod(bundlePath, options = {}) {
   // 提供 db，插件才会把 `/baidu`、`/quark` 这类路径读出来。以前这里没有任何
   // db，插件永远读到空对象，于是每条网盘线路都回「Cookie 未填写」。
   // 数据来自宿主已登录的账号（env），插件写入的值只在本进程内有效。
-  const hostDB = createHostDB(bundleAccounts());
+  const hostDB = await createHostDB(bundleAccounts(), options.runtimeDirectory);
   // 插件会按「自己请求的端口」拼播放地址（`…:9979/play?vid=…`），也会用局域网
   // IP 拼；而宿主为了不撞车把它绑到临时端口。地址交出去就是 connection
   // refused——源是好的，端口是旧的。tvbox-silicon 的做法是把回答里所有这类
@@ -788,6 +823,8 @@ export async function runCatVod(bundlePath, options = {}) {
       setTimeout(finish, 2000).unref?.();
     });
   };
+  // 退出前把持久化的 db（配置中心源的 /sites、网盘 cookie 等）落盘，供下次启动读回。
+  try { await hostDB.flush(); } catch { /* best effort */ }
   await closeServer(messagesServer);
   try {
     // bundle 的 stop() 可能卡住或抛错，都不能阻止 server 被清理。
