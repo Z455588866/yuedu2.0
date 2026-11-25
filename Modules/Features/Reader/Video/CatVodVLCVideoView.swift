@@ -295,8 +295,12 @@ struct CatVodVLCVideoView: View {
             GeometryReader { geo in
                 let size = geo.size
                 // 旋转 90/270° 时片源的宽高对调，与系统播放器的 rotatedPictureSize 一致。
-                var native = model.videoSize
-                if pictureRotation % 2 == 1 { swap(&native.width, &native.height) }
+                // 用无副作用的表达式而非 swap(&...)：ViewBuilder 里不能放返回 () 的语句，
+                // 否则编译报 "type '()' cannot conform to 'View'"（build ed515cc 的失败原因）。
+                let picture = model.videoSize
+                let native = pictureRotation % 2 == 1
+                    ? CGSize(width: picture.height, height: picture.width)
+                    : picture
                 // 旋转时强制按「适应」算矩形和字号，与 VideoPlayerLayerView 的判断一致，
                 // 避免画面转了、弹幕矩形却还按铺满算导致的错位。
                 let mode: VideoScalingMode = pictureRotation % 2 == 1 ? .fit : scalingMode
