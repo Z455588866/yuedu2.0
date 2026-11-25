@@ -425,7 +425,14 @@ actor OfflineDownloadManager: OfflineDownloadManaging {
                     continue
                 }
 
-                await acquireChapterSlot()
+                // A cancelled waiter returns false without ever claiming a slot, so it must
+                // NOT release one here — that would deduct another worker's slot.
+                guard await acquireChapterSlot() else {
+                    releaseChapter(index, bookId: book.id)
+                    break
+                }
+                // The slot may have been granted just as cancellation landed; that path
+                // *did* claim a slot and has to hand it back.
                 guard !Task.isCancelled else {
                     releaseChapter(index, bookId: book.id)
                     releaseChapterSlot()
@@ -604,7 +611,16 @@ actor OfflineDownloadManager: OfflineDownloadManaging {
     /// 并发数 mid-download applies from the next book (or the next resume).
     private var chapterSlotCapacity = 1
     private var chapterSlotsInUse = 0
-    private var chapterSlotWaiters: [CheckedContinuation<Void, Never>] = []
+    private struct ChapterSlotWaiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+    private var chapterSlotWaiters: [ChapterSlotWaiter] = []
+    /// Cancellation can race ahead of continuation registration, exactly as in
+    /// `PerHostSemaphore` (FetchRetryPolicy.swift). These IDs close that window so a
+    /// cancelled waiter is always resumed, and resumed exactly once.
+    private var cancelledChapterSlotWaiterIDs: Set<UUID> = []
+    private var registeringChapterSlotWaiterIDs: Set<UUID> = []
 
     private func refreshChapterSlotCapacity() async {
         let configured: Int
@@ -626,14 +642,56 @@ actor OfflineDownloadManager: OfflineDownloadManaging {
         drainChapterSlotWaiters()
     }
 
-    private func acquireChapterSlot() async {
+    /// Claims a slot, returning `false` if the task was cancelled while waiting.
+    /// `false` means no slot was claimed, so the caller must not call `releaseChapterSlot()`.
+    ///
+    /// NOTE: not compile-verified (no Swift/Xcode toolchain in this environment). The
+    /// cancellation/registration handshake mirrors `PerHostSemaphore.acquire`, which is
+    /// already part of this target and builds under its Swift 6 strict-concurrency settings.
+    private func acquireChapterSlot() async -> Bool {
+        // Fast path is deliberately byte-for-byte the old behaviour: cancellation here is
+        // handled by the caller's `guard !Task.isCancelled`, which releases the slot.
         if chapterSlotsInUse < chapterSlotCapacity {
             chapterSlotsInUse += 1
+            return true
+        }
+        let waiterID = UUID()
+        registeringChapterSlotWaiterIDs.insert(waiterID)
+        defer {
+            registeringChapterSlotWaiterIDs.remove(waiterID)
+            cancelledChapterSlotWaiterIDs.remove(waiterID)
+        }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                if cancelledChapterSlotWaiterIDs.remove(waiterID) != nil || Task.isCancelled {
+                    continuation.resume(returning: false)
+                } else {
+                    chapterSlotWaiters.append(
+                        ChapterSlotWaiter(id: waiterID, continuation: continuation)
+                    )
+                }
+            }
+        } onCancel: {
+            // `onCancel` is not actor-isolated; hop back to the actor so every state
+            // mutation and every resume happens serially with `drainChapterSlotWaiters`.
+            Task { await self.cancelChapterSlotWaiter(id: waiterID) }
+        }
+    }
+
+    /// Removes a cancelled waiter from the queue. Actor isolation guarantees this cannot
+    /// race with `drainChapterSlotWaiters`: whichever removes the waiter first is the only
+    /// one that resumes its continuation.
+    private func cancelChapterSlotWaiter(id: UUID) {
+        guard let index = chapterSlotWaiters.firstIndex(where: { $0.id == id }) else {
+            // Registration has not happened yet; flag it so registration resumes itself.
+            if registeringChapterSlotWaiterIDs.contains(id) {
+                cancelledChapterSlotWaiterIDs.insert(id)
+            }
             return
         }
-        await withCheckedContinuation { continuation in
-            chapterSlotWaiters.append(continuation)
-        }
+        let waiter = chapterSlotWaiters.remove(at: index)
+        // A cancelled waiter never owned a slot, so `chapterSlotsInUse` is untouched.
+        waiter.continuation.resume(returning: false)
     }
 
     private func releaseChapterSlot() {
@@ -646,7 +704,8 @@ actor OfflineDownloadManager: OfflineDownloadManaging {
     private func drainChapterSlotWaiters() {
         while chapterSlotsInUse < chapterSlotCapacity, !chapterSlotWaiters.isEmpty {
             chapterSlotsInUse += 1
-            chapterSlotWaiters.removeFirst().resume()
+            let waiter = chapterSlotWaiters.removeFirst()
+            waiter.continuation.resume(returning: true)
         }
     }
 
