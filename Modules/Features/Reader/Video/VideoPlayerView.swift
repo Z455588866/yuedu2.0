@@ -59,7 +59,8 @@ struct VideoPlayerView: View {
     @State private var scrubTime: Double?
     /// A drag on the picture in progress.
     @State private var pan: VideoPan?
-    @State private var fillsScreen = false
+    /// 画面摆放方式：适应 / 铺满（裁剪）/ 拉伸 / 原始尺寸，四档与 ijkplayer 一致。
+    @State private var scalingMode: VideoScalingMode = .fit
     /// Manual quarter-turn correction for sideways-encoded streams (0/1/2/3).
     @State private var pictureRotation = 0
     /// The person's explicit window orientation wish; `nil` follows the picture.
@@ -75,7 +76,7 @@ struct VideoPlayerView: View {
         ZStack {
             DSColor.videoPlayerBackground.ignoresSafeArea()
             if let controller {
-                VideoPlayerLayerView(player: controller.player, fillsScreen: fillsScreen,
+                VideoPlayerLayerView(player: controller.player, scalingMode: scalingMode,
                                      rotation: pictureRotation,
                                      onLayer: controller.attachPictureInPicture(to:))
                     .ignoresSafeArea()
@@ -88,22 +89,32 @@ struct VideoPlayerView: View {
                 // window: on a 16:9 clip in a portrait window the window includes two large
                 // black bars, and comments laid out over them read as a wall of text floating
                 // outside the video.
-                if danmaku.enabled, let track = danmaku.track {
-                    GeometryReader { geo in
-                        let rect = pictureRect(in: geo.size)
-                        DanmakuOverlay(clock: clock, track: track, opacity: danmaku.opacity,
-                                       area: danmaku.area, fontSize: danmaku.fontSize, speed: danmaku.speed)
-                            .frame(width: max(1, rect.width), height: max(1, rect.height))
-                            .position(x: rect.midX, y: rect.midY)
+                // 弹幕和字幕都放进「画面矩形」，而不是各自铺满整窗：画面怎么缩放、裁剪，
+                // 它们就跟着怎么动。这是成熟引擎的通行做法——字节 DanmakuRenderEngine 要求
+                // 弹幕视图尺寸与视频画面尺寸一致，CommentCoreLibrary 则是拉伸弹幕容器、
+                // 让字号随之等比放大（"弹幕大了自然速度就慢了，没必要继续降低速度"）。
+                GeometryReader { geo in
+                    let rect = pictureRect(in: geo.size)
+                    let textScale = effectiveScalingMode.textScale(
+                        native: rotatedPictureSize, in: geo.size)
+                    ZStack {
+                        if danmaku.enabled, let track = danmaku.track {
+                            DanmakuOverlay(clock: clock, track: track, opacity: danmaku.opacity,
+                                           area: danmaku.area,
+                                           fontSize: danmaku.fontSize * Double(textScale),
+                                           speed: danmaku.speed)
+                        }
+                        // SubtitleOverlay 自己按内容定高、底部对齐，从不读 bounds（那样会锁住
+                        // PiP 恢复时的过期尺寸），所以放进这个容器只会跟着画面移动，不会变形。
+                        if subtitle.enabled, let entry = subtitle.activeEntry {
+                            SubtitleOverlay(clock: clock, entry: entry, opacity: 1,
+                                            coverBuiltin: subtitle.coverBuiltin)
+                        }
                     }
-                    .ignoresSafeArea()
+                    .frame(width: max(1, rect.width), height: max(1, rect.height))
+                    .position(x: rect.midX, y: rect.midY)
                 }
-                // Subtitles sit just above the danmaku, still below the control chrome.
-                if subtitle.enabled, let entry = subtitle.activeEntry {
-                    SubtitleOverlay(clock: clock, entry: entry, opacity: 1,
-                                    coverBuiltin: subtitle.coverBuiltin)
-                        .ignoresSafeArea()
-                }
+                .ignoresSafeArea()
                 // Kept in the tree and faded out instead of being removed: the overlay
                 // settings panels are presented from these buttons, and tearing the
                 // subtree down would dismiss a panel that is still being used.
@@ -261,23 +272,31 @@ struct VideoPlayerView: View {
         }
     }
 
+    /// 片源尺寸，按当前的画面旋转把宽高换过来。
+    private var rotatedPictureSize: CGSize {
+        guard let picture = controller?.pictureSize, picture.width > 0, picture.height > 0 else {
+            return .zero
+        }
+        return pictureRotation % 2 == 1
+            ? CGSize(width: picture.height, height: picture.width)
+            : picture
+    }
+
+    /// 画面被转了 90°/270° 时一律按「适应」算：转过来的画面若用铺满，会裁掉大半。
+    /// 与 `VideoPlayerLayerView` 里对 `videoGravity` 的判断保持一致，否则弹幕会和画面对不上。
+    private var effectiveScalingMode: VideoScalingMode {
+        pictureRotation % 2 == 1 ? .fit : scalingMode
+    }
+
     /// The rectangle the picture actually occupies inside the player, in the coordinate
     /// space of a full-window `GeometryReader`. Falls back to the whole window until the
     /// stream has reported its size, so the first frames do not blank the danmaku layer.
     private func pictureRect(in size: CGSize) -> CGRect {
-        guard let picture = controller?.pictureSize, picture.width > 0, picture.height > 0 else {
+        let native = rotatedPictureSize
+        guard native.width > 0, native.height > 0 else {
             return CGRect(origin: .zero, size: size)
         }
-        var width = picture.width
-        var height = picture.height
-        if pictureRotation % 2 == 1 { swap(&width, &height) }
-        let scale = fillsScreen
-            ? max(size.width / width, size.height / height)
-            : min(size.width / width, size.height / height)
-        let drawn = CGSize(width: width * scale, height: height * scale)
-        return CGRect(x: (size.width - drawn.width) / 2,
-                      y: (size.height - drawn.height) / 2,
-                      width: drawn.width, height: drawn.height)
+        return effectiveScalingMode.pictureRect(native: native, in: size)
     }
 
     private func touched() {
@@ -427,16 +446,24 @@ struct VideoPlayerView: View {
             // The system's button names itself to VoiceOver.
             AirPlayButton()
                 .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
-            Button {
-                fillsScreen.toggle()
-                touched()
+            // 画面摆放：适应 / 铺满（裁剪）/ 拉伸 / 原始尺寸。
+            // 四档定义照搬 Bilibili ijkplayer 的 IJKMPMovieScalingMode，不用自己发明。
+            Menu {
+                Picker(localized("画面"), selection: Binding(
+                    get: { scalingMode },
+                    set: { scalingMode = $0; touched() }
+                )) {
+                    ForEach(VideoScalingMode.allCases) { mode in
+                        Label(localized(mode.labelKey), systemImage: mode.systemImage).tag(mode)
+                    }
+                }
+                .pickerStyle(.inline)
             } label: {
-                Image(systemName: fillsScreen
-                      ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                Image(systemName: scalingMode.systemImage)
                     .font(DSFont.toolbarIcon)
                     .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
             }
-            .accessibilityLabel(fillsScreen ? localized("完整画面") : localized("填满萤幕"))
+            .accessibilityLabel(String(format: localized("画面缩放：%1$@"), localized(scalingMode.labelKey)))
             // Rotate the picture a quarter-turn: fixes sideways-encoded streams.
             Button {
                 pictureRotation = (pictureRotation + 1) % 4
@@ -721,7 +748,7 @@ enum VideoPlayerFormat {
 /// list have no place in `AVPlayerViewController`).
 struct VideoPlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
-    let fillsScreen: Bool
+    let scalingMode: VideoScalingMode
     /// Quarter-turns to rotate the picture. 0 = as the stream reports it. A
     /// stream whose pixels are stored sideways (common with re-encoded vertical
     /// clips) renders "lying down"; the person rotates it here until upright.
@@ -747,8 +774,9 @@ struct VideoPlayerLayerView: UIViewRepresentable {
         // A quarter-turn is applied to the backing layer's transform, which
         // UIKit leaves alone (unlike frame/bounds, which it rewrites on layout).
         // Use aspect-fit while rotated so nothing is cropped; the person can
-        // still tap 填满萤幕 if they prefer edge-to-edge.
-        view.playerLayer.videoGravity = (fillsScreen && rotation % 2 == 0) ? .resizeAspectFill : .resizeAspect
+        // still pick 铺满（裁剪） if they prefer edge-to-edge.
+        let mode: VideoScalingMode = rotation % 2 == 0 ? scalingMode : .fit
+        view.playerLayer.videoGravity = mode.videoGravity
         let angle = CGFloat(rotation) * .pi / 2
         view.playerLayer.setAffineTransform(CGAffineTransform(rotationAngle: angle))
     }

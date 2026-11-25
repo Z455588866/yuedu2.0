@@ -32,6 +32,9 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
     @Published private(set) var duration: Double = 0
     @Published private(set) var rate: Float = 1
     @Published private(set) var failure: String?
+    /// 片源的像素尺寸。弹幕/字幕层要按它算「画面实际矩形」，画面放大后才知道跟到哪。
+    /// 解析出元数据前是 `.zero`，此时按整窗摆放，不会闪。
+    @Published private(set) var videoSize: CGSize = .zero
 
     /// 画面容器。VLC 把像素直接画进这个 UIView，SwiftUI 只负责摆放它。
     let drawable = UIView(frame: .zero)
@@ -66,6 +69,11 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         let player = VLCMediaPlayer(options: ["--no-drop-late-frames", "--no-skip-frames"])
         player.delegate = self
         player.drawable = drawable
+        // MobileVLCKit 的语义：scaleFactor 只有在 0（自动）时才会跟随 drawable 的尺寸变化。
+        // 写死成别的值，之后改 drawable 的 frame 画面不会重排 —— 这也是「填满萤幕后画面没变」
+        // 这类问题的常见根因。videoAspectRatio 交给系统按片源原始比例算。
+        player.scaleFactor = 0
+        player.videoAspectRatio = nil
         self.player = player
 
         player.media = makeMedia(url: url, headers: headers)
@@ -172,12 +180,28 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         if current.isFinite, current >= 0 { time = current }
         let length = Double(player.media?.length.intValue ?? 0) / 1000
         if length.isFinite, length > 0 { duration = length }
+        // 片源尺寸到手后弹幕/字幕才有参照；只在真的变了才发，避免每 500ms 触发重排。
+        let size = player.videoSize
+        if size.width > 0, size.height > 0, size != videoSize { videoSize = size }
         if pendingSeek > 0, current > 0.5 {
             let target = pendingSeek
             pendingSeek = 0
             seek(to: target)
         }
         isPlaying = player.isPlaying
+    }
+
+    /// 元数据解析完才拿得到片源宽高。VLCKit 的已知行为：在 `.playing` 之前设的
+    /// `scaleFactor` / `videoAspectRatio` 常被忽略（首次播放尤其明显），
+    /// 所以要在这里再设一次。参数含义见 `open(url:headers:startAt:)` 里的注释。
+    nonisolated func mediaPlayer(_ player: VLCMediaPlayer, mediaDidParse media: VLCMedia) {
+        Task { @MainActor [weak self] in
+            guard let self, let current = self.player else { return }
+            current.scaleFactor = 0
+            current.videoAspectRatio = nil
+            let size = current.videoSize
+            if size.width > 0, size.height > 0 { self.videoSize = size }
+        }
     }
 
     nonisolated func mediaPlayerStateChanged(_ aNotification: Notification) {
@@ -245,29 +269,43 @@ struct CatVodVLCVideoView: View {
     /// 面板若挂在按钮上，会在用户还在调整时被一起从视图树里摘掉。
     @State private var showsDanmakuPanel = false
     @State private var showsSubtitlePanel = false
+    /// 画面摆放方式：适应 / 铺满（裁剪）/ 拉伸 / 原始尺寸，与系统播放器同一套档位。
+    @State private var scalingMode: VideoScalingMode = .fit
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            VLCVideoSurface(view: model.drawable)
-                .ignoresSafeArea()
-            // 弹幕压在画面上、控制条下面，且不接管触摸——否则点不到进度条。
-            if danmakuController.enabled, let track = danmakuController.track {
-                DanmakuOverlay(clock: clock, track: track,
-                               opacity: danmakuController.opacity,
-                               area: danmakuController.area,
-                               fontSize: danmakuController.fontSize,
-                               speed: danmakuController.speed)
-                    .allowsHitTesting(false)
-                    .ignoresSafeArea()
+            // 画面、弹幕、字幕放进同一个「画面矩形」里，而不是各自铺满整窗：
+            // 画面怎么缩放、怎么裁剪，弹幕和字幕就跟着怎么动。
+            // 这是成熟引擎的通行做法——字节 DanmakuRenderEngine 要求弹幕视图的尺寸
+            // 与视频画面尺寸一致；CommentCoreLibrary 则是拉伸弹幕容器、字号同步放大。
+            GeometryReader { geo in
+                let size = geo.size
+                let rect = scalingMode.pictureRect(native: model.videoSize, in: size)
+                let textScale = scalingMode.textScale(native: model.videoSize, in: size)
+                ZStack {
+                    VLCVideoSurface(view: model.drawable)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // 弹幕压在画面上、控制条下面，且不接管触摸——否则点不到进度条。
+                    if danmakuController.enabled, let track = danmakuController.track {
+                        DanmakuOverlay(clock: clock, track: track,
+                                       opacity: danmakuController.opacity,
+                                       area: danmakuController.area,
+                                       fontSize: danmakuController.fontSize * Double(textScale),
+                                       speed: danmakuController.speed)
+                            .allowsHitTesting(false)
+                    }
+                    // 外挂字幕压在弹幕之上、控制条之下；时钟与系统播放器共用，
+                    // 因此 VLC 解码的画面里拖动进度后字幕照样逐句跟随。
+                    if subtitle.enabled, let entry = subtitle.activeEntry {
+                        SubtitleOverlay(clock: clock, entry: entry, opacity: 1,
+                                        coverBuiltin: subtitle.coverBuiltin)
+                    }
+                }
+                .frame(width: max(1, rect.width), height: max(1, rect.height))
+                .position(x: rect.midX, y: rect.midY)
             }
-            // 外挂字幕压在弹幕之上、控制条之下；时钟与系统播放器共用，
-            // 因此 VLC 解码的画面里拖动进度后字幕照样逐句跟随。
-            if subtitle.enabled, let entry = subtitle.activeEntry {
-                SubtitleOverlay(clock: clock, entry: entry, opacity: 1,
-                                coverBuiltin: subtitle.coverBuiltin)
-                    .ignoresSafeArea()
-            }
+            .ignoresSafeArea()
             if model.isPreparing {
                 ProgressView()
                     .progressViewStyle(.circular)
@@ -399,6 +437,20 @@ struct CatVodVLCVideoView: View {
                     onSelect: { subtitle.resolve() },
                     onRetry: { subtitle.resolve() }
                 )
+                // 画面摆放：四档照搬 ijkplayer 的 IJKMPMovieScalingMode。
+                Menu {
+                    Picker(localized("画面"), selection: $scalingMode) {
+                        ForEach(VideoScalingMode.allCases) { mode in
+                            Label(localized(mode.labelKey), systemImage: mode.systemImage).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Image(systemName: scalingMode.systemImage)
+                        .font(.system(size: 16))
+                        .frame(width: 38, height: 38)
+                }
+                .accessibilityLabel(String(format: localized("画面缩放：%1$@"), localized(scalingMode.labelKey)))
                 // 横/竖屏切换：用户反馈的痛点——VLC 内核此前竖屏无法转横屏。
                 Button {
                     let next: FixedLayoutOrientation = {
