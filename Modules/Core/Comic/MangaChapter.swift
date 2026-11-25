@@ -160,7 +160,7 @@ enum MangaChapterParser {
     }
 
     private static func attributeValue(named name: String, in tag: String) -> String? {
-        let pattern = #"\b"# + NSRegularExpression.escapedPattern(for: name) + #"\s*=\s*"#
+        let pattern = #"(?:^|\s)"# + NSRegularExpression.escapedPattern(for: name) + #"\s*=\s*"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
               let match = regex.firstMatch(
                 in: tag,
