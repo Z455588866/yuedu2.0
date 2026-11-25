@@ -49,6 +49,9 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
     /// 必须换一个新的 media 对象。
     private var sourceURL: URL?
     private var sourceHeaders: [String: String] = [:]
+    /// 照 tvbox-Swift 的解码容错：默认硬解优先，硬解解不出画面时切软解重播一次。
+    private var useSoftwareDecode = false
+    private var hasAttemptedSoftDecodeFallback = false
 
     var isLive: Bool { duration <= 0 }
 
@@ -67,9 +70,16 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         pendingSeek = startAt
         sourceURL = url
         sourceHeaders = headers
+        // 每次开新流都从「硬解优先」重新试起，软解降级只针对当前这一次播放。
+        useSoftwareDecode = false
+        hasAttemptedSoftDecodeFallback = false
 
-        // 与系统播放器相同的取舍：少丢帧、按音频时钟走，避免网盘流忽快忽慢时画面抖。
-        let player = VLCMediaPlayer(options: ["--no-drop-late-frames", "--no-skip-frames"])
+        // 照 tvbox-Swift 的 stablePlaybackOptions：少丢帧之外，还关掉 libvlc 的
+        // 时钟纠偏（clock-synchro/jitter），网盘流忽快忽慢时画面不抖、音画不错位。
+        let player = VLCMediaPlayer(options: [
+            "--no-drop-late-frames", "--no-skip-frames",
+            "--clock-synchro=0", "--clock-jitter=0",
+        ])
         player.delegate = self
         player.drawable = drawable
         // MobileVLCKit 的语义：scaleFactor 只有在 0（自动）时才会跟随 drawable 的尺寸变化。
@@ -93,6 +103,13 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
             "live-caching": 1500,
             "file-caching": 1000,
             "http-reconnect": 1,
+            // 照 tvbox-Swift：显式声明硬解策略。默认 any（硬解优先），
+            // 降级后用 none（软解）。此前完全没设，libvlc 默认行为在部分
+            // 设备/编码上解不出视频轨——音频正常、画面全黑（用户反馈的
+            // 「只听到声音看不到画面」）。
+            "avcodec-hw": useSoftwareDecode ? "none" : "any",
+            "avcodec-hurry-up": 0,
+            "clock-synchro": 0,
         ]
         var cookie: [String] = []
         for (field, value) in headers {
@@ -141,6 +158,21 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         // 不要先 stop()：libvlc 的 stop 是异步收尾，紧接着 setMedia 会被那次
         // 收尾一起清掉，表现就是重播一片黑。ended 状态下直接换 media 再 play
         // 才是 VLCKit 认的用法。
+        player.media = makeMedia(url: url, headers: sourceHeaders)
+        player.play()
+    }
+
+    /// 硬解无画面时切软解重来，保留当前播放进度（照 tvbox 的
+    /// attemptSoftDecodeFallbackIfNeeded：resumePosition 用当前时间，别从头播）。
+    /// 调用前需先把 useSoftwareDecode 置 true，makeMedia 才会写 avcodec-hw=none。
+    private func replayWithSoftwareDecode(resume seconds: Double) {
+        guard let player, let url = sourceURL else { return }
+        failure = nil
+        isPreparing = true
+        pendingSeek = max(0, seconds)
+        time = seconds
+        // 与 replay() 同样：不先 stop()，ended/playing 下直接换 media 再 play 才是
+        // VLCKit 认的用法，先 stop 会因异步收尾把新 media 一起清掉导致黑屏。
         player.media = makeMedia(url: url, headers: sourceHeaders)
         player.play()
     }
@@ -225,6 +257,18 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
             default:
                 isPreparing = false
             }
+        }
+
+        // 照 tvbox-Swift 的硬解容错：默认硬解优先，但部分设备/编码（如 H.265 10bit、
+        // AV1）硬解解不出视频轨，音频照常走——用户看到的就是「有声音没画面」。
+        // 判据：已在播放、时间推进超过阈值、但始终拿不到 videoSize（视频轨没出画面），
+        // 且还没降级过。命中则换软解重播一次。只降一次，避免死循环。
+        if !hasAttemptedSoftDecodeFallback, !useSoftwareDecode,
+           player.isPlaying, current > 2.0, videoSize == .zero {
+            AppLogger.info("[CatVod][VLC] 硬解无画面→切软解重播 t=\(Int(current))s", level: .notice)
+            hasAttemptedSoftDecodeFallback = true
+            useSoftwareDecode = true
+            replayWithSoftwareDecode(resume: current)
         }
     }
 
