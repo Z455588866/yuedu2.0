@@ -9,6 +9,11 @@ struct CatVodHomeRoute: Hashable {}
 /// search and detail in a poster grid, reusing the app's full-screen player for playback.
 struct CatVodHomeView: View {
     @ObservedObject private var store = CatVodSourceStore.shared
+    // ExploreDestinations.swift:17 的 ExploreRouteDestinations 持有 @EnvironmentObject BookStore
+    // 并以 navigationDestination 推本页，因此这里能安全注入（不在此环境树会崩）。
+    @EnvironmentObject private var bookStore: BookStore
+    /// 音乐听书 / 漫画 / 小说文字的原生界面呈现令牌。
+    @State private var nativeContent: CatVodNativeContent?
     @State private var selectedSourceID: String?
     @State private var sites: [CatVodSite] = []
     @State private var selectedSite: CatVodSite?
@@ -209,6 +214,7 @@ struct CatVodHomeView: View {
         .sheet(isPresented: $showsLive) {
             CatVodLiveView(bundleURL: currentBundleURL ?? "", title: currentSource?.name ?? "")
         }
+        .modifier(CatVodNativeContentPresenter(nativeContent: $nativeContent))
     }
 
     private var emptyState: some View {
@@ -649,6 +655,11 @@ struct CatVodHomeView: View {
                             // 直播站点的条目就是一条直播流，没有「选集」概念：
                             // 直接解析地址交给原来的播放内核，跳过详情页那套。
                             if !isResolvingPlayback { Task { await openLiveItem(item) } }
+                        } else if CatVodMediaKind.nativeHint(
+                            media: item, site: resultSites[item.id] ?? selectedSite) {
+                            // 音乐听书 / 漫画 / 小说：先解析首集拿到 playerContent 的真实类型，
+                            // 再交给 App 自带界面；判成视频则退回原详情页。
+                            if !isResolvingPlayback { Task { await openNativeItem(item) } }
                         } else if !isOpeningDetail {
                             Task { await openDetail(item, from: resultSites[item.id]) }
                         }
@@ -1246,6 +1257,77 @@ struct CatVodHomeView: View {
         }
     }
 
+    /// 音乐听书 / 漫画 / 小说条目的点击分流。状态机与 `openLiveItem` 一致：
+    /// 在 MainActor 里原子认领 `isResolvingPlayback`，任何提前返回都必须复位，
+    /// 否则 slow resolve 会让后续点击全部被守卫挡住（自锁）。
+    private func openNativeItem(_ item: CatVodMedia) async {
+        let busy = await MainActor.run { () -> Bool in
+            if isResolvingPlayback { return true }
+            isResolvingPlayback = true
+            playingEpisodeID = item.id
+            message = nil
+            return false
+        }
+        if busy { return }
+        guard let bundle = currentBundleURL,
+              let site = resultSites[item.id] ?? selectedSite else {
+            await MainActor.run { releaseNativeGuard() }
+            return
+        }
+        do {
+            let result = try await CatVodService.shared.detail(
+                bundleURL: bundle, site: site, id: item.id, expectedName: item.name)
+            guard let episode = result.groups.first?.episodes.first else {
+                await MainActor.run {
+                    message = localized("这个源没有返回可播放的内容")
+                    releaseNativeGuard()
+                }
+                return
+            }
+            let playback = try await CatVodService.shared.player(
+                bundleURL: bundle, site: site, episode: episode)
+            guard let urlString = playback.url, !urlString.isEmpty else {
+                await MainActor.run {
+                    message = localized("该片源没有返回可播放地址")
+                    releaseNativeGuard()
+                }
+                return
+            }
+            let kind = CatVodMediaKind.classify(
+                playbackURL: urlString, typeName: item.typeName, siteType: site.type)
+            await MainActor.run {
+                if kind == .video {
+                    // 信号不足（如漫画源返回 m3u8）：按约定走原来的详情页/视频播放器。
+                    isResolvingPlayback = false
+                    playingEpisodeID = nil
+                    Task { await openDetail(item, from: resultSites[item.id]) }
+                    return
+                }
+                do {
+                    let native = try CatVodNativeBridge.bridge(
+                        playback: playback, media: item, site: site, store: bookStore)
+                    nativeContent = CatVodNativeContent(
+                        kind: native.kind, bookID: native.bookID, title: native.title)
+                    lastPlayedEpisodeID = episode.id
+                } catch {
+                    message = error.localizedDescription
+                }
+                releaseNativeGuard()
+            }
+        } catch {
+            let text = error.localizedDescription
+            await MainActor.run {
+                message = text
+                releaseNativeGuard()
+            }
+        }
+    }
+
+    private func releaseNativeGuard() {
+        isResolvingPlayback = false
+        playingEpisodeID = nil
+    }
+
     private func openDetail(_ item: CatVodMedia, from overrideSite: CatVodSite? = nil) async {
         guard let bundle = currentBundleURL, let site = overrideSite ?? selectedSite else { return }
         // 豆瓣/推荐类站点的条目是「聚合条目」，id 形如 msearch:36847425，它们的
@@ -1366,8 +1448,39 @@ struct CatVodHomeView: View {
         }
         do {
             let playback = try await CatVodService.shared.player(bundleURL: bundle, site: site, episode: episode)
-            guard let urlString = playback.url, !urlString.isEmpty, let url = URL(string: urlString) else {
+            guard let urlString = playback.url, !urlString.isEmpty else {
                 AppLogger.error("[CatVod] play: player 返回空地址 site=\(site.key) flag=\(episode.spiderFlag)", level: .error)
+                await MainActor.run {
+                    message = localized("该片源没有返回可播放地址")
+                    isResolvingPlayback = false
+                    playingEpisodeID = nil
+                }
+                return
+            }
+            // 音乐听书 / 漫画 / 小说：真实信号在 playerContent 返回后才有。
+            // 必须在流探测/清晰度之前分流，音频直链与图片列表都不是视频流。
+            let nativeMedia = await MainActor.run { detailItem }
+            if let nativeMedia,
+               CatVodMediaKind.classify(playbackURL: urlString,
+                                        typeName: nativeMedia.typeName,
+                                        siteType: site.type) != .video {
+                await MainActor.run {
+                    do {
+                        let native = try CatVodNativeBridge.bridge(
+                            playback: playback, media: nativeMedia, site: site, store: bookStore)
+                        nativeContent = CatVodNativeContent(
+                            kind: native.kind, bookID: native.bookID, title: native.title)
+                        lastPlayedEpisodeID = episode.id
+                    } catch {
+                        message = error.localizedDescription
+                    }
+                    isResolvingPlayback = false
+                    playingEpisodeID = nil
+                }
+                return
+            }
+            // 走到这里才要求合法视频 URL：漫画的 `&&` 图片串与小说正文不是 URL。
+            guard let url = URL(string: urlString) else {
                 await MainActor.run {
                     message = localized("该片源没有返回可播放地址")
                     isResolvingPlayback = false
