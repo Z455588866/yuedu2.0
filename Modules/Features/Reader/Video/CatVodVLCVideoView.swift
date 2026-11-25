@@ -228,9 +228,23 @@ struct CatVodVLCVideoView: View {
     @StateObject private var model = CatVodVLCPlayerModel()
     @State private var clock = PlaybackClock()
     @State private var danmakuController = DanmakuController()
+    @State private var danmakuSources = DanmakuSourceStore.shared
+    /// 字幕层与系统播放器共用同一套控制器/覆盖层/导入库。VLC 只负责解码画面，
+    /// 外挂字幕（本地 .srt/.vtt 或在线字幕源）仍由 SwiftUI 叠在画面上。
+    @State private var subtitle = SubtitleController()
+    @State private var subtitleStore = SubtitleStore.shared
+    @State private var onlineSubtitleSources = OnlineSubtitleSourceStore.shared
     @State private var showsControls = true
     @State private var scrubbing: Double?
     @State private var hideTask: Task<Void, Never>?
+    /// 本播放器所在窗口。横竖屏请求必须发给它的 scene（iPad 多窗口/外接屏时不是 keyWindow）。
+    @State private var window = ReaderWindowReference()
+    /// 用户显式的横/竖选择；nil 表示跟随设备方向。
+    @State private var orientationOverride: FixedLayoutOrientation?
+    /// 面板由播放器持有而不是按钮：控制条会在空闲后自动隐藏，
+    /// 面板若挂在按钮上，会在用户还在调整时被一起从视图树里摘掉。
+    @State private var showsDanmakuPanel = false
+    @State private var showsSubtitlePanel = false
 
     var body: some View {
         ZStack {
@@ -245,6 +259,13 @@ struct CatVodVLCVideoView: View {
                                fontSize: danmakuController.fontSize,
                                speed: danmakuController.speed)
                     .allowsHitTesting(false)
+                    .ignoresSafeArea()
+            }
+            // 外挂字幕压在弹幕之上、控制条之下；时钟与系统播放器共用，
+            // 因此 VLC 解码的画面里拖动进度后字幕照样逐句跟随。
+            if subtitle.enabled, let entry = subtitle.activeEntry {
+                SubtitleOverlay(clock: clock, entry: entry, opacity: 1,
+                                coverBuiltin: subtitle.coverBuiltin)
                     .ignoresSafeArea()
             }
             if model.isPreparing {
@@ -265,9 +286,13 @@ struct CatVodVLCVideoView: View {
                 .foregroundStyle(.white)
                 .padding(28)
             }
-            if showsControls {
-                controls
-            } else {
+            // 控制条常驻视图树，只切透明度/命中：弹幕、字幕设置面板挂在它的按钮上，
+            // 若用 if 摘掉子树，面板会在用户还在调整时被一起关闭。
+            controls
+                .opacity(showsControls ? 1 : 0)
+                .allowsHitTesting(showsControls)
+                .accessibilityHidden(!showsControls)
+            if !showsControls {
                 // 控制条收起后，点画面任何地方把它叫回来。
                 Color.clear
                     .contentShape(Rectangle())
@@ -277,7 +302,8 @@ struct CatVodVLCVideoView: View {
                     }
             }
         }
-        .statusBarHidden()
+        .readerWindowProbe(window)
+        .statusBarHidden(!showsControls)
         .task {
             model.open(url: url, headers: headers, startAt: startAt)
             clock.attach { [model] in (model.rawTime, model.isPlaying) }
@@ -287,14 +313,39 @@ struct CatVodVLCVideoView: View {
                     if let items = await danmaku(), !items.isEmpty {
                         danmakuController.adopt(items, title: title,
                                                 sourceName: localized("片源自带"))
+                    } else {
+                        // 片源没给弹幕（接口挂了/这集没有）时退回按标题在线匹配，
+                        // 与系统播放器行为一致，而不是让 VLC 内核一条弹幕都没有。
+                        danmakuController.attach(title: title, episodeNumber: nil)
                     }
                 }
+            } else {
+                danmakuController.attach(title: title, episodeNumber: nil)
             }
+            // 字幕按片名匹配本地/在线字幕源——这块与用哪个解码内核无关。
+            subtitle.attach(title: title, episodeNumber: nil)
             scheduleHide()
         }
         .onDisappear {
             clock.detach()
             model.stop()
+            danmakuController.stop()
+            subtitle.stop()
+            if turnsWindow { ReaderOrientationController.shared.restoreDefault(in: window.windowScene) }
+        }
+    }
+
+    /// 是否由本播放器接管窗口方向：仅 iPhone。iPad 的窗口尺寸由用户决定，转设备是用户的事。
+    private var turnsWindow: Bool {
+        window.windowScene?.traitCollection.userInterfaceIdiom == .phone
+    }
+
+    /// 请求窗口转到指定方向；与系统播放器走同一个控制器，行为一致。
+    private func turn(to orientation: FixedLayoutOrientation) {
+        window.withWindow { uiWindow in
+            guard let scene = uiWindow.windowScene,
+                  scene.traitCollection.userInterfaceIdiom == .phone else { return }
+            ReaderOrientationController.shared.request(orientation, in: scene)
         }
     }
 
@@ -310,6 +361,63 @@ struct CatVodVLCVideoView: View {
                     .font(.system(size: 16, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
+                // 弹幕设置：与系统播放器同一控件，可开关、选源、手动搜剧。
+                DanmakuControls(
+                    enabled: Binding(get: { danmakuController.enabled },
+                                     set: { danmakuController.setEnabled($0) }),
+                    selectedSourceID: Binding(
+                        get: { danmakuController.selectedSourceID },
+                        set: { danmakuController.selectedSourceID = $0; danmakuController.reload() }
+                    ),
+                    area: Binding(get: { danmakuController.area }, set: { danmakuController.area = $0 }),
+                    fontSize: Binding(get: { danmakuController.fontSize }, set: { danmakuController.fontSize = $0 }),
+                    speed: Binding(get: { danmakuController.speed }, set: { danmakuController.speed = $0 }),
+                    showsPanel: $showsDanmakuPanel,
+                    sources: danmakuSources.enabledSources,
+                    status: danmakuController.status,
+                    videoTitle: title,
+                    onManualPick: { source, episode, animeTitle in
+                        danmakuController.loadManual(source: source, episode: episode, animeTitle: animeTitle)
+                    }
+                )
+                // 字幕设置：VLC 内核同样支持外挂字幕（本地/在线），不再缺字幕能力。
+                SubtitleControls(
+                    enabled: Binding(get: { subtitle.enabled }, set: { subtitle.setEnabled($0) }),
+                    selectedEntryID: Binding(
+                        get: { subtitle.selectedEntryID },
+                        set: { subtitle.selectedEntryID = $0 }
+                    ),
+                    entries: subtitleStore.enabledEntries,
+                    sources: onlineSubtitleSources.enabledSources,
+                    status: subtitle.status,
+                    matched: subtitle.activeEntry != nil,
+                    coverBuiltin: Binding(
+                        get: { subtitle.coverBuiltin },
+                        set: { subtitle.coverBuiltin = $0 }
+                    ),
+                    showsPanel: $showsSubtitlePanel,
+                    onSelect: { subtitle.resolve() },
+                    onRetry: { subtitle.resolve() }
+                )
+                // 横/竖屏切换：用户反馈的痛点——VLC 内核此前竖屏无法转横屏。
+                Button {
+                    let next: FixedLayoutOrientation = {
+                        switch orientationOverride {
+                        case .landscape: return .portrait
+                        case .portrait: return .auto
+                        default: return .landscape
+                        }
+                    }()
+                    orientationOverride = (next == .auto) ? nil : next
+                    if let override = orientationOverride { turn(to: override) }
+                    else { turn(to: .auto) }
+                } label: {
+                    Image(systemName: orientationOverride == .portrait
+                          ? "rectangle.portrait" : "rectangle.landscape")
+                        .font(.system(size: 16))
+                        .frame(width: 38, height: 38)
+                }
+                .accessibilityLabel(localized("横屏/竖屏切换"))
                 Text("VLC")
                     .font(.system(size: 11, weight: .bold))
                     .padding(.horizontal, 7)
@@ -373,6 +481,8 @@ struct CatVodVLCVideoView: View {
         )
         .contentShape(Rectangle())
         .onTapGesture {
+            // 面板打开时不收控制条——否则正在调整的弹幕/字幕面板会被一起摘掉。
+            guard !showsDanmakuPanel, !showsSubtitlePanel else { return }
             showsControls = false
         }
     }
@@ -382,7 +492,10 @@ struct CatVodVLCVideoView: View {
         hideTask = Task {
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
-            if model.isPlaying { showsControls = false }
+            // 面板开着、正在拖动进度或没在播放时都保持控制条可见。
+            if model.isPlaying, !showsDanmakuPanel, !showsSubtitlePanel, scrubbing == nil {
+                showsControls = false
+            }
         }
     }
 

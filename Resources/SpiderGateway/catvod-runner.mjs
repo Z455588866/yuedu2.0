@@ -500,7 +500,14 @@ export async function runCatVod(bundlePath, options = {}) {
   let bundleConfig = null;
   if (options.configPath) {
     try {
-      const loaded = await import(pathToFileURL(options.configPath).href);
+      // 必须用 require 而不是 await import：这些 config.js 是 CommonJS，且导出对象
+      // 自带一个 `default` 字段。ESM import 把 module.exports 再包一层 namespace，
+      // `loaded.default` 取到的是 {default:{...}, ali, ...} 里错位的一层——实测拿不到
+      // `sites`，bundle 的 `/config` 里 `e.config.sites.list` 就抛
+      // "Cannot read properties of undefined (reading 'list')" → HTTP 500，站点全空。
+      // 成熟项目 tvbox-silicon 的 worker 正是用 createRequire + require 加载，故照做。
+      const configRequire = createRequire(pathToFileURL(bundlePath));
+      const loaded = configRequire(options.configPath);
       const value = loaded?.default ?? loaded;
       if (value && typeof value === "object" && !Array.isArray(value)) bundleConfig = value;
     } catch (error) {
