@@ -1414,7 +1414,10 @@ struct StageShelfView: View {
                 // 选择 / 分组 › / 排序(最近阅读·添加日期) / 格式 书名 / 书架显示 ›
                 Menu {
                     Button {
-                        withAnimation(.snappy(duration: 0.2)) { isManaging.toggle() }
+                        withAnimation(.snappy(duration: 0.2)) {
+                            isManaging.toggle()
+                            if !isManaging { selection = [] }
+                        }
                     } label: {
                         Label(localized(isManaging ? "完成" : "选择"), systemImage: "checkmark.circle")
                     }

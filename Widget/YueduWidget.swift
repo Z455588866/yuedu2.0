@@ -44,7 +44,7 @@ struct BookProgressProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<BookProgressEntry>) -> Void) {
         let entry = BookProgressEntry(date: Date(), book: loadLastBook())
-        let nextUpdate = Calendar.current.date(byAdding: .minute, value: 30, to: Date())!
+        let nextUpdate = Date().addingTimeInterval(30 * 60)
         completion(Timeline(entries: [entry], policy: .after(nextUpdate)))
     }
 }
