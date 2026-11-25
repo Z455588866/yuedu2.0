@@ -462,6 +462,32 @@ struct CatVodVLCVideoView: View {
                 }
                 .accessibilityLabel(localized("解锁屏幕"))
             }
+            // 竖屏时常驻左上角退出键：控制条几秒后自动收起，顶栏那个 X 会跟着
+            // 消失，竖屏窄屏又没有系统返回手势，用户就没法退出这一集。这里补一个
+            // 只有控制条收起、且未锁屏时才出现的 X，保证任何时刻都能退出。
+            if !showsControls && !isLocked {
+                // 用容器 + Spacer 贴到左上角，而不是给 Button 加 infinity frame——
+                // 后者会把整块屏幕都变成按钮的点击区，点画面任意处都会误关。
+                // 容器的空白区（Spacer/HStack）不接收点击，事件照常穿透到手势层。
+                VStack {
+                    HStack {
+                        Button { onClose() } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                                .background(.black.opacity(0.45), in: Circle())
+                        }
+                        .accessibilityLabel(localized("关闭"))
+                        .allowsHitTesting(true) // 容器整体关命中，唯独按钮重新开启
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding(.leading, 14)
+                .padding(.top, 8)
+                .allowsHitTesting(false) // 容器空白不拦点击，事件穿透到手势层
+            }
         }
         .readerWindowProbe(window)
         .statusBarHidden(!showsControls)
