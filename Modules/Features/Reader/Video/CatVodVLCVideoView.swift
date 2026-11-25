@@ -375,7 +375,6 @@ struct CatVodVLCVideoView: View {
                 // 避免画面转了、弹幕矩形却还按铺满算导致的错位。
                 let mode: VideoScalingMode = pictureRotation % 2 == 1 ? .fit : scalingMode
                 let rect = mode.pictureRect(native: native, in: size)
-                let textScale = mode.textScale(native: native, in: size)
                 // 「拉伸」档要靠 VLC 的 aspect 实现，其余档位恢复片源原始比例。
                 let aspect = mode == .stretch && size.width > 0 && size.height > 0
                     ? "\(Int(size.width.rounded())):\(Int(size.height.rounded()))"
@@ -385,15 +384,12 @@ struct CatVodVLCVideoView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     // 弹幕压在画面上、控制条下面，且不接管触摸——否则点不到进度条。
                     if danmakuController.enabled, let track = danmakuController.track {
-                        // textScale 按画面比例缩放字号：横屏片源装在竖屏窗口里时会缩到
-                        // 4pt 以下，弹幕看着就像没显示。成熟播放器（弹弹play/DanmakuKit）
-                        // 的字号是有下限的固定像素值，不会随画面缩到读不出来。这里给个 0.6
-                        // 的下限，保证躺倒/未转向时弹幕依然可见；转向后按正常比例放大。
-                        let scaledFont = danmakuController.fontSize * Double(max(textScale, 0.6))
+                        // 与系统播放器一致：字号交给引擎按「画面矩形」短边自适应（含下限），
+                        // 传用户在设置里选的点数，避免外部再乘画面缩放造成双重缩放。
                         DanmakuOverlay(clock: clock, track: track,
                                        opacity: danmakuController.opacity,
                                        area: danmakuController.area,
-                                       fontSize: scaledFont,
+                                       fontSize: danmakuController.fontSize,
                                        speed: danmakuController.speed)
                             .allowsHitTesting(false)
                     }

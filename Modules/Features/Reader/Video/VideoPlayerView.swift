@@ -100,13 +100,14 @@ struct VideoPlayerView: View {
                 // 让字号随之等比放大（"弹幕大了自然速度就慢了，没必要继续降低速度"）。
                 GeometryReader { geo in
                     let rect = pictureRect(in: geo.size)
-                    let textScale = effectiveScalingMode.textScale(
-                        native: rotatedPictureSize, in: geo.size)
                     ZStack {
                         if danmaku.enabled, let track = danmaku.track {
+                            // 弹幕字号交给引擎按「画面矩形」短边自适应（含 15pt 下限），
+                            // 不再在此乘画面缩放——Canvas 的尺寸已经是缩放后的画面矩形，
+                            // 再乘一次会双重缩放。传入的是用户在设置里选的字号点数。
                             DanmakuOverlay(clock: clock, track: track, opacity: danmaku.opacity,
                                            area: danmaku.area,
-                                           fontSize: danmaku.fontSize * Double(textScale),
+                                           fontSize: danmaku.fontSize,
                                            speed: danmaku.speed)
                         }
                         // SubtitleOverlay 自己按内容定高、底部对齐，从不读 bounds（那样会锁住
