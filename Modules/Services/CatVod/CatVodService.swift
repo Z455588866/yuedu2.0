@@ -45,7 +45,10 @@ final class CatVodService {
                 level: .error
             )
         }
-        guard let sites = object["sites"] as? [[String: Any]] else { return [] }
+        guard let sites = object["sites"] as? [[String: Any]] else {
+            AppLogger.info("[CatVod] catalog 结果 bundle=\(bundleURL) 网关未返回 sites 数组", level: .notice)
+            return []
+        }
         let parsed = sites.compactMap { dict -> CatVodSite? in
             guard let data = try? JSONSerialization.data(withJSONObject: dict),
                   var site = try? decoder.decode(CatVodSite.self, from: data) else { return nil }
@@ -54,6 +57,15 @@ final class CatVodService {
             site.adoptRawExt(dict["ext"])
             return site
         }
+        // 每轮都记站点数：成功返回 0 站点（jsSiteCount=0）不产生 diagnostic，
+        // 界面只显示「暂无内容」而日志一片安静，无法区分「源没站点」和「本轮加载失败」。
+        // 带上 jsSiteCount 与 URL 尾段，导出日志就能定位是哪个源、哪一轮空。
+        let jsCount = (object["jsSiteCount"] as? Int) ?? -1
+        let tail = bundleURL.split(separator: "/").suffix(2).joined(separator: "/")
+        AppLogger.info(
+            "[CatVod] catalog 结果 bundle=\(tail) 网关站点=\(sites.count) 解析站点=\(parsed.count) js=\(jsCount)",
+            level: .notice
+        )
         Self.persistCatalog(parsed, bundleURL: bundleURL)
         return parsed
     }

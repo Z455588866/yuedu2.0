@@ -315,6 +315,10 @@ export function createGateway(config, dependencies = {}) {
   // actually bound, so HLS segments can be rewritten back through here.
   let proxyOrigin = "";
   const server = http.createServer(async (request, response) => {
+    // Declared outside the try so the catch's action/site diagnostic can read it.
+    // A `const invoke` inside the try is not in scope in catch, and referencing it
+    // there throws ReferenceError, which kills the whole gateway on any source error.
+    let invoke;
     try {
       await dependencies.beforeRequest?.();
       const url = new URL(request.url || "/", "http://gateway.local");
@@ -444,7 +448,7 @@ export function createGateway(config, dependencies = {}) {
         return;
       }
 
-      const invoke = validateInvokeRequest(body);
+      invoke = validateInvokeRequest(body);
       if (invoke.site.py) {
         const result = await callPythonSite(config, invoke);
         sendJSON(response, 200, result);
