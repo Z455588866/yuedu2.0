@@ -709,7 +709,7 @@ final class CatVodService {
 
     private func invoke(bundleURL: String, site: CatVodSite, action: String,
                         arguments: [String: Any],
-                        timeout: TimeInterval = 150) async throws -> [String: Any] {
+                        timeout: TimeInterval = 50) async throws -> [String: Any] {
         // Every spider action (home/category/detail/player/search…) funnels through
         // here. Log action + site + duration so a later exported log can show which
         // step actually failed — previously these all failed silently into the UI.
@@ -755,7 +755,7 @@ final class CatVodService {
     }
 
     private func post(_ endpoint: URL, body: [String: Any],
-                      timeout: TimeInterval = 150) async throws -> [String: Any] {
+                      timeout: TimeInterval = 50) async throws -> [String: Any] {
         // A spider session can be reclaimed while the app is backgrounded or idle.
         // The gateway rebuilds it on demand, so one automatic retry turns a
         // transient "CatVod stopped" 502 into a seamless success.
@@ -773,7 +773,7 @@ final class CatVodService {
     }
 
     private func postOnce(_ endpoint: URL, body: [String: Any],
-                          timeout: TimeInterval = 150) async throws -> [String: Any] {
+                          timeout: TimeInterval = 50) async throws -> [String: Any] {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -783,10 +783,10 @@ final class CatVodService {
         request.setValue("Bearer \(CatVodGateway.shared.authenticationToken)",
                          forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
-        // A cold bundle (download + JS compile + server start) plus a slow
-        // overseas upstream needs the budget the CatVod players give a source
-        // (150s for catalog/home/category, less for search and play). The old
-        // 30–50s reported healthy-but-slow sources as "cannot load".
+        // 50s is only the outer ceiling: the runner enforces its own per-action
+        // budgets (home/category 20s, detail/search 25s, play 30s) and always
+        // answers first, so this never cuts off a working source. The old 150s
+        // only meant a dead source spun for two and a half minutes before failing.
         request.timeoutInterval = timeout
 
         let (data, response) = try await session.data(for: request)
