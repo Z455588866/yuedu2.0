@@ -593,9 +593,9 @@ enum ChapterUpdater {
             if nsError.domain == "BookStore", (nsError.code == -3 || nsError.code == -1) {
                 AppLogger.network(
                     "Skipped auto-update: book's source is no longer configured",
-                    level: .notice,
                     context: ["bookId": book.id.uuidString, "title": book.title,
-                              "sourceId": book.bookSourceId?.uuidString ?? "nil"]
+                              "sourceId": book.bookSourceId?.uuidString ?? "nil"],
+                    level: .notice
                 )
             } else {
                 AppLogger.network(
