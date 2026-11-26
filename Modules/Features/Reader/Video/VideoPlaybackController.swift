@@ -417,7 +417,13 @@ final class VideoPlaybackController {
     /// 沿 underlyingErrors 递归，因为 AVPlayerItem.error 常把真实原因包在底层。
     private static func isNotAuthorized(_ error: Error?) -> Bool {
         guard let error else { return false }
-        func hit(_ nsError: NSError) -> Bool {
+        // 用显式栈递归错误链，不用嵌套函数：underlyingErrors 是 [Error]，
+        // 传 @MainActor 的嵌套函数给 contains(where:) 会触发 Swift 6 隔离/类型错误。
+        var pending: [Error] = [error]
+        var inspected = 0
+        while let current = pending.popLast(), inspected < 32 {
+            inspected += 1
+            let nsError = current as NSError
             if nsError.domain == AVFoundationErrorDomain,
                nsError.code == AVError.Code.contentIsNotAuthorized.rawValue { return true }
             let text = (nsError.localizedDescription + " " + (nsError.localizedFailureReason ?? ""))
@@ -425,9 +431,9 @@ final class VideoPlaybackController {
             if text.contains("403") || text.contains("not authorized") || text.contains("许可") {
                 return true
             }
-            return nsError.underlyingErrors.contains(where: hit)
+            pending.append(contentsOf: nsError.underlyingErrors)
         }
-        return hit(error as NSError)
+        return false
     }
 
     /// 连接类错误：按 1s/3s/8s 在原位置重开。真正的失败（403、解码不了）仍然报错。
