@@ -22,13 +22,9 @@ enum LegadoRSSScraper {
 
         let js = LegadoSortURLParser.jsBody(raw) ?? ""
         let sourceURL = source.url
-        let jsLib = source.jsLib?.trimmingCharacters(in: .whitespacesAndNewlines)
         let evaluated: String? = await SourceScriptThread.run {
             let jsEngine = JSCoreEngine()
             wireNetworkHandler(jsEngine)
-            // 与 scriptHost / 书源链路一致：分类的 @js: sortUrl 可能调用 jsLib 里的
-            // 函数（本源用 JB_base()）。先装载再求值，普通源无 jsLib 则不受影响。
-            if let jsLib, !jsLib.isEmpty { _ = jsEngine.evaluate(jsLib) }
             return jsEngine.evaluateIsolated(js, bindings: [
                 "baseUrl": sourceURL,
                 "baseURL": sourceURL
@@ -217,16 +213,6 @@ enum LegadoRSSScraper {
     private static func scriptHost(for source: RSSSource) -> SourceScriptHost<JSCoreEngine> {
         let jsEngine = JSCoreEngine()
         wireNetworkHandler(jsEngine)
-        // Legado 订阅源的 sortUrl / ruleContent 常是 "@js:" 脚本，内部会调用源自带
-        // jsLib 里的函数（本源用 JB_base() / JB_line() 拼当前线路）。书源链路的
-        // ModernParserBridge 在跑规则前先 evaluate jsLib；RSS 链路此前用裸引擎，
-        // 这些脚本因函数未定义而静默失败（分类为空、正文解析不出）。这里按同一
-        // 做法、用同一 evaluate 接口先把 jsLib 装进全局作用域；没有 jsLib 的普通
-        // 订阅源不受影响。
-        if let jsLib = source.jsLib?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !jsLib.isEmpty {
-            _ = jsEngine.evaluate(jsLib)
-        }
         return SourceScriptHost(jsEngine, label: "rss.\(source.name)")
     }
 
