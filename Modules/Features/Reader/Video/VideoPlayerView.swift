@@ -517,6 +517,9 @@ struct VideoPlayerView: View {
             // 竖屏窄屏也始终可点。这里留等宽占位，保持标题位置不变、避免两个 X 重叠。
             Color.clear
                 .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                // 竖屏图标多、宽度不够时这 44pt 会被优先压缩，顶部图标就顶到最左边，
+                // 和常驻 X 叠在一起。给占位最高布局优先级，保证 X 的位置永远留出来。
+                .layoutPriority(1)
             VStack(alignment: .leading, spacing: DSSpacing.xxs) {
                 Text(controller.book.title)
                     .font(DSFont.headline)
