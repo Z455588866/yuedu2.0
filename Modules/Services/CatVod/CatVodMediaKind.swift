@@ -55,7 +55,18 @@ extension CatVodMediaKind {
     /// 的 url 后由 `classify` 精判，详情页点集时按它分流到听书/漫画/阅读器。
 
     /// 用播放结果精判内容类型。无法区分的 m3u8 一律按 `.video`（现有播放器）。
-    static func classify(playbackURL: String, typeName: String, siteType: Int?) -> CatVodMediaKind {
+    /// `musicPlayer` 是部分 PY 音乐插件的显式标记 `music_player: 1`；
+    /// `siteName` 用你导入的源文件名前缀 `[音]` 分类（如 `[音]DJ呦呦`），
+    /// 覆盖插件既不写标记、直链又没有扩展名的情况。
+    /// 注意：这里只是详情里拿到播放地址后的精判，列表仍一律进详情页。
+    static func classify(playbackURL: String, typeName: String, siteType: Int?,
+                         musicPlayer: Bool = false,
+                         siteName: String = "") -> CatVodMediaKind {
+        if musicPlayer { return .audio }
+        let loweredSite = siteName.lowercased()
+        if ["[音]", "【音】", "(音)"].contains(where: { loweredSite.contains($0) }) {
+            return .audio
+        }
         let raw = playbackURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowered = raw.lowercased()
 

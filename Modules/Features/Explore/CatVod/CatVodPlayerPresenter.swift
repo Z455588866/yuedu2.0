@@ -13,7 +13,8 @@ enum CatVodPlayerPresenter {
     private static weak var activePlayer: UIViewController?
 
     static func present(url: URL, headers: [String: String], title: String,
-                        danmaku: CatVodDanmakuPayload? = nil) {
+                        danmaku: CatVodDanmakuPayload? = nil,
+                        info: VideoStreamInfo? = nil) {
         // 弹幕**不能**在这里同步取完再播：红果的弹幕要按 30 秒一个窗口打 20 次接口，
         // 取完要几秒到十几秒，先取再播就等于点一集黑屏十几秒。这里只把「怎么取」
         // 交给播放器，片子先起来，弹幕到了再叠上去。
@@ -38,14 +39,15 @@ enum CatVodPlayerPresenter {
             // scheme + host only: playback URLs carry share tokens in the query.
             AppLogger.info("[CatVod] ⟐ present route=\(route.logTag) url=\(url.scheme ?? "?")://\(url.host ?? "?") ext=\(url.pathExtension)", level: .notice)
             presentResolved(route, url: url, headers: headers, title: title,
-                            danmaku: loader)
+                            danmaku: loader, info: info)
         }
     }
 
     /// 决策等回来之后再取一次顶层控制器：`topVC` 是 UIKit 对象，不能跨到后台再拿回来用。
     private static func presentResolved(_ route: CatVodPlaybackRoute, url: URL,
                                         headers: [String: String], title: String,
-                                        danmaku: (@MainActor () async -> [DanmakuItem]?)?) {
+                                        danmaku: (@MainActor () async -> [DanmakuItem]?)?,
+                                        info: VideoStreamInfo?) {
         guard let topVC = BookSourceFormLoginView.topViewController(),
               let scene = topVC.view.window?.windowScene else { return }
         // 等待期间可能已经有人开了播放器。
@@ -55,17 +57,18 @@ enum CatVodPlayerPresenter {
         case .vlc(let reason) where CatVodVLCKernel.isAvailable:
             AppLogger.info("[CatVod] 用 VLC 内核播放（\(reason)）", level: .notice)
             presentVLC(url: url, headers: headers, title: title, danmaku: danmaku,
-                       scene: scene, on: topVC)
+                       info: info, scene: scene, on: topVC)
         default:
             presentSystem(url: url, headers: headers, title: title, danmaku: danmaku,
-                          scene: scene, on: topVC)
+                          info: info, scene: scene, on: topVC)
         }
     }
 
     private static func presentSystem(url: URL, headers: [String: String], title: String,
                                       danmaku: (@MainActor () async -> [DanmakuItem]?)?,
+                                      info: VideoStreamInfo?,
                                       scene: UIWindowScene, on topVC: UIViewController) {
-        let stream = VideoStream(url: url, headers: headers)
+        let stream = VideoStream(url: url, headers: headers, info: info)
         final class HostBox { weak var host: UIViewController? }
         let box = HostBox()
         let host = UIHostingController(rootView:
@@ -81,11 +84,12 @@ enum CatVodPlayerPresenter {
     #if canImport(VLCKitSPM)
     private static func presentVLC(url: URL, headers: [String: String], title: String,
                                    danmaku: (@MainActor () async -> [DanmakuItem]?)?,
+                                   info: VideoStreamInfo?,
                                    scene: UIWindowScene, on topVC: UIViewController) {
         final class HostBox { weak var host: UIViewController? }
         let box = HostBox()
         let host = UIHostingController(rootView:
-            CatVodVLCVideoView(url: url, headers: headers, title: title, danmaku: danmaku) {
+            CatVodVLCVideoView(url: url, headers: headers, title: title, danmaku: danmaku, info: info) {
                 box.host?.dismiss(animated: true)
             }
             .followsScenePhase(of: scene)
@@ -98,9 +102,10 @@ enum CatVodPlayerPresenter {
     #else
     private static func presentVLC(url: URL, headers: [String: String], title: String,
                                    danmaku: (@MainActor () async -> [DanmakuItem]?)?,
+                                   info: VideoStreamInfo?,
                                    scene: UIWindowScene, on topVC: UIViewController) {
         presentSystem(url: url, headers: headers, title: title, danmaku: danmaku,
-                      scene: scene, on: topVC)
+                      info: info, scene: scene, on: topVC)
     }
     #endif
 }

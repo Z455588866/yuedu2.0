@@ -68,7 +68,13 @@ final class OnlineChapterAudioProvider: ChapterAudioProvider {
             store: store
         )
 
-        guard let request = DirectChapterAudioResolver.request(from: package.content),
+        // 猫元桥接的虚拟音频源：章节内容确定是音频直链，签名 CDN 常没有扩展名，
+        // 因此对这条源跳过音频启发式（普通书源仍用原有判定，不放宽）。
+        let isCatVodAudio = book.bookSourceId
+            .flatMap { BookSourceStore.shared.source(id: $0) }?
+            .bookSourceUrl.hasPrefix("catvod-native://audio") == true
+        guard let request = DirectChapterAudioResolver.request(from: package.content,
+                                                               forceAudio: isCatVodAudio),
               let url = request.url else {
             throw ChapterAudioProviderError.missingAudio(
                 contentLength: package.content.count,

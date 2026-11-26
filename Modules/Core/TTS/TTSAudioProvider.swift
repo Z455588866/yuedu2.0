@@ -299,9 +299,12 @@ enum DirectChapterAudioResolver {
         "aac", "aiff", "aif", "flac", "m4a", "m4b", "mp3", "oga", "ogg", "opus", "wav"
     ]
 
-    static func request(from content: String) -> URLRequest? {
+    /// `forceAudio` 用于 App 自己桥接的音频源（猫元音乐/听书）：内容确定是音频直链，
+    /// 只是签名 CDN 的 URL 没有扩展名或 mime 参数。不能放宽普通书源的启发式，
+    /// 否则正文里的任意 http 链接都会被当成音频。
+    static func request(from content: String, forceAudio: Bool = false) -> URLRequest? {
         for candidate in candidates(from: content) {
-            guard isAudioCandidate(candidate) else { continue }
+            guard isAudioCandidate(candidate, forceAudio: forceAudio) else { continue }
             if let request = AnalyzeUrl(ruleUrl: candidate).toURLRequest() {
                 return request
             }
@@ -380,7 +383,7 @@ enum DirectChapterAudioResolver {
         }
     }
 
-    private static func isAudioCandidate(_ candidate: String) -> Bool {
+    private static func isAudioCandidate(_ candidate: String, forceAudio: Bool = false) -> Bool {
         let rawURL = stripLegadoOptions(from: candidate)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: rawURL),
@@ -389,6 +392,7 @@ enum DirectChapterAudioResolver {
         else {
             return false
         }
+        if forceAudio { return true }
 
         let pathExtension = url.pathExtension.lowercased()
         if audioExtensions.contains(pathExtension) {

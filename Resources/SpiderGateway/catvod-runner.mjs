@@ -32,9 +32,10 @@ export function siteBasePath(api) {
 }
 
 /// 宿主已登录的网盘账号 → 插件读的扁平路径表。
-/// 键名照 CatVod 生态的惯例：`/baidu` 下放 `baidu_cookie`，`/quark` 下放
-/// `quark_cookie`，`/115`、`/ali`、`/guangyapan` 同理。插件若只认自己的
-/// 存储结构，这里的值也会被它首次写入覆盖，不影响正常使用。
+/// 这些路径是本项目与自家插件之间的约定，不是 FongMi/TV 或 CatVodSpider 的
+/// 通用规范：`/baidu` 下放 `baidu_cookie`，`/quark` 下放 `quark_cookie`，
+/// `/115`、`/ali`、`/guangyapan` 同理。插件若只认自己的存储结构，这里的值
+/// 也会被它首次写入覆盖，不影响正常使用。
 function bundleAccounts() {
   const raw = process.env.CATVOD_ACCOUNTS;
   if (!raw) return {};
@@ -67,9 +68,9 @@ async function createHostDB(seed, persistDir) {
   const dbPath = persistDir ? path.join(persistDir, "host-db.json") : "";
   const key = (value) => String(value || "").replace(/\/+$/, "") || "/";
   const put = (k, value) => { store.set(key(k), value); };
-  // 成熟项目（FongMi NodeBundle / tvbox-silicon Profiles）把插件的 db 按 bundle
-  // 持久化：配置中心源把站点列表写进 /sites，下次启动要能读回来。这里同样在
-  // 启动时先载入磁盘 db（优先于账号 seed），每次写入后合并落盘。
+  // 按 bundle 持久化插件 db 是本项目的设计（FongMi NodeBundle 最新源码没有
+  // 按 bundle 写 /sites 的逻辑）。配置中心源把站点列表写进 /sites，下次启动
+  // 要能读回来：启动时先载入磁盘 db（优先于账号 seed），每次写入后合并落盘。
   // 注意：本地变量名不能叫 `path`（会遮蔽上面 import 的 node:path），故用 key()。
   if (dbPath) {
     try {

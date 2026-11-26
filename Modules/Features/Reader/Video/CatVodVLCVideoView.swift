@@ -394,6 +394,8 @@ struct CatVodVLCVideoView: View {
     /// 片源自带弹幕的加载器。VLC 内核只负责解码画面，弹幕是 SwiftUI 层叠上去的。
     /// 异步的原因：拉弹幕要几秒，不能挡在播放前面。
     var danmaku: (@MainActor () async -> [DanmakuItem]?)? = nil
+    /// 插件/网关返回的清晰度与线路信息；只用于信息面板，不改变播放行为。
+    var info: VideoStreamInfo? = nil
     let onClose: () -> Void
 
     @StateObject private var model = CatVodVLCPlayerModel()
@@ -428,6 +430,8 @@ struct CatVodVLCVideoView: View {
     /// 面板若挂在按钮上，会在用户还在调整时被一起从视图树里摘掉。
     @State private var showsDanmakuPanel = false
     @State private var showsSubtitlePanel = false
+    /// 播放信息浮层（分辨率/码率/线路），与系统播放器共用同一个面板组件。
+    @State private var showsInfo = false
     /// 画面摆放方式：适应 / 铺满（裁剪）/ 拉伸 / 原始尺寸，与系统播放器同一套档位。
     @State private var scalingMode: VideoScalingMode = .fit
     /// 手动四分之一转，修正横置编码的片源（0/1/2/3），与系统播放器同一个按钮。
@@ -565,31 +569,38 @@ struct CatVodVLCVideoView: View {
             // showsControls——控制条显示时常驻键也在（与控制条顶栏的 X 同位置、同
             // 功能，由这一层负责点击），控制条收起后更不会消失。锁屏时隐藏，交给
             // 中央解锁按钮，与 B站/腾讯视频的锁屏语义一致。
-            if !isLocked {
-                // 用容器 + Spacer 贴到左上角，而不是给 Button 加 infinity frame——
-                // 后者会把整块屏幕都变成按钮的点击区，点画面任意处都会误关。
-                // SwiftUI 中 VStack/HStack/Spacer 的空白区本就不拦截点击，事件照常穿透到手势层，
-                // 只有圆形按钮自身可点。
-                //
-                // 关键：绝不能给容器加 `.allowsHitTesting(false)`——父视图设 false 会让整棵
-                // 子树（含子按钮）都退出命中测试，子按钮写 true 也无法恢复，X 就点不动了。
-                VStack {
-                    HStack {
-                        Button { onClose() } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
-                                .background(.black.opacity(0.45), in: Circle())
-                        }
-                        .contentShape(Circle())
-                        .accessibilityLabel(localized("关闭"))
-                        Spacer()
+            // 左上角常驻退出键：无条件显示，不随控制条收起、锁屏或失败态消失。
+            // 用户实际使用中出现过「失败页没有 X、只剩无效重试、无法退出」——
+            // 任何依赖状态隐藏退出键的写法都不可靠，退出路径必须永远在场。
+            // 锁屏只禁用手势和拖动，不禁用关闭。
+            //
+            // 命中可靠性（此前「X 点不动」的根因在此规避）：
+            // SwiftUI 中 VStack/HStack/Spacer 的空白区本就不拦截点击，事件照常穿透到手势层，
+            // 只有圆形按钮自身可点。绝不能给容器加 `.allowsHitTesting(false)`；
+            // `.contentShape(Circle())` 把命中区明确为圆形本身。
+            VStack {
+                HStack {
+                    Button { onClose() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                            .background(.black.opacity(0.45), in: Circle())
                     }
+                    .contentShape(Circle())
+                    .accessibilityLabel(localized("关闭"))
                     Spacer()
                 }
-                .padding(.leading, 14)
-                .padding(.top, 8)
+                Spacer()
+            }
+            .padding(.leading, 14)
+            .padding(.top, 8)
+            if showsInfo {
+                VideoInfoPanel(lines: (info ?? VideoStreamInfo()).lines(
+                    pictureSize: model.videoSize, measuredBitrate: nil))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(.top, 92)
+                    .padding(.trailing, 14)
             }
         }
         .readerWindowProbe(window)
@@ -830,6 +841,16 @@ struct CatVodVLCVideoView: View {
                         .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
                 }
                 .accessibilityLabel(localized("横屏/竖屏切换"))
+                // 播放信息：与系统播放器同一面板；VLC 侧显示实际 videoSize 和线路元数据。
+                Button {
+                    showsInfo.toggle()
+                    scheduleHide()
+                } label: {
+                    Image(systemName: showsInfo ? "info.circle.fill" : "info.circle")
+                        .font(DSFont.toolbarIcon)
+                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                }
+                .accessibilityLabel(localized("播放信息"))
                 // 锁定播放器：锁住后画面手势不再响应拖动/亮度/音量，点屏幕只短暂闪现解锁图标。
                 Button {
                     isLocked.toggle()
@@ -904,7 +925,7 @@ struct CatVodVLCVideoView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             // 面板打开时不收控制条——否则正在调整的弹幕/字幕面板会被一起摘掉。
-            guard !showsDanmakuPanel, !showsSubtitlePanel else { return }
+            guard !showsDanmakuPanel, !showsSubtitlePanel, !showsInfo else { return }
             showsControls = false
         }
     }
@@ -915,7 +936,7 @@ struct CatVodVLCVideoView: View {
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
             // 面板开着、正在拖动（进度/亮度/音量）或没在播放时都保持控制条可见。
-            if model.isPlaying, !showsDanmakuPanel, !showsSubtitlePanel,
+            if model.isPlaying, !showsDanmakuPanel, !showsSubtitlePanel, !showsInfo,
                scrubbing == nil, pan == nil, !isLocked {
                 showsControls = false
             }

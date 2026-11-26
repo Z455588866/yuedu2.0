@@ -460,6 +460,9 @@ final class CatVodService {
         }
         var parse = Self.flexibleInt(object["parse"])
         var jx = Self.flexibleInt(object["jx"])
+        // TVBox Python 音乐插件的显式标记：默认 audio，覆盖 URL 猜不出扩展名的情况。
+        let musicPlayer = Self.flexibleInt(object["music_player"]) == 1
+            || (object["music_player"] as? Bool) == true
         let rawURL = Self.firstURL(object["url"])
         // 网盘线路会带清晰度与降级说明：哪些档位真的能播、当前用的是哪一档。
         // 以前这两个字段被丢掉，用户只能看到「画面很糊」却没有任何解释。
@@ -510,7 +513,20 @@ final class CatVodService {
         if parse == 1 || jx == 1 || resolvedURL.hasPrefix("parse:")
             || resolvedURL.hasPrefix("json:") {
             if let sniffed = await Self.sniffPlaybackPage(resolvedURL, headers: headers) {
-                return Self.proxiedPlayback(url: sniffed, headers: headers, bundleURL: bundleURL,
+                // 嗅探拿到的直链同样要带默认防盗链头；否则原生听书接过去会静默失败。
+                var sniffHeaders = headers
+                if sniffHeaders["User-Agent"] == nil, sniffHeaders["user-agent"] == nil {
+                    sniffHeaders["User-Agent"] =
+                        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+                }
+                if sniffHeaders["Referer"] == nil, sniffHeaders["referer"] == nil,
+                   let scheme = sniffed.scheme, let host = sniffed.host {
+                    sniffHeaders["Referer"] = "\(scheme)://\(host)/"
+                }
+                return Self.proxiedPlayback(url: sniffed, headers: sniffHeaders, bundleURL: bundleURL,
+                                            originalURL: sniffed.absoluteString,
+                                            originalHeader: sniffHeaders,
+                                            musicPlayer: musicPlayer,
                                             danmaku: danmakuPayload,
                                             notice: playbackNotice)
             }
@@ -556,6 +572,9 @@ final class CatVodService {
             finalHeaders["Referer"] = "\(scheme)://\(host)/"
         }
         return Self.proxiedPlayback(url: finalURL, headers: finalHeaders, bundleURL: bundleURL,
+                                    originalURL: finalURL.absoluteString,
+                                    originalHeader: finalHeaders,
+                                    musicPlayer: musicPlayer,
                                     quality: qualityName, options: qualityChoices,
                                     danmaku: danmakuPayload,
                                     notice: playbackNotice)
@@ -571,6 +590,9 @@ final class CatVodService {
     /// breaking.
     private static func proxiedPlayback(url: URL, headers: [String: String],
                                         bundleURL: String,
+                                        originalURL: String? = nil,
+                                        originalHeader: [String: String]? = nil,
+                                        musicPlayer: Bool = false,
                                         quality: String? = nil,
                                         options: [CatVodQualityOption] = [],
                                         danmaku: CatVodDanmakuPayload? = nil,
@@ -595,13 +617,19 @@ final class CatVodService {
                                   quality: quality,
                                   qualityOptions: proxiedOptions.isEmpty ? nil : proxiedOptions,
                                   playbackNotice: notice,
-                                  danmaku: danmaku)
+                                  danmaku: danmaku,
+                                  originalURL: originalURL ?? url.absoluteString,
+                                  originalHeader: originalHeader ?? headers,
+                                  musicPlayer: musicPlayer)
         }
         return CatVodPlayback(parse: 0, url: url.absoluteString, header: headers,
                               quality: quality,
                               qualityOptions: proxiedOptions.isEmpty ? nil : proxiedOptions,
                               playbackNotice: notice,
-                              danmaku: danmaku)
+                              danmaku: danmaku,
+                              originalURL: originalURL ?? url.absoluteString,
+                              originalHeader: originalHeader ?? headers,
+                              musicPlayer: musicPlayer)
     }
 
     /// `playerContent.danmaku` 既可能是行数组，也可能是一个地址（B 站 XML）。

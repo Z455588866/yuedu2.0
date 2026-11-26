@@ -18,6 +18,9 @@ struct RSSArticleReaderView: View {
     @State private var pendingShare: PendingShareExport<URL>?
     @State private var findRequestID: UUID?
     @State private var sourceFaviconURLs: [URL] = []
+    /// Legado 视频订阅源的 ruleContent 返回 `m3u8,{"headers":{...}}`；识别成流后
+    /// 给出播放入口。未识别到时按钮不出现，普通文章阅读体验不变。
+    @State private var videoStream: VideoStream?
 
     init(articleID: String, store: RSSStore = .shared) {
         self.articleID = articleID
@@ -54,6 +57,14 @@ struct RSSArticleReaderView: View {
                 .hidesRootTabBar()
                 .toolbar {
                     ToolbarItemGroup(placement: .navigationBarTrailing) {
+                        if let stream = videoStream {
+                            Button {
+                                playStream(stream, title: article.title)
+                            } label: {
+                                Label(localized("播放"), systemImage: "play.circle.fill")
+                            }
+                        }
+
                         Button {
                             store.toggleFavorite(articleId: article.id)
                         } label: {
@@ -103,8 +114,10 @@ struct RSSArticleReaderView: View {
                     }
                 }
                 .task(id: article.id) {
+                    videoStream = nil
                     store.markRead(articleId: article.id, isRead: true)
                     await loadFullTextIfNeeded(article)
+                    resolveVideoStream()
                 }
                 .task(id: sourceFaviconLoadKey(for: article)) {
                     await loadSourceFaviconURLs()
@@ -249,6 +262,29 @@ struct RSSArticleReaderView: View {
         } catch {
             fullTextError = fullTextErrorMessage(for: error)
         }
+    }
+
+    /// Legado 视频订阅源把播放地址写在 ruleContent 里（`url,{"headers":{...}}`），
+    /// 正文抓取后原文存在 fullTextHTML。用视频章节同一套解析器识别，识别不到就
+    /// 保持普通文章阅读，不显示播放入口。
+    @MainActor
+    private func resolveVideoStream() {
+        guard let article else { videoStream = nil; return }
+        for text in [article.fullTextHTML, article.fullText] {
+            guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            if let link = try? DirectChapterVideoResolver.link(from: text),
+               case .stream(let request) = link,
+               let url = request.url {
+                videoStream = VideoStream(url: url, headers: request.allHTTPHeaderFields ?? [:])
+                return
+            }
+        }
+        videoStream = nil
+    }
+
+    @MainActor
+    private func playStream(_ stream: VideoStream, title: String) {
+        CatVodPlayerPresenter.present(url: stream.url, headers: stream.headers, title: title)
     }
 
     private func fullTextErrorMessage(for error: Error) -> String {

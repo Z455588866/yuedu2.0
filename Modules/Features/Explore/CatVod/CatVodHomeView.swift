@@ -1317,11 +1317,17 @@ struct CatVodHomeView: View {
             }
             // 音乐听书 / 漫画 / 小说：真实信号在 playerContent 返回后才有。
             // 必须在流探测/清晰度之前分流，音频直链与图片列表都不是视频流。
-            let nativeMedia = await MainActor.run { detailItem }
-            if let nativeMedia,
-               CatVodMediaKind.classify(playbackURL: urlString,
+            // 用原始直链判定：playback.url 可能已被改写成 /v1/media 代理地址，
+            // 音频扩展名和 music_player 标记都会消失，拿它猜类型必然判成视频。
+            // detailItem 为 nil（用户中途关掉弹层）时也要能靠显式标记分流。
+            let classifyURL = playback.originalURL ?? urlString
+            let nativeMedia = await MainActor.run { detailItem } ?? CatVodMedia(
+                id: episode.id, name: title, typeName: "")
+            if CatVodMediaKind.classify(playbackURL: classifyURL,
                                         typeName: nativeMedia.typeName,
-                                        siteType: site.type) != .video {
+                                        siteType: site.type,
+                                        musicPlayer: playback.musicPlayer,
+                                        siteName: site.name) != .video {
                 await MainActor.run {
                     do {
                         let native = try CatVodNativeBridge.bridge(
@@ -1388,32 +1394,48 @@ struct CatVodHomeView: View {
                 }
                 return
             }
-            // 网盘线路会给出多档清晰度（会员权限决定哪几档能播）。有多档就先问
-            // 一次，只有一档就直接播——非会员常常只有一档，多问一次纯属打扰。
+            // 网盘线路会给出多档清晰度（会员权限决定哪几档能播）。默认按成熟播放器的
+            // force-highest 语义直接选最高档，避免用户为了“不要转码糊图”反复试线路；
+            // 关闭这个偏好时仍保留原来的选择窗。
+            var selectedOption: CatVodQualityOption?
             if let options = resolved.qualityOptions, options.count > 1 {
-                AppLogger.info("[CatVod] play: \(options.count) 档清晰度，弹选择窗 site=\(site.key)", level: .notice)
-                await MainActor.run {
-                    qualityPrompt = QualityPrompt(title: "\(title) · \(episode.title)",
-                                                  episodeID: episode.id,
-                                                  options: options,
-                                                  headers: resolved.header ?? [:],
-                                                  danmaku: resolved.danmaku)
-                    isResolvingPlayback = false
-                    playingEpisodeID = nil
+                if CatVodQualityPreference.forceHighest,
+                   let highest = CatVodQualityPreference.best(in: options) {
+                    selectedOption = highest
+                    AppLogger.info("[CatVod] play: \(options.count) 档清晰度，强制最高档 \(highest.name) site=\(site.key)", level: .notice)
+                    if let selectedURL = URL(string: highest.url) { target = selectedURL }
+                } else {
+                    AppLogger.info("[CatVod] play: \(options.count) 档清晰度，弹选择窗 site=\(site.key)", level: .notice)
+                    await MainActor.run {
+                        qualityPrompt = QualityPrompt(title: "\(title) · \(episode.title)",
+                                                      episodeID: episode.id,
+                                                      options: options,
+                                                      headers: resolved.header ?? [:],
+                                                      danmaku: resolved.danmaku)
+                        isResolvingPlayback = false
+                        playingEpisodeID = nil
+                    }
+                    return
                 }
-                return
             }
+            let effectiveQuality = selectedOption?.name ?? resolved.quality
+            let streamInfo = Self.streamInfo(from: resolved, quality: selectedOption)
             await MainActor.run {
                 lastPlayedEpisodeID = episode.id
                 // 「画面为什么这么糊」必须有答案：网盘把原画/高清掐掉时，网关会
                 // 带回降级原因，这里翻成一句人话，跟着播放一起显示。
                 if let notice = resolved.playbackNotice {
-                    message = Self.playbackNoticeText(notice, quality: resolved.quality)
+                    message = Self.playbackNoticeText(notice, quality: effectiveQuality)
+                }
+                var info = streamInfo
+                if let notice = resolved.playbackNotice {
+                    info.notice = Self.playbackNoticeText(notice, quality: effectiveQuality)
                 }
                 CatVodPlayerPresenter.present(url: target, headers: resolved.header ?? [:],
                                               title: QualityPrompt.displayTitle("\(title) · \(episode.title)",
-                                                                                quality: resolved.quality),
-                                              danmaku: resolved.danmaku)
+                                                                                quality: effectiveQuality),
+                                              danmaku: resolved.danmaku,
+                                              info: info)
                 isResolvingPlayback = false
                 playingEpisodeID = nil
             }
@@ -1586,11 +1608,18 @@ struct CatVodHomeView: View {
                 ForEach(prompt.options) { option in
                     Button(option.name) {
                         lastPlayedEpisodeID = prompt.episodeID
+                        let info = VideoStreamInfo(
+                            quality: option.name,
+                            width: option.width,
+                            height: option.height,
+                            bitrate: option.bitrate,
+                            sourceHost: URL(string: option.url)?.host)
                         CatVodPlayerPresenter.present(
                             url: URL(string: option.url) ?? URL(string: "about:blank")!,
                             headers: prompt.headers,
                             title: QualityPrompt.displayTitle(prompt.title, quality: option.name),
-                            danmaku: prompt.danmaku)
+                            danmaku: prompt.danmaku,
+                            info: info)
                         qualityPrompt = nil
                     }
                 }
@@ -1978,6 +2007,24 @@ private struct QualityPrompt: Identifiable {
 }
 
 extension CatVodHomeView {
+    /// 播放信息面板的数据源。用 originalURL 拿线路域名：播放 url 已被改写成
+    /// 127.0.0.1 代理，直接显示会给用户错误印象。
+    static func streamInfo(from playback: CatVodPlayback,
+                           quality option: CatVodQualityOption?) -> VideoStreamInfo {
+        let original = playback.originalURL ?? playback.url ?? ""
+        let url = URL(string: original)
+        let ext = url?.pathExtension ?? ""
+        let title = option?.name ?? playback.quality
+        return VideoStreamInfo(
+            quality: title,
+            width: option?.width,
+            height: option?.height,
+            bitrate: option?.bitrate,
+            sourceHost: url?.host,
+            sourceExtension: ext.isEmpty ? nil : ext,
+            notice: nil)
+    }
+
     /// 网关的降级原因 → 一句人话。返回 nil 表示没有需要解释的事。
     static func playbackNoticeText(_ notice: String, quality: String?) -> String? {
         let label = quality.map { "（\($0)）" } ?? ""

@@ -193,6 +193,8 @@ struct RSSFeedView: View {
     @State private var selectedSortEntry: RSSSortEntry?
     @State private var presentedWebPageURL: InAppWebURL?
     @State private var autoOpenedWebPage = false
+    /// 带 loginUi 的订阅源（如夜社/Jable）用它显示线路/频道配置面板。
+    @State private var showsSourcePanel = false
     /// IDs fetched for the currently selected category; nil = show everything.
     @State private var currentCategoryIDs: Set<String>?
 
@@ -335,6 +337,15 @@ struct RSSFeedView: View {
         .sheet(item: $presentedWebPageURL) { url in
             SafariView(url: url)
         }
+        .sheet(isPresented: $showsSourcePanel) {
+            BookSourceFormLoginView(
+                source: BookSource.fromRSSSource(currentSource),
+                onDismiss: {
+                    showsSourcePanel = false
+                    Task { await refresh() }
+                }
+            )
+        }
         .toolbarTitleDisplayMode(.inline)
         .themedAppSurface(for: .rss)
         .hidesRootTabBar(hasBottomBar: true)
@@ -375,6 +386,15 @@ struct RSSFeedView: View {
                         Label(localized("刷新订阅"), systemImage: "arrow.clockwise")
                     }
                     .disabled(fetcher.isLoading)
+
+                    if !currentSource.loginUi.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Divider()
+                        Button {
+                            showsSourcePanel = true
+                        } label: {
+                            Label(localized("源配置面板"), systemImage: "slider.horizontal.3")
+                        }
+                    }
                 } label: {
                     Label(localized("筛选"), systemImage: "line.3.horizontal.decrease")
                         .labelStyle(.iconOnly)

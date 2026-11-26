@@ -109,6 +109,9 @@ export function loadConfig(overrides = {}) {
     // 对齐 TVBox/OkHttp 的 retryOnConnectionFailure：网络抖动/瞬时 5xx 时重试，
     // 而不是一次失败就把整个源判死。只重试连接类错误和 5xx，不重试 4xx。
     nodeBundleDownloadRetries: integer("CATVOD_BUNDLE_DOWNLOAD_RETRIES", 2, 0),
+    // HLS master playlist：对齐 hls.js currentLevel / ExoPlayer forceHighestSupportedBitrate，
+    // 默认只把最高码率/分辨率的 Variant 交给播放器，避免 ABR 因网络抖动降到糊的转码档。
+    forceHighestVariant: boolean("CATVOD_FORCE_HIGHEST_VARIANT", true),
     // How long a `.js.md5` manifest is trusted from disk. Inside this window a
     // warm start reads the script straight from cache with no network at all.
     nodeBundleManifestTTLms: integer("CATVOD_BUNDLE_MANIFEST_TTL_MS", 10 * 60_000, 0),

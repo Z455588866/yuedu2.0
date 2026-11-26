@@ -400,6 +400,23 @@ struct BookSource: Identifiable, Codable {
     }
 }
 
+extension BookSource {
+    /// 把订阅源（RSSSource）当配置面板的书源用：面板只读取 loginUi / loginUrl /
+    /// jsLib / header / 名称与 URL，这些字段在两个模型里一一对应。用于给带
+    /// loginUi 的订阅源显示与书源一致的线路/频道配置面板，不改订阅源本身。
+    static func fromRSSSource(_ rss: RSSSource) -> BookSource {
+        var bs = BookSource(bookSourceUrl: rss.url, bookSourceName: rss.name)
+        bs.bookSourceGroup = rss.sourceGroup ?? ""
+        bs.bookSourceComment = rss.sourceComment ?? ""
+        bs.loginUi = rss.loginUi ?? ""
+        bs.loginUrl = rss.loginUrl ?? ""
+        bs.jsLib = rss.jsLib ?? ""
+        bs.header = rss.header ?? ""
+        bs.loginCheckJs = rss.loginCheckJs ?? ""
+        return bs
+    }
+}
+
 // MARK: - Search Results / Book Info
 
 extension BookSource {
@@ -696,7 +713,8 @@ enum OnlineBookContentInference {
             return .audio
         }
         if normalized == "漫画" || normalized == "漫畫" || normalized == "comic"
-            || normalized == "manga" || normalized == "image" {
+            || normalized == "manga" || normalized == "image" || normalized == "写真"
+            || normalized == "寫真" {
             return .manga
         }
         if normalized == "小说" || normalized == "小說" || normalized == "novel"
@@ -705,7 +723,8 @@ enum OnlineBookContentInference {
         }
         // 光遇 and 大灰狼 name the tab 短剧 / 视频; UAA's type is `video`.
         if normalized == "视频" || normalized == "視頻" || normalized == "影片" || normalized == "video"
-            || normalized == "短剧" || normalized == "短劇" {
+            || normalized == "短剧" || normalized == "短劇" || normalized == "动漫"
+            || normalized == "動漫" || normalized == "影视" || normalized == "影視" {
             return .video
         }
         return nil
@@ -758,12 +777,19 @@ enum OnlineBookContentInference {
     static func sourceRuntimeModeMarkers(forSourceURL sourceURL: String?) -> [String] {
         guard let sourceURL,
               let json = BookSourceRuntimeStateStore.shared
-                  .sourceVariableJSON(for: sourceURL),
-              let data = json.data(using: .utf8),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                  .sourceVariableJSON(for: sourceURL)
         else { return [] }
 
         var markers: [String] = []
+        guard let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            // 聚合源（如夜社聚合）用 source.setVariable('视频'/'有声'/'漫画'…) 把当前
+            // 频道模式存成纯字符串，而不是 JSON 对象。它解析不成字典，但本身就是
+            // kind(fromMetadataText:) 认识的模式名，直接作为标记交给内容类型推断。
+            let raw = json.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !raw.isEmpty { markers.append(raw) }
+            return markers
+        }
         for key in ["发现页类型", "搜索模式"] {
             if let value = dict[key] as? String,
                !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

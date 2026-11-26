@@ -39,6 +39,10 @@ final class VideoPlaybackController {
     private(set) var rate: Float = 1
     /// The picture's size once the stream reports it; the player turns to match it.
     private(set) var pictureSize: CGSize?
+    /// 插件/网关随播放结果给出的线路元信息；不参与播放决策，只用于信息面板。
+    private(set) var streamInfo: VideoStreamInfo?
+    /// AVPlayer accessLog 的当前视频码率；未知时为 nil。
+    private(set) var measuredVideoBitrate: Int?
 
     private enum Source {
         /// A book's episodes, resolved through the chapter cache; `persists` for a shelf book.
@@ -90,6 +94,7 @@ final class VideoPlaybackController {
         book.audioTimeSeconds = VideoLinkPositions.time(for: link.url) ?? 0
         self.book = book
         self.source = .link(link)
+        self.streamInfo = link.info
         self.guide = VideoEpisodeGuide(chapters: book.onlineChapters ?? [])
         self.chapterIndex = 0
         player.automaticallyWaitsToMinimizeStalling = true
@@ -195,6 +200,7 @@ final class VideoPlaybackController {
         sizeObservation = nil
         timelineObservations = []
         pictureSize = nil
+        measuredVideoBitrate = nil
         phase = .loading
         currentTime = time
         duration = 0
@@ -305,9 +311,16 @@ final class VideoPlaybackController {
                 // 猫源/书源的 .link 源无法重新解析，只能退出换线路——给出准确文案并
                 // 让失败页把「重试」换成「返回换线路」。识别按错误码 + 文案兜底。
                 let underlying = player.currentItem?.error
-                failedNeedsRelink = Self.isNotAuthorized(underlying)
+                // 403 无权限与 404 死链都不该给用户「重试」：同一个失效链接重试不会成功。
+                let notFound = (underlying?.localizedDescription ?? "")
+                    .localizedCaseInsensitiveContains("not found")
+                let missing = (underlying?.localizedDescription ?? "")
+                    .contains("找不到")
+                let missingURL = (underlying?.localizedDescription ?? "")
+                    .contains("找不到所请求的 URL")
+                failedNeedsRelink = Self.isNotAuthorized(underlying) || notFound || missing || missingURL
                 let message = failedNeedsRelink
-                    ? localized("这个视频链接没有访问权限（可能已过期或需要登录），请返回换一条线路")
+                    ? localized("这个视频链接已失效（403/404 或需要登录），请返回换一条线路")
                     : (error ?? localized("无法播放这一集"))
                 AppLogger.info("[Video] episode failed to play: \(error ?? "-")", level: .error)
                 phase = .failed(message)
@@ -456,7 +469,26 @@ final class VideoPlaybackController {
     private func timeAdvanced(_ seconds: Double) {
         guard seconds.isFinite, phase == .playing else { return }
         currentTime = seconds
+        refreshPlaybackBitrate()
         if abs(seconds - lastSavedTime) >= 5 { saveProgress(force: false) }
+    }
+
+    /// Apple 文档：accessLog 的 averageVideoBitrate / indicatedAverageBitrate 是
+    /// 当前播放流的视频码率；它们比从文件名猜 4K 可靠。未知时保持 nil。
+    private func refreshPlaybackBitrate() {
+        let event = player.currentItem?.accessLog()?.events.last
+        let candidates = [event?.averageVideoBitrate ?? -1,
+                          event?.indicatedAverageBitrate ?? -1,
+                          event?.indicatedBitrate ?? -1]
+        let value = candidates.first { $0 > 0 }.map { Int($0) }
+        guard measuredVideoBitrate != value else { return }
+        measuredVideoBitrate = value
+    }
+
+    /// 信息面板文本：静态线路信息 + 内核实测分辨率/码率。
+    var playbackInfoLines: [String] {
+        let info = streamInfo ?? VideoStreamInfo()
+        return info.lines(pictureSize: pictureSize, measuredBitrate: measuredVideoBitrate)
     }
 
     private func episodeEnded() {

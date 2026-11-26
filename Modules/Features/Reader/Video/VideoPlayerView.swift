@@ -80,6 +80,8 @@ struct VideoPlayerView: View {
     /// owned by that subtree closed itself a few seconds after opening.
     @State private var showsDanmakuPanel = false
     @State private var showsSubtitlePanel = false
+    /// 播放信息浮层（分辨率/码率/线路），mpv stats.lua / VLC Media Information 的精简版。
+    @State private var showsInfo = false
 
     var body: some View {
         ZStack {
@@ -167,10 +169,10 @@ struct VideoPlayerView: View {
                     .animation(DSAnimation.fast, value: lockHint)
                     .accessibilityLabel(localized("解锁屏幕"))
                 }
-                // 左上角常驻退出键：控制条几秒后自动收起，顶栏那个 X 会跟着消失，
-                // 竖屏窄屏又没有系统返回手势，就没法退出这一集。这个 X 不依赖
-                // showsControls——控制条显示时常驻键也在，控制条收起后更不会消失。
-                // 锁屏时隐藏，交给中央解锁键。
+                // 左上角常驻退出键：无条件显示，不随控制条收起、锁屏或失败态消失。
+                // 用户实际使用中出现过「失败页没有 X、只剩无效重试、无法退出」——
+                // 任何依赖状态隐藏退出键的写法都不可靠，退出路径必须永远在场。
+                // 锁屏时这个 X 仍可点（锁屏只禁用手势和拖动，不禁用关闭）。
                 //
                 // 命中可靠性（此前「X 点不动」的根因在此规避）：
                 // SwiftUI 中 Spacer 与空的 HStack/VStack 本身不参与命中测试，只有 Button
@@ -178,24 +180,28 @@ struct VideoPlayerView: View {
                 // 绝不能给这个容器加 `.allowsHitTesting(false)`——那会让整棵子树（含子按钮）
                 // 退出命中测试、子按钮写 true 也救不回来，这正是此前「X 点不动」的根因。
                 // `.contentShape(Circle())` 把命中区明确为圆形本身，不随 label 尺寸漂移。
-                if !isLocked {
-                    VStack {
-                        HStack {
-                            Button { onClose() } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 17, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                    .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
-                                    .background(.black.opacity(0.45), in: Circle())
-                            }
-                            .contentShape(Circle())
-                            .accessibilityLabel(localized("关闭"))
-                            Spacer()
+                VStack {
+                    HStack {
+                        Button { onClose() } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                                .background(.black.opacity(0.45), in: Circle())
                         }
+                        .contentShape(Circle())
+                        .accessibilityLabel(localized("关闭"))
                         Spacer()
                     }
-                    .padding(.leading, 14)
-                    .padding(.top, 8)
+                    Spacer()
+                }
+                .padding(.leading, 14)
+                .padding(.top, 8)
+                if showsInfo {
+                    VideoInfoPanel(lines: controller.playbackInfoLines)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(.top, 92)
+                        .padding(.trailing, 14)
                 }
             } else {
                 ProgressView()
@@ -258,7 +264,7 @@ struct VideoPlayerView: View {
             // An open settings panel keeps the chrome alive: hiding it would tear the
             // panel down mid-adjustment.
             guard !Task.isCancelled, scrubTime == nil, !showsEpisodes,
-                  !showsDanmakuPanel, !showsSubtitlePanel else { return }
+                  !showsDanmakuPanel, !showsSubtitlePanel, !showsInfo else { return }
             showsControls = false
         }
         // Closing a panel counts as activity, so the chrome gets a fresh idle window
@@ -614,6 +620,16 @@ struct VideoPlayerView: View {
                     .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
             }
             .accessibilityLabel(localized("横屏/竖屏切换"))
+            // 播放信息：显示内核实测分辨率/码率和线路域名，避免把资源标题当画质。
+            Button {
+                showsInfo.toggle()
+                touched()
+            } label: {
+                Image(systemName: showsInfo ? "info.circle.fill" : "info.circle")
+                    .font(DSFont.toolbarIcon)
+                    .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+            }
+            .accessibilityLabel(localized("播放信息"))
             // 锁定播放器：锁住后画面手势不再响应拖动/亮度/音量，点屏幕只短暂闪现解锁图标，
             // 防止握持时误触。与 B站/腾讯视频的「锁屏」同一个功能。
             Button {
@@ -956,4 +972,32 @@ private struct AirPlayButton: UIViewRepresentable {
     }
 
     func updateUIView(_ view: AVRoutePickerView, context: Context) {}
+}
+
+/// 播放信息浮层。字段含义对齐 mpv 的 stats.lua / VLC 的 Media Information：
+/// 显示真实分辨率、码率、清晰度档位和线路域名，不把资源标题当事实。
+struct VideoInfoPanel: View {
+    let lines: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(localized("播放信息"))
+                .font(DSFont.subheadline.weight(.semibold))
+            ForEach(lines, id: \.self) { line in
+                Text(line)
+                    .font(DSFont.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(DSColor.textOnFixedFill.opacity(0.86))
+            }
+        }
+        .padding(12)
+        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(.white.opacity(0.12), lineWidth: 0.5)
+        }
+        .foregroundStyle(DSColor.textOnFixedFill)
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
+    }
 }

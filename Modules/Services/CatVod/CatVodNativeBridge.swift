@@ -40,9 +40,13 @@ enum CatVodNativeBridge {
         site: CatVodSite?,
         store: BookStore
     ) throws -> CatVodNativeBook {
-        let url = playback.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // 代理后的 url 是 /v1/media?k=&s=，扩展名与 music_player 标记都在代理里消失；
+        // 桥接必须用插件给出的原始直链与原始 header。
+        let url = (playback.originalURL ?? playback.url)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let kind = CatVodMediaKind.classify(
-            playbackURL: url, typeName: media.typeName, siteType: site?.type)
+            playbackURL: url, typeName: media.typeName, siteType: site?.type,
+            musicPlayer: playback.musicPlayer, siteName: site?.name ?? "")
         guard kind != .video else { throw CatVodNativeBridgeError.emptyContent }
 
         // 章节正文与 url：音频用真实直链（虚拟源 type=1 时空内容规则会把它当正文）；
@@ -78,13 +82,21 @@ enum CatVodNativeBridge {
             $0.bookSourceUrl == sourceURL
         }) {
             sourceID = existing.id
+            // header 会随站点/线路变化（防盗链 Referer、Cookie）。虚拟源是复用的，
+            // 不刷新就会拿上一条线路的旧 header 去取新音频，表现就是 403 无声。
+            let freshHeader = headerJSON(playback.originalHeader ?? playback.header ?? [:])
+            if existing.header != freshHeader {
+                var updated = existing
+                updated.header = freshHeader
+                BookSourceStore.shared.update(updated)
+            }
         } else {
             var source = BookSource()
             source.bookSourceName = "猫元·\(label(for: kind))"
             source.bookSourceUrl = sourceURL
             source.bookSourceType = kind == .audio ? 1 : (kind == .manga ? 2 : 0)
             source.ruleContent.content = ""
-            source.header = headerJSON(playback.header ?? [:])
+            source.header = headerJSON(playback.originalHeader ?? playback.header ?? [:])
             BookSourceStore.shared.add(source)
             sourceID = source.id
         }

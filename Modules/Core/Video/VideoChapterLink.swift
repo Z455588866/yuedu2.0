@@ -1,9 +1,67 @@
 import Foundation
 
+/// 播放信息的静态来源。字段都来自插件/网关已经给出的元数据，不靠标题猜。
+/// 实际分辨率与实测码率由播放器内核在运行时补齐（AVPlayer presentationSize /
+/// accessLog；VLC videoSize），这里只保存“线路声称是什么”。
+struct VideoStreamInfo: Equatable, Sendable {
+    var quality: String?
+    var width: Int?
+    var height: Int?
+    var bitrate: Int?
+    var sourceHost: String?
+    var sourceExtension: String?
+    var notice: String?
+
+    init(quality: String? = nil, width: Int? = nil, height: Int? = nil,
+         bitrate: Int? = nil, sourceHost: String? = nil,
+         sourceExtension: String? = nil, notice: String? = nil) {
+        self.quality = quality
+        self.width = width
+        self.height = height
+        self.bitrate = bitrate
+        self.sourceHost = sourceHost
+        self.sourceExtension = sourceExtension
+        self.notice = notice
+    }
+
+    /// mpv stats.lua / VLC Media Information 的精简版：显示源分辨率、实测分辨率、
+    /// 码率、清晰度档位、线路域名和降级提示。没有的值明确写“读取中/未标注”。
+    func lines(pictureSize: CGSize?, measuredBitrate: Int?) -> [String] {
+        let actual: String = {
+            guard let pictureSize, pictureSize.width > 0, pictureSize.height > 0 else {
+                if let width, let height { return "\(width) × \(height)（线路标注）" }
+                return "读取中"
+            }
+            let declared = (width ?? 0) * (height ?? 0)
+            let decoded = Int(pictureSize.width) * Int(pictureSize.height)
+            if declared > 0, decoded > 0, declared != decoded {
+                return "\(Int(pictureSize.width)) × \(Int(pictureSize.height))（实际）· 标注 \(width!) × \(height!)"
+            }
+            return "\(Int(pictureSize.width)) × \(Int(pictureSize.height))"
+        }()
+        let rate = measuredBitrate ?? bitrate
+        let bitrateText: String = {
+            guard let rate, rate > 0 else { return "未标注" }
+            if rate >= 1_000_000 { return String(format: "%.1f Mbps", Double(rate) / 1_000_000) }
+            return "\(rate / 1000) kbps"
+        }()
+        var rows = [
+            "清晰度：\(quality ?? "未标注")",
+            "分辨率：\(actual)",
+            "码率：\(bitrateText)\(measuredBitrate == nil && bitrate != nil ? "（线路标注）" : "")",
+            "线路：\(sourceHost ?? "—")",
+            "格式：\(sourceExtension?.uppercased() ?? "未知")",
+        ]
+        if let notice, !notice.isEmpty { rows.append(notice) }
+        return rows
+    }
+}
+
 /// An episode's stream and the headers its CDN wants (`HeaderedMediaAsset`).
 struct VideoStream: Equatable, Sendable {
     let url: URL
     let headers: [String: String]
+    var info: VideoStreamInfo? = nil
 }
 
 enum VideoChapterLinkError: LocalizedError, Equatable {

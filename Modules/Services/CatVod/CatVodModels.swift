@@ -100,6 +100,18 @@ struct CatVodMedia: Identifiable, Hashable, Sendable {
     var year: String
     var typeName: String
 
+    /// 详情页已被收起但仍需桥接时用：类型由播放结果的显式标记决定，不再依赖列表字段。
+    init(id: String = "", name: String = "", cover: String = "", remark: String = "",
+         detail: String = "", year: String = "", typeName: String = "") {
+        self.id = id
+        self.name = name
+        self.cover = cover
+        self.remark = remark
+        self.detail = detail
+        self.year = year
+        self.typeName = typeName
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = Self.string(c, .vodId)
@@ -296,6 +308,60 @@ struct CatVodQualityOption: Decodable, Sendable, Hashable, Identifiable {
     var id: String { "\(name)@\(url)" }
 }
 
+/// 猫源/网盘清晰度偏好。成熟播放器（hls.js currentLevel、ExoPlayer
+/// forceHighestSupportedBitrate）都把“选最高档”当成显式策略，这里对齐同一语义：
+/// 源给出多档时默认自动选最高，而不是让 AVPlayer/网盘把自己压到低码率转码。
+enum CatVodQualityPreference {
+    static let forceHighestKey = "catvod.forceHighestQuality"
+
+    static var forceHighest: Bool {
+        get { UserDefaults.standard.object(forKey: forceHighestKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: forceHighestKey) }
+    }
+
+    /// 从插件给出的多档里选最高。优先用真实 width/height，其次 bitrate；字段名只作兜底。
+    static func best(in options: [CatVodQualityOption]) -> CatVodQualityOption? {
+        guard let first = options.first else { return nil }
+        var best = first
+        var bestScore = score(first)
+        for option in options.dropFirst() {
+            let candidate = score(option)
+            if isBetter(candidate, bestScore) {
+                best = option
+                bestScore = candidate
+            }
+        }
+        return best
+    }
+
+    private static func isBetter(_ lhs: (Int, Int, Int), _ rhs: (Int, Int, Int)) -> Bool {
+        if lhs.0 != rhs.0 { return lhs.0 > rhs.0 }
+        if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
+        return lhs.2 > rhs.2
+    }
+
+    private static func score(_ option: CatVodQualityOption) -> (Int, Int, Int) {
+        let name = option.name.lowercased()
+        let namePixels: Int
+        if name.contains("4k") || name.contains("2160") || name.contains("原画") {
+            namePixels = 3840 * 2160
+        } else if name.contains("1080") || name.contains("蓝光") || name.contains("超清") {
+            namePixels = 1920 * 1080
+        } else if name.contains("720") || name.contains("高清") {
+            namePixels = 1280 * 720
+        } else if name.contains("480") {
+            namePixels = 854 * 480
+        } else {
+            namePixels = 0
+        }
+        let pixels = max((option.width ?? 0) * (option.height ?? 0), namePixels)
+        let bitrate = option.bitrate ?? 0
+        // 同分辨率、同码率时，名字更明确的档位优先，避免"原画"输给空名档。
+        let label = name.contains("原画") ? 3 : (name.contains("4k") ? 2 : (name.contains("1080") ? 1 : 0))
+        return (pixels, bitrate, label)
+    }
+}
+
 /// 猫源自带的一条弹幕。TVBox 的 `danmaku` 数组就是这个形状：`{time, type, color, text}`，
 /// `time` 是从片头算的秒数（可以是整数、小数或字符串——各家插件写法不一致）。
 struct CatVodDanmakuItem: Decodable, Sendable {
@@ -387,6 +453,12 @@ struct CatVodPlayback: Decodable, Sendable {
     var playbackNotice: String? = nil
     /// 片源自带的弹幕。红果这类插件会在 `playerContent` 里直接给出整集弹幕。
     var danmaku: CatVodDanmakuPayload? = nil
+    /// 插件给出的原始直链与请求头。`url` 可能已被改写成 `/v1/media` 代理地址
+    /// （扩展名消失），类型判定与原生听书桥接必须用原始地址。
+    var originalURL: String? = nil
+    var originalHeader: [String: String]? = nil
+    /// TVBox Python 音乐插件的显式标记（`music_player: 1`）：这是音乐，不是视频。
+    var musicPlayer: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case parse, url, header, quality, qualityOptions, playbackNotice, danmaku

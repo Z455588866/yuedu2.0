@@ -8,6 +8,7 @@ struct CatVodCloudAccountView: View {
     @State private var editing: CatVodCloudProvider?
     @State private var scanning: CatVodCloudProvider?
     @State private var editingAList = false
+    @State private var forceHighest = CatVodQualityPreference.forceHighest
 
     var body: some View {
         List {
@@ -15,6 +16,16 @@ struct CatVodCloudAccountView: View {
                 Text(localized("在此填写各网盘的 Cookie / Token，猫源中来自对应网盘的线路即可直接播放。凭据只保存在本机，不会发给第三方猫源脚本。"))
                     .font(DSFont.caption)
                     .foregroundStyle(DSColor.textSecondary)
+            }
+
+            Section {
+                Toggle(localized("强制最高画质 / 原画"), isOn: $forceHighest)
+                    .onChange(of: forceHighest) { _, value in
+                        CatVodQualityPreference.forceHighest = value
+                    }
+            } footer: {
+                Text(localized("开启后，猫源/网盘给出多档清晰度或 HLS 多档码率时，播放器自动选最高档；只给转码流时仍需要对应网盘会员才能拿到原画。"))
+                    .dsSectionFooter()
             }
 
             Section {

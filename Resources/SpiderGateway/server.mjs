@@ -345,6 +345,7 @@ export function createGateway(config, dependencies = {}) {
           spec,
           token: config.token,
           proxyOrigin,
+          forceHighestVariant: config.forceHighestVariant,
           resolveLoopback: async (bundleURL) => {
             const artifact = await nodeBundleCache.resolve(bundleURL);
             return catVod.loopbackBase(artifact);
@@ -404,6 +405,10 @@ export function createGateway(config, dependencies = {}) {
                 const rawAPI = typeof site.api === "string" ? site.api.trim().replace(/\/+$/u, "") : "";
                 const usableAPI = /^\/spider\/[^/\s]+\/\d{1,2}$/u.test(rawAPI) || rawAPI.startsWith("csp_");
                 const api = usableAPI ? rawAPI : (key ? `/spider/${encodeURIComponent(key)}/3` : "");
+                // FongMi/TV 最新版 SiteApi.isSpider() 明确以 type == 3 表示
+                // "走 spider 插件"，不是内容类型。之前的直播误判源于把 3 当
+                // 文件/直播；这里保留成熟项目的语义，内容类型一律看
+                // type_name / 分类名，不用 site.type 猜。
                 return {
                   ...site,
                   key,

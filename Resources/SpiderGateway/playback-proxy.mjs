@@ -196,6 +196,85 @@ async function serveFromCache({ key, target, headers, range, responseOriginHeade
   return { bytes, start: parsed.start, end: parsed.end, total: cache.total, headers: cache.headers };
 }
 
+/// HLS master playlist 的 Variant 选择。依据 RFC 8216 §4.3.4.2 的
+/// EXT-X-STREAM-INF：RESOLUTION 是清晰度，BANDWIDTH / AVERAGE-BANDWIDTH 是质量
+/// 与带宽成本，FRAME-RATE 辅助比较；hls.js 的 levels/currentLevel 与 ExoPlayer 的
+/// forceHighestSupportedBitrate 都采用同一套“显式选档”思路，而不是让播放器在
+/// 网络抖动时自己降到糊的转码档。
+function streamAttributes(tag) {
+  const body = tag.split(":").slice(1).join(":")
+  const out = {}
+  for (const match of body.matchAll(/([A-Z0-9-]+)=("[^"]*"|[^,]*)/g)) {
+    out[match[1]] = match[2].replace(/^"|"$/g, "")
+  }
+  return out
+}
+
+function attributeNumber(attributes, key) {
+  const value = Number.parseFloat(attributes[key] || "")
+  return Number.isFinite(value) ? value : 0
+}
+
+function variantScore(tag) {
+  const attributes = streamAttributes(tag)
+  const match = (attributes.RESOLUTION || "").match(/(\d+)[xX](\d+)/)
+  const pixels = match ? Number(match[1]) * Number(match[2]) : 0
+  return {
+    pixels,
+    averageBitrate: attributeNumber(attributes, "AVERAGE-BANDWIDTH"),
+    bitrate: attributeNumber(attributes, "BANDWIDTH"),
+    frameRate: attributeNumber(attributes, "FRAME-RATE"),
+  }
+}
+
+/// 与 hls.js 的 codec 兼容过滤同思路：先排除 AVPlayer 不支持的档，避免“最高档”
+/// 变成解码失败。未知 CODECS 不拦；全部都不认识时退回全部档位，不改变旧行为。
+function codecsSupported(tag) {
+  const codecs = streamAttributes(tag).CODECS || ""
+  if (!codecs.trim()) return true
+  const supported = /^(avc1|avc3|hvc1|hev1|dvh1|dvhe|mp4a|ac-3|ec-3|alac|flac|opus)/i
+  return codecs.split(",").map((item) => item.trim()).filter(Boolean).every((item) => supported.test(item))
+}
+
+function betterVariant(candidate, current) {
+  if (!current) return true
+  if (candidate.pixels !== current.pixels) return candidate.pixels > current.pixels
+  if (candidate.averageBitrate !== current.averageBitrate) return candidate.averageBitrate > current.averageBitrate
+  if (candidate.bitrate !== current.bitrate) return candidate.bitrate > current.bitrate
+  return candidate.frameRate > current.frameRate
+}
+
+function selectHighestVariant(text) {
+  if (!text.startsWith("#EXTM3U")) return text
+  const lines = text.split(/\r?\n/)
+  const variants = []
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (!line.startsWith("#EXT-X-STREAM-INF:")) continue
+    let uriIndex = -1
+    for (let next = index + 1; next < lines.length; next += 1) {
+      const value = lines[next].trim()
+      if (!value) continue
+      if (value.startsWith("#")) break
+      uriIndex = next
+      break
+    }
+    if (uriIndex < 0) continue
+    variants.push({ tagIndex: index, uriIndex, supported: codecsSupported(line), score: variantScore(line) })
+  }
+  if (variants.length <= 1) return text
+
+  const supportedVariants = variants.filter((variant) => variant.supported)
+  const pool = supportedVariants.length ? supportedVariants : variants
+  let best = pool[0]
+  for (const candidate of pool.slice(1)) {
+    if (betterVariant(candidate.score, best.score)) best = candidate
+  }
+  const variantIndexes = new Set(variants.flatMap((v) => [v.tagIndex, v.uriIndex]))
+  const keep = new Set([best.tagIndex, best.uriIndex])
+  return lines.filter((_line, index) => !variantIndexes.has(index) || keep.has(index)).join("\n")
+}
+
 /// Rewrite every URI in an HLS playlist so the player keeps asking this proxy.
 /// Relative segment names, absolute CDN URLs, keys and init segments are all
 /// covered — the old behaviour left relative segments pointing at the bundle's
@@ -231,6 +310,7 @@ export async function handleMediaRequest({
   spec,
   token,
   proxyOrigin,
+  forceHighestVariant = true,
   resolveLoopback
 }) {
   const method = request.method === "HEAD" ? "HEAD" : "GET";
@@ -307,7 +387,8 @@ export async function handleMediaRequest({
     const body = await readBody(upstream, MAX_PLAYLIST_BYTES);
     const text = body.toString("utf8");
     if (text.startsWith("#EXTM3U")) {
-      const rewritten = rewritePlaylist(text, {
+      const selected = forceHighestVariant ? selectHighestVariant(text) : text
+      const rewritten = rewritePlaylist(selected, {
         finalURL,
         spec,
         key: playbackMediaKey(token),
