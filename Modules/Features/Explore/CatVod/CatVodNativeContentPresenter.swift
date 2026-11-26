@@ -28,7 +28,7 @@ struct CatVodNativeContentPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .fullScreenCover(item: nativeContent) { item in
+            .fullScreenCover(item: $nativeContent) { item in
                 CatVodNativeReaderHost(item: item)
                     .environmentObject(store)
             }

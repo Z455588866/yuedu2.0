@@ -161,11 +161,19 @@ struct ReadingStatsSessionTracker {
 
 // MARK: - ReadingStatsStore
 
+// File-scope constants: ReadingStatsStore is @MainActor, so its static lets are
+// actor-isolated and cannot be read from nonisolated functions/structs (Swift 6).
+// These file-scope values are the single source of truth for both the actor and
+// the nonisolated Codable decoder below.
+private let kMinimumDailyGoalMinutes = 5
+private let kMaximumDailyGoalMinutes = 240
+private let kDefaultDailyGoalMinutes = 30
+
 /// File-scope so the nonisolated `Codable` decoder below can bound an old or
 /// hand-edited goal without crossing into the store's MainActor isolation.
 private func boundedReadingGoal(_ minutes: Int) -> Int {
-    min(ReadingStatsStore.maximumDailyGoalMinutes,
-        max(ReadingStatsStore.minimumDailyGoalMinutes, minutes))
+    min(kMaximumDailyGoalMinutes,
+        max(kMinimumDailyGoalMinutes, minutes))
 }
 
 @MainActor
@@ -178,9 +186,9 @@ class ReadingStatsStore: ObservableObject {
 
     /// Reader-settable daily target, in whole minutes. The bounds keep a mistyped
     /// value from making the goal impossible or the progress bar meaningless.
-    static let minimumDailyGoalMinutes = 5
-    static let maximumDailyGoalMinutes = 240
-    static let defaultDailyGoalMinutes = 30
+    static let minimumDailyGoalMinutes = kMinimumDailyGoalMinutes
+    static let maximumDailyGoalMinutes = kMaximumDailyGoalMinutes
+    static let defaultDailyGoalMinutes = kDefaultDailyGoalMinutes
 
     @Published var dailyGoalMinutes: Int = ReadingStatsStore.defaultDailyGoalMinutes {
         didSet {
@@ -299,10 +307,10 @@ class ReadingStatsStore: ObservableObject {
     /// builds are a bare `[ReadingSession]` array and are still accepted below.
     private struct ReadingStatsFile: Codable {
         var sessions: [ReadingSession] = []
-        // 用字面值而非 ReadingStatsStore.defaultDailyGoalMinutes：后者在 @MainActor
-        // 隔离域内，本 struct 是 nonisolated，跨域取默认值在 Swift 6 下报
+        // 用文件级常量而非 ReadingStatsStore.defaultDailyGoalMinutes：后者在
+        // @MainActor 隔离域内，本 struct 是 nonisolated，跨域取默认值在 Swift 6 下报
         // "main actor-isolated default value in a nonisolated context"。
-        var dailyGoalMinutes: Int = 30
+        var dailyGoalMinutes: Int = kDefaultDailyGoalMinutes
 
         private enum CodingKeys: String, CodingKey {
             case sessions, dailyGoalMinutes
@@ -318,7 +326,7 @@ class ReadingStatsStore: ObservableObject {
             sessions = try values.decodeIfPresent([ReadingSession].self, forKey: .sessions) ?? []
             dailyGoalMinutes = boundedReadingGoal(
                 try values.decodeIfPresent(Int.self, forKey: .dailyGoalMinutes)
-                    ?? 30
+                    ?? kDefaultDailyGoalMinutes
             )
         }
     }
