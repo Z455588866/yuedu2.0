@@ -103,8 +103,8 @@ enum CatVodNativeBridge {
             sourceId: sourceID,
             bookInfoURL: chapterURL,
             coverUrl: media.cover,
-            chapters: [chapter],
-            contentKind: contentKind(for: kind)
+            contentKind: contentKind(for: kind),
+            chapters: [chapter]
         )
 
         // 4) 预写 ChapterPackage 缓存，三类内容都不再触发网络/规则解析。
