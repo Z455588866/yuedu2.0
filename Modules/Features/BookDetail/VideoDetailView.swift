@@ -332,10 +332,16 @@ struct VideoDetailView: View {
         )
     }
 
+    /// 当前选中线路的集数（与选集网格显示的那条线路一致）。多条线路是同一部剧的
+    /// 不同播放源，不能把各线路集数相加。选中项失效时回退到第一条。
+    private func currentRouteEpisodeCount(_ guide: VideoEpisodeGuide) -> Int {
+        (guide.routes.first { $0.id == routeID } ?? guide.routes.first)?.episodes.count ?? 0
+    }
+
     /// The maker, then the episode count and the source's genres: the line under the title.
     private func facts(_ guide: VideoEpisodeGuide) -> [String] {
         var facts: [String] = []
-        let count = guide.routes.first?.episodes.count ?? 0
+        let count = currentRouteEpisodeCount(guide)
         if count > 0 { facts.append(String(format: localized("共 %d 集"), count)) }
         for tag in tags where !facts.contains(tag) { facts.append(tag) }
         let maker = displayAuthor.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -581,7 +587,9 @@ struct VideoDetailView: View {
 
     private func infoItems(_ guide: VideoEpisodeGuide) -> [BookDetailInfoItem] {
         var items: [BookDetailInfoItem] = []
-        let count = guide.routes.reduce(0) { $0 + $1.episodes.count }
+        // 集数按当前线路算，不把所有线路相加——多条线路是同一部剧的不同播放源，
+        // 相加会把「3 条线路各 24 集」显示成 72 集，和选集网格里实际可点的集数对不上。
+        let count = currentRouteEpisodeCount(guide)
         if count > 0 {
             items.append(BookDetailInfoItem(id: "episodes", label: localized("集数"), value: count.formatted()))
         }

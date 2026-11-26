@@ -238,7 +238,19 @@ enum CatVodNetdiskEpisode {
         var provider: String
     }
 
-    private static let supported: Set<String> = ["quark", "uc", "aliyun", "123"]
+    /// 与网关 `catvod-cloud-player.mjs` 的能力保持一致，别在客户端提前拦掉网关
+    /// 其实能处理的线路。网关的处理顺序是：
+    /// 1) 任何 provider 先试 `directPlaybackFromEpisode`——spider 给的 CDN 直链/
+    ///    本地代理直接能播，与网盘名无关；
+    /// 2) quark/uc/123/pan123/baidu 有专用分享解析；
+    /// 3) aliyun/115/pan115/tianyi/guangya 带 fileID + 已存账号凭证走 drive.link。
+    /// 所以这些名字都放行；没登录/没 fileID 时网关会给明确错误，不会卡死。
+    /// 迅雷（xunlei）网关虽无专用驱动，但 spider 给 CDN 直链时本可播，放行它
+    /// 只为不错杀直链线路；分享页解析不了时网关会给明确的 422，不会卡死。
+    private static let supported: Set<String> = [
+        "quark", "uc", "aliyun", "123", "pan123", "baidu",
+        "115", "pan115", "tianyi", "guangya", "xunlei"
+    ]
 
     static func descriptor(from playID: String) -> Descriptor? {
         var text = playID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -262,8 +274,11 @@ enum CatVodNetdiskEpisode {
         case "uc": return "UC 网盘"
         case "aliyun": return "阿里云盘"
         case "baidu": return "百度网盘"
-        case "123": return "123 网盘"
-        case "115": return "115 网盘"
+        case "123", "pan123": return "123 网盘"
+        case "115", "pan115": return "115 网盘"
+        case "tianyi": return "天翼云盘"
+        case "guangya": return "光年/广雅"
+        case "xunlei": return "迅雷网盘"
         default: return provider
         }
     }

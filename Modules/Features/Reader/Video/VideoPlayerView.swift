@@ -142,30 +142,42 @@ struct VideoPlayerView: View {
                 if let pan, pan.kind == .volume {
                     VideoAdjustBadge(kind: .volume, value: pan.value)
                 }
-                // 锁屏后控制条淡出，中央只留一个解锁按钮（点画面先叫出控制条也可以）。
+                // 锁屏语义对齐 B站 / 腾讯 / GSYVideoPlayer：锁屏后画面干净，中央**不常驻**
+                // 任何锁图标。点击屏幕时才让锁图标短暂闪现一下（lockHint 驱动），提示
+                // "已锁定，点此解锁"，随后自动消失；点这个闪现的图标才解锁。
+                // 之前把大黑圆常驻在画面正中、只在点击时变亮放大，既不成熟也膈应人。
                 if isLocked {
                     Button {
                         isLocked = false
                         lockHint = false
+                        lockHintTask?.cancel()
                         showsControls = true
                         touched()
                     } label: {
                         Image(systemName: "lock.fill")
-                            .font(.system(size: 22, weight: .semibold))
+                            .font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(.white)
-                            .padding(16)
-                            // 点画面时短暂高亮（成熟播放器锁屏反馈）；亮度由 lockHint 驱动。
-                            .background(.black.opacity(lockHint ? 0.85 : 0.45), in: Circle())
-                            .scaleEffect(lockHint ? 1.18 : 1)
+                            .padding(14)
+                            .background(.black.opacity(0.55), in: Circle())
                     }
+                    // 默认完全隐藏、不占命中；只有 flashLockHint 期间短暂出现且可点。
+                    .opacity(lockHint ? 1 : 0)
+                    .allowsHitTesting(lockHint)
+                    .accessibilityHidden(!lockHint)
                     .animation(DSAnimation.fast, value: lockHint)
                     .accessibilityLabel(localized("解锁屏幕"))
                 }
                 // 左上角常驻退出键：控制条几秒后自动收起，顶栏那个 X 会跟着消失，
                 // 竖屏窄屏又没有系统返回手势，就没法退出这一集。这个 X 不依赖
-                // showsControls——控制条显示时常驻键也在（与顶栏 X 同位置、同功能，
-                // 由这一层负责点击），控制条收起后更不会消失。锁屏时隐藏，交给中央解锁键。
-                // 用容器 + Spacer 贴左上角，容器不接点击、只有圆形按钮可点，避免整屏误关。
+                // showsControls——控制条显示时常驻键也在，控制条收起后更不会消失。
+                // 锁屏时隐藏，交给中央解锁键。
+                //
+                // 命中可靠性（此前「X 点不动」的根因在此规避）：
+                // SwiftUI 中 Spacer 与空的 HStack/VStack 本身不参与命中测试，只有 Button
+                // 自身可点，其余区域的点击穿透到下层手势层。
+                // 绝不能给这个容器加 `.allowsHitTesting(false)`——那会让整棵子树（含子按钮）
+                // 退出命中测试、子按钮写 true 也救不回来，这正是此前「X 点不动」的根因。
+                // `.contentShape(Circle())` 把命中区明确为圆形本身，不随 label 尺寸漂移。
                 if !isLocked {
                     VStack {
                         HStack {
@@ -176,15 +188,14 @@ struct VideoPlayerView: View {
                                     .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
                                     .background(.black.opacity(0.45), in: Circle())
                             }
+                            .contentShape(Circle())
                             .accessibilityLabel(localized("关闭"))
-                            .allowsHitTesting(true)
                             Spacer()
                         }
                         Spacer()
                     }
                     .padding(.leading, 14)
                     .padding(.top, 8)
-                    .allowsHitTesting(false)
                 }
             } else {
                 ProgressView()
@@ -371,14 +382,14 @@ struct VideoPlayerView: View {
         interaction += 1
     }
 
-    /// 锁屏时点画面的反馈：只让中央锁图标短暂高亮，控制条保持收起。
-    /// 与 GSYVideoPlayer 的 mLockScreen 语义一致——给一个"这里是锁"的提示，
-    /// 但不做任何解锁/唤出控制条的动作。
+    /// 锁屏时点画面的反馈：让中央锁图标短暂闪现一下就消失（对齐 B站 / 腾讯 /
+    /// GSYVideoPlayer 的锁屏提示语义），给一个"已锁定，点此解锁"的提示，
+    /// 但绝不常驻、也不唤出控制条。约 2 秒足以让人看见并点击。
     private func flashLockHint() {
         lockHint = true
         lockHintTask?.cancel()
         lockHintTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(900))
+            try? await Task.sleep(for: .milliseconds(2000))
             guard !Task.isCancelled else { return }
             lockHint = false
         }
@@ -603,12 +614,12 @@ struct VideoPlayerView: View {
                     .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
             }
             .accessibilityLabel(localized("横屏/竖屏切换"))
-            // 锁定播放器：锁住后画面手势不再响应拖动/亮度/音量，只留点击唤出解锁按钮，
+            // 锁定播放器：锁住后画面手势不再响应拖动/亮度/音量，点屏幕只短暂闪现解锁图标，
             // 防止握持时误触。与 B站/腾讯视频的「锁屏」同一个功能。
             Button {
                 isLocked.toggle()
-                // 锁上就立刻收起控制条，只留中央解锁按钮。
-                if isLocked { showsControls = false }
+                // 锁上就立刻收起控制条，画面干净；解锁图标只在点屏幕时短暂闪现。
+                if isLocked { showsControls = false; lockHint = false; lockHintTask?.cancel() }
                 touched()
             } label: {
                 Image(systemName: isLocked ? "lock.fill" : "lock.open")
@@ -709,8 +720,14 @@ struct VideoPlayerView: View {
                 Text(message)
                     .font(DSFont.subheadline)
                     .multilineTextAlignment(.center)
-                Button(localized("重试")) { controller.retry() }
-                    .buttonStyle(.bordered)
+                // 链接无访问权限时同一个死链重试无效，直接返回换线路。
+                if controller.failedNeedsRelink {
+                    Button(localized("返回换线路")) { onClose() }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button(localized("重试")) { controller.retry() }
+                        .buttonStyle(.bordered)
+                }
             }
             .frame(maxWidth: DSLayout.readableListWidth)
         default:

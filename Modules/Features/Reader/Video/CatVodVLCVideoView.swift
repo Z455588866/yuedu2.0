@@ -536,22 +536,27 @@ struct CatVodVLCVideoView: View {
             if let pan, pan.kind == .volume {
                 VideoAdjustBadge(kind: .volume, value: pan.value)
             }
-            // 锁屏后只留中央解锁按钮。
+            // 锁屏语义对齐 B站 / 腾讯 / GSYVideoPlayer：锁屏后画面干净，中央**不常驻**
+            // 任何锁图标。点击屏幕时才让锁图标短暂闪现一下（lockHint 驱动），提示
+            // "已锁定，点此解锁"，随后自动消失；点这个闪现的图标才解锁。
             if isLocked {
                 Button {
                     isLocked = false
                     lockHint = false
+                    lockHintTask?.cancel()
                     showsControls = true
                     scheduleHide()
                 } label: {
                     Image(systemName: "lock.fill")
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.system(size: 20, weight: .semibold))
                         .foregroundStyle(.white)
-                        .padding(16)
-                        // 点画面时短暂高亮（成熟播放器锁屏反馈）；亮度由 lockHint 驱动。
-                        .background(.black.opacity(lockHint ? 0.85 : 0.45), in: Circle())
-                        .scaleEffect(lockHint ? 1.18 : 1)
+                        .padding(14)
+                        .background(.black.opacity(0.55), in: Circle())
                 }
+                // 默认完全隐藏、不占命中；只有 flashLockHint 期间短暂出现且可点。
+                .opacity(lockHint ? 1 : 0)
+                .allowsHitTesting(lockHint)
+                .accessibilityHidden(!lockHint)
                 .animation(DSAnimation.fast, value: lockHint)
                 .accessibilityLabel(localized("解锁屏幕"))
             }
@@ -563,7 +568,11 @@ struct CatVodVLCVideoView: View {
             if !isLocked {
                 // 用容器 + Spacer 贴到左上角，而不是给 Button 加 infinity frame——
                 // 后者会把整块屏幕都变成按钮的点击区，点画面任意处都会误关。
-                // 容器的空白区（Spacer/HStack）不接收点击，事件照常穿透到手势层。
+                // SwiftUI 中 VStack/HStack/Spacer 的空白区本就不拦截点击，事件照常穿透到手势层，
+                // 只有圆形按钮自身可点。
+                //
+                // 关键：绝不能给容器加 `.allowsHitTesting(false)`——父视图设 false 会让整棵
+                // 子树（含子按钮）都退出命中测试，子按钮写 true 也无法恢复，X 就点不动了。
                 VStack {
                     HStack {
                         Button { onClose() } label: {
@@ -573,15 +582,14 @@ struct CatVodVLCVideoView: View {
                                 .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
                                 .background(.black.opacity(0.45), in: Circle())
                         }
+                        .contentShape(Circle())
                         .accessibilityLabel(localized("关闭"))
-                        .allowsHitTesting(true) // 容器整体关命中，唯独按钮重新开启
                         Spacer()
                     }
                     Spacer()
                 }
                 .padding(.leading, 14)
                 .padding(.top, 8)
-                .allowsHitTesting(false) // 容器空白不拦点击，事件穿透到手势层
             }
         }
         .readerWindowProbe(window)
@@ -822,10 +830,11 @@ struct CatVodVLCVideoView: View {
                         .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
                 }
                 .accessibilityLabel(localized("横屏/竖屏切换"))
-                // 锁定播放器：锁住后画面手势不再响应拖动/亮度/音量，只留点击唤出解锁按钮。
+                // 锁定播放器：锁住后画面手势不再响应拖动/亮度/音量，点屏幕只短暂闪现解锁图标。
                 Button {
                     isLocked.toggle()
-                    if isLocked { showsControls = false }
+                    // 锁上就立刻收起控制条，画面干净；解锁图标只在点屏幕时短暂闪现。
+                    if isLocked { showsControls = false; lockHint = false; lockHintTask?.cancel() }
                     scheduleHide()
                 } label: {
                     Image(systemName: isLocked ? "lock.fill" : "lock.open")
@@ -913,14 +922,14 @@ struct CatVodVLCVideoView: View {
         }
     }
 
-    /// 锁屏时点画面的反馈：只让中央锁图标短暂高亮，控制条保持收起。
-    /// 与 GSYVideoPlayer 的 mLockScreen 语义一致——给一个"这里是锁"的提示，
-    /// 但不做任何解锁/唤出控制条的动作。
+    /// 锁屏时点画面的反馈：让中央锁图标短暂闪现一下就消失（对齐 B站 / 腾讯 /
+    /// GSYVideoPlayer 的锁屏提示语义），给一个"已锁定，点此解锁"的提示，
+    /// 但绝不常驻、也不唤出控制条。约 2 秒足以让人看见并点击。
     private func flashLockHint() {
         lockHint = true
         lockHintTask?.cancel()
         lockHintTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(900))
+            try? await Task.sleep(for: .milliseconds(2000))
             guard !Task.isCancelled else { return }
             lockHint = false
         }

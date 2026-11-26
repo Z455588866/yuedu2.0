@@ -14,6 +14,8 @@ struct CatVodHomeView: View {
     @EnvironmentObject private var bookStore: BookStore
     /// 音乐听书 / 漫画 / 小说文字的原生界面呈现令牌。
     @State private var nativeContent: CatVodNativeContent?
+    /// 详情弹层里点出的原生内容：sheet 收起前先存这里，onDismiss 再交给 `nativeContent`。
+    @State private var pendingNativeAfterDetailDismiss: CatVodNativeContent?
     @State private var selectedSourceID: String?
     @State private var sites: [CatVodSite] = []
     @State private var selectedSite: CatVodSite?
@@ -168,6 +170,14 @@ struct CatVodHomeView: View {
             // A sheet swiped away mid-request must not leave the tap guard armed:
             // otherwise a 150s resolve keeps the grid refusing every tap.
             isOpeningDetail = false
+            // 音频/漫画/小说的 fullScreenCover 与这个 sheet 挂在同一视图上：sheet
+            // 还在屏时 cover 会被 iOS 静默丢弃（与 AudiobookDetailView.play 在盖住
+            // 时先收起再呈现同一个理由）。音频分流先把内容存起来，这里收完弹层
+            // 再交给 cover 呈现听书播放器。
+            if let pending = pendingNativeAfterDetailDismiss {
+                pendingNativeAfterDetailDismiss = nil
+                nativeContent = pending
+            }
         }) { item in detailSheet(item) }
         .sheet(isPresented: $showsSitePicker) {
             CatVodSitePickerSheet(sites: sites, selected: selectedSite,
@@ -651,16 +661,10 @@ struct CatVodHomeView: View {
                 // vod_id, SwiftUI never crashes on duplicate Identifiable ids.
                 ForEach(Array(list.media.enumerated()), id: \.offset) { _, item in
                     Button {
-                        if isLiveBrowsing {
-                            // 直播站点的条目就是一条直播流，没有「选集」概念：
-                            // 直接解析地址交给原来的播放内核，跳过详情页那套。
-                            if !isResolvingPlayback { Task { await openLiveItem(item) } }
-                        } else if CatVodMediaKind.nativeHint(
-                            media: item, site: resultSites[item.id] ?? selectedSite) {
-                            // 音乐听书 / 漫画 / 小说：先解析首集拿到 playerContent 的真实类型，
-                            // 再交给 App 自带界面；判成视频则退回原详情页。
-                            if !isResolvingPlayback { Task { await openNativeItem(item) } }
-                        } else if !isOpeningDetail {
+                        if !isOpeningDetail {
+                            // 一律先进详情页（含直播）：列表上不做任何直连/直播解析，
+                            // 粗判会误判。直播频道在详情页里按频道列表选台，点频道
+                            // 时才交给原播放内核。
                             Task { await openDetail(item, from: resultSites[item.id]) }
                         }
                     } label: {
@@ -1177,157 +1181,6 @@ struct CatVodHomeView: View {
         }
     }
 
-    /// 分类名里带这些字样即视为直播分类。苹果 CMS / 猫源里常叫
-    /// “直播”“电视直播”“IPTV”“卫视”“虎牙|直播”等。
-    private static let liveNameKeywords = ["直播", "iptv", "卫视", "live"]
-
-    /// 当前是否处在直播浏览场景：站点 `meta.type == 3`（猫源协议里 3 = 直播，
-    /// 如「虎牙|直播」「📺 直播源」），或站点/分类名字带直播关键字。
-    /// 只认站点 type 还不够——不少直播站点名字带「直播」但 type 是别的，反之亦然。
-    private var isLiveBrowsing: Bool {
-        if let site = selectedSite {
-            if site.type == 3 { return true }
-            let name = site.name.lowercased()
-            if Self.liveNameKeywords.contains(where: { name.contains($0) }) { return true }
-        }
-        if let category = currentCategory {
-            let name = category.name.lowercased()
-            if Self.liveNameKeywords.contains(where: { name.contains($0) }) { return true }
-        }
-        return false
-    }
-
-    /// 直播分类下的条目直播：解析第一条线路的第一集（直播流），直接交给原来的
-    /// 播放内核。不走点播那套（流探测会误判直播 HLS、清晰度弹窗无处挂载、
-    /// 网盘降级提示也不适用），也不弹详情页。
-    private func openLiveItem(_ item: CatVodMedia) async {
-        let busy = await MainActor.run { () -> Bool in
-            if isResolvingPlayback { return true }
-            isResolvingPlayback = true
-            playingEpisodeID = item.id
-            message = nil
-            return false
-        }
-        if busy { return }
-        guard let bundle = currentBundleURL, let site = resultSites[item.id] ?? selectedSite else {
-            await MainActor.run {
-                isResolvingPlayback = false
-                playingEpisodeID = nil
-            }
-            return
-        }
-        do {
-            let result = try await CatVodService.shared.detail(bundleURL: bundle, site: site,
-                                                               id: item.id, expectedName: item.name)
-            guard let episode = result.groups.first?.episodes.first else {
-                await MainActor.run {
-                    message = localized("这个直播源没有返回可播放地址")
-                    isResolvingPlayback = false
-                    playingEpisodeID = nil
-                }
-                return
-            }
-            let playback = try await CatVodService.shared.player(bundleURL: bundle, site: site,
-                                                                 episode: episode)
-            guard let urlString = playback.url, !urlString.isEmpty,
-                  let url = URL(string: urlString) else {
-                await MainActor.run {
-                    message = localized("该片源没有返回可播放地址")
-                    isResolvingPlayback = false
-                    playingEpisodeID = nil
-                }
-                return
-            }
-            let headers = playback.header ?? [:]
-            let danmaku = playback.danmaku
-            await MainActor.run {
-                lastPlayedEpisodeID = episode.id
-                CatVodPlayerPresenter.present(url: url, headers: headers, title: item.name,
-                                              danmaku: danmaku)
-                isResolvingPlayback = false
-                playingEpisodeID = nil
-            }
-        } catch {
-            let text = error.localizedDescription
-            await MainActor.run {
-                message = text
-                isResolvingPlayback = false
-                playingEpisodeID = nil
-            }
-        }
-    }
-
-    /// 音乐听书 / 漫画 / 小说条目的点击分流。状态机与 `openLiveItem` 一致：
-    /// 在 MainActor 里原子认领 `isResolvingPlayback`，任何提前返回都必须复位，
-    /// 否则 slow resolve 会让后续点击全部被守卫挡住（自锁）。
-    private func openNativeItem(_ item: CatVodMedia) async {
-        let busy = await MainActor.run { () -> Bool in
-            if isResolvingPlayback { return true }
-            isResolvingPlayback = true
-            playingEpisodeID = item.id
-            message = nil
-            return false
-        }
-        if busy { return }
-        guard let bundle = currentBundleURL,
-              let site = resultSites[item.id] ?? selectedSite else {
-            await MainActor.run { releaseNativeGuard() }
-            return
-        }
-        do {
-            let result = try await CatVodService.shared.detail(
-                bundleURL: bundle, site: site, id: item.id, expectedName: item.name)
-            guard let episode = result.groups.first?.episodes.first else {
-                await MainActor.run {
-                    message = localized("这个源没有返回可播放的内容")
-                    releaseNativeGuard()
-                }
-                return
-            }
-            let playback = try await CatVodService.shared.player(
-                bundleURL: bundle, site: site, episode: episode)
-            guard let urlString = playback.url, !urlString.isEmpty else {
-                await MainActor.run {
-                    message = localized("该片源没有返回可播放地址")
-                    releaseNativeGuard()
-                }
-                return
-            }
-            let kind = CatVodMediaKind.classify(
-                playbackURL: urlString, typeName: item.typeName, siteType: site.type)
-            await MainActor.run {
-                if kind == .video {
-                    // 信号不足（如漫画源返回 m3u8）：按约定走原来的详情页/视频播放器。
-                    isResolvingPlayback = false
-                    playingEpisodeID = nil
-                    Task { await openDetail(item, from: resultSites[item.id]) }
-                    return
-                }
-                do {
-                    let native = try CatVodNativeBridge.bridge(
-                        playback: playback, media: item, site: site, store: bookStore)
-                    nativeContent = CatVodNativeContent(
-                        kind: native.kind, bookID: native.bookID, title: native.title)
-                    lastPlayedEpisodeID = episode.id
-                } catch {
-                    message = error.localizedDescription
-                }
-                releaseNativeGuard()
-            }
-        } catch {
-            let text = error.localizedDescription
-            await MainActor.run {
-                message = text
-                releaseNativeGuard()
-            }
-        }
-    }
-
-    private func releaseNativeGuard() {
-        isResolvingPlayback = false
-        playingEpisodeID = nil
-    }
-
     private func openDetail(_ item: CatVodMedia, from overrideSite: CatVodSite? = nil) async {
         guard let bundle = currentBundleURL, let site = overrideSite ?? selectedSite else { return }
         // 豆瓣/推荐类站点的条目是「聚合条目」，id 形如 msearch:36847425，它们的
@@ -1363,6 +1216,9 @@ struct CatVodHomeView: View {
                 detailPosterFoot = nil
                 detailRouteIndex = 0
             }
+            // 同一部重开时线路数若变少，旧索引可能越界（Picker 选中为空、集数回退首线路）。
+            // 归位到合法范围，保持集数与选集网格一致。
+            if !detailGroups.indices.contains(detailRouteIndex) { detailRouteIndex = 0 }
             // With a stored copy on screen the spinner must not cover it; it only
             // signals that the episodes are being refreshed in the background.
             isLoadingDetail = true
@@ -1382,6 +1238,8 @@ struct CatVodHomeView: View {
                 // Fill the sheet only if the person has not moved on to another title.
                 if detailItem?.id == item.id {
                     detailGroups = result.groups
+                    // 刷新后线路数可能变化，旧索引越界时归位，避免集数/选集与线路不匹配。
+                    if !detailGroups.indices.contains(detailRouteIndex) { detailRouteIndex = 0 }
                     isLoadingDetail = false
                     // 片单/合集：spider 一次回了整张片单，里面没有用户点的那一部。
                     // 以前会拿第一条去播，于是「点开就是错的」。
@@ -1468,8 +1326,11 @@ struct CatVodHomeView: View {
                     do {
                         let native = try CatVodNativeBridge.bridge(
                             playback: playback, media: nativeMedia, site: site, store: bookStore)
-                        nativeContent = CatVodNativeContent(
+                        // 详情弹层还盖在本视图上：直接设 nativeContent 的 cover 会被
+                        // iOS 静默丢弃。先把内容存入 pending，弹层 onDismiss 再呈现。
+                        pendingNativeAfterDetailDismiss = CatVodNativeContent(
                             kind: native.kind, bookID: native.bookID, title: native.title)
+                        detailItem = nil
                         lastPlayedEpisodeID = episode.id
                     } catch {
                         message = error.localizedDescription
@@ -1758,12 +1619,25 @@ struct CatVodHomeView: View {
         return CoverTint.background(for: foot, minimumContrast: 4.5).color
     }
 
+    /// 当前线路（选集网格正在显示的那一条）的集数。
+    ///
+    /// 多条线路是**同一部剧的不同播放源**，不是不同的剧；把每条线路的集数
+    /// `reduce` 相加会把「3 条线路各 24 集」显示成 72 集，与选集网格里实际
+    /// 能点的一排集数对不上。集数只按当前线路算，才和用户看到的一致。
+    /// 边界：索引失效时回退到第一条线路，再退回 0。
+    private var currentRouteEpisodeCount: Int {
+        if detailGroups.indices.contains(detailRouteIndex) {
+            return detailGroups[detailRouteIndex].episodes.count
+        }
+        return detailGroups.first?.episodes.count ?? 0
+    }
+
     /// hero 标题下的一行事实：年份 / 类型 / 集数。
     private func detailFacts(_ item: CatVodMedia) -> [String] {
         var facts: [String] = []
         if !item.year.isEmpty { facts.append(item.year) }
         if !item.typeName.isEmpty { facts.append(item.typeName) }
-        let count = detailGroups.reduce(0) { $0 + $1.episodes.count }
+        let count = currentRouteEpisodeCount
         if count > 0 { facts.append(String(format: localized("共 %d 集"), count)) }
         return facts
     }
@@ -1934,7 +1808,8 @@ struct CatVodHomeView: View {
 
     private func detailInfoItems(_ item: CatVodMedia) -> [BookDetailInfoItem] {
         var items: [BookDetailInfoItem] = []
-        let count = detailGroups.reduce(0) { $0 + $1.episodes.count }
+        // 集数按当前线路算，不把所有线路相加（多条线路是同一部剧的不同播放源）。
+        let count = currentRouteEpisodeCount
         if count > 0 {
             items.append(BookDetailInfoItem(id: "episodes", label: localized("集数"), value: count.formatted()))
         }

@@ -395,6 +395,16 @@ enum DirectChapterAudioResolver {
             return true
         }
 
+        // 签名 CDN 常把文件名放进 query（`?file=x.mp3&sign=…`），path 上没有扩展名。
+        // 与 CatVodMediaKind.pathExtension 同一套扫描：猫源/听书源的直链多长这样，
+        // 漏了它 classify 判成 audio、这里却解析不出，播放器只会报「未找到音讯」。
+        if let mark = rawURL.firstIndex(of: "?") {
+            let query = rawURL[rawURL.index(after: mark)...].lowercased()
+            if audioExtensions.contains(where: { query.contains(".\($0)") }) {
+                return true
+            }
+        }
+
         let lowered = rawURL.lowercased()
         return lowered.contains("mime=audio")
             // 番茄畅听-style CDN links carry no file extension and live under a /video/

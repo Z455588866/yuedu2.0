@@ -51,16 +51,8 @@ extension CatVodMediaKind {
         "小说", "小說", "文字", "文学", "文學", "ebook", "txt"
     ]
 
-    /// 列表点击时的粗判：只决定是否跳过详情页、直接解析第一条线路的第一集。
-    /// 真正的类型在拿到 `playerContent` 的 url 后由 `classify` 复核。
-    /// 故意不把「动漫」算作漫画：哈密瓜动漫返回 m3u8，属于视频。
-    static func nativeHint(media: CatVodMedia, site: CatVodSite?) -> Bool {
-        let name = (media.typeName + " " + (site?.name ?? "")).lowercased()
-        if audioNameKeywords.contains(where: { name.contains($0) }) { return true }
-        if mangaNameKeywords.contains(where: { name.contains($0) }) { return true }
-        if textNameKeywords.contains(where: { name.contains($0) }) { return true }
-        return false
-    }
+    /// 列表点击一律先进详情页（粗判会误判）；真正的类型在拿到 `playerContent`
+    /// 的 url 后由 `classify` 精判，详情页点集时按它分流到听书/漫画/阅读器。
 
     /// 用播放结果精判内容类型。无法区分的 m3u8 一律按 `.video`（现有播放器）。
     static func classify(playbackURL: String, typeName: String, siteType: Int?) -> CatVodMediaKind {
@@ -94,30 +86,72 @@ extension CatVodMediaKind {
         return .video
     }
 
-    /// 把猫源漫画的 `mange://https://a&&https://b` 转成 `MangaChapterParser.parsedImages`
-    /// 能直接吃的 JSON 字符串数组。返回 nil 表示不是漫画地址。
+    /// 把猫源漫画的播放结果转成 `MangaChapterParser.parsedImages` 能直接吃的内容。
+    /// 返回 nil 表示不是漫画地址。已知的猫源/图库漫画格式：
+    /// - `mange://https://img1&&https://img2`（包子漫画）；
+    /// - JSON 字符串数组 `["https://a.jpg","https://b.jpg"]`；
+    /// - `<img src=…>` HTML（聚合源常见）；
+    /// - 换行分隔的图片直链列表；
+    /// - 单张图片直链（图库类源一集一张长图）。
+    /// JSON/HTML/换行列表交给 `MangaChapterParser.looksLikeMangaContent` 同一套启发式
+    /// （≥3 张图、几乎无正文），阅读器端本来就按这些格式解析，判定与解析保持一致。
     static func mangaContent(from url: String) -> String? {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.contains("&&") else { return nil }
-        let images = trimmed.components(separatedBy: "&&").compactMap { part -> String? in
-            var token = part.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let scheme = token.range(of: "://") {
-                let name = String(token[..<scheme.lowerBound]).lowercased()
-                // 只有猫源自造的伪 scheme 才剥离；http(s) 原样保留。
-                if name != "http" && name != "https" {
-                    token = String(token[scheme.upperBound...])
-                }
+        guard !trimmed.isEmpty else { return nil }
+
+        // 猫源自造的伪 scheme（mange:// 等）只剥壳；http(s) 原样保留。
+        var content = trimmed
+        if let scheme = content.range(of: "://") {
+            let name = String(content[..<scheme.lowerBound]).lowercased()
+            if name != "http" && name != "https" {
+                content = String(content[scheme.upperBound...])
             }
-            if token.hasPrefix("//") { token = "https:" + token }
-            let lowered = token.lowercased()
-            guard lowered.hasPrefix("http://") || lowered.hasPrefix("https://") else { return nil }
-            return token
         }
-        guard images.count >= 2 else { return nil }
-        guard JSONSerialization.isValidJSONObject(images),
-              let data = try? JSONSerialization.data(withJSONObject: images),
-              let json = String(data: data, encoding: .utf8) else { return nil }
-        return json
+
+        // && 拼接的图片串：拆开、归一化协议后转成 JSON 数组。
+        if content.contains("&&") {
+            let images = content.components(separatedBy: "&&").compactMap { part -> String? in
+                var token = part.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let scheme = token.range(of: "://") {
+                    let name = String(token[..<scheme.lowerBound]).lowercased()
+                    if name != "http" && name != "https" {
+                        token = String(token[scheme.upperBound...])
+                    }
+                }
+                if token.hasPrefix("//") { token = "https:" + token }
+                let lowered = token.lowercased()
+                guard lowered.hasPrefix("http://") || lowered.hasPrefix("https://") else { return nil }
+                return token
+            }
+            guard images.count >= 2 else { return nil }
+            guard JSONSerialization.isValidJSONObject(images),
+                  let data = try? JSONSerialization.data(withJSONObject: images),
+                  let json = String(data: data, encoding: .utf8) else { return nil }
+            return json
+        }
+
+        // JSON 图片数组：全部元素都是 http(s) 直链即为漫画（≥2 张也认，
+        // 比 looksLikeMangaContent 的 ≥3 门槛更宽，JSON 数组本身已无歧义）。
+        if content.hasPrefix("["),
+           let data = content.data(using: .utf8),
+           let array = try? JSONSerialization.jsonObject(with: data) as? [String],
+           !array.isEmpty {
+            let http = array.filter {
+                let lowered = $0.lowercased()
+                return lowered.hasPrefix("http://") || lowered.hasPrefix("https://")
+            }
+            if http.count == array.count { return content }
+        }
+
+        // JSON 图片数组 / <img> HTML / 换行图片列表：与阅读器同一判定。
+        if MangaChapterParser.looksLikeMangaContent(content) { return content }
+
+        // 单张图片直链：图库类源一集一张长图。视频地址不会以图片扩展名结尾，
+        // 误判风险为零；漫画阅读器按单页呈现。
+        if let ext = pathExtension(of: content), imageExtensions.contains(ext) {
+            return content
+        }
+        return nil
     }
 
     // MARK: - private

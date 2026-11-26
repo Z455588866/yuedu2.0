@@ -198,6 +198,14 @@ export async function resolveCatVodCloudPlayer(argumentsValue, credentials, fetc
     }
     const fallback = directPlaybackFromEpisode(descriptor);
     if (fallback) return fallback;
+    // 这个网盘本身支持账号取链，只是这条分享线路没给出文件 id 或本机没登录该
+    // 账号——别笼统说「解析没接完」（会让已登录的人以为功能没做），给可行动的话。
+    if (driveKey) {
+      const drive = driveFor(driveKey);
+      throw new GatewayError("CLOUD_SHARE_NEEDS_ACCOUNT",
+        `这条${drive?.name || "网盘"}分享线路没有给出文件编号，无法直接解析。`
+        + "可在「我的网盘」里登录该账号后直接播放这个文件，或换一条普通线路。", 422);
+    }
     throw unsupportedProvider(providerID || "unknown");
   }
 

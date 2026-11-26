@@ -60,6 +60,10 @@ final class VideoPlaybackController {
     /// The episode whose link was already resolved again after failing to play: legado
     /// refreshes a failed link once (`retryOnPlayError`), then reports the failure.
     private var refetchedChapter: Int?
+    /// 本次失败是否属于「链接无访问权限」（403 / contentIsNotAuthorized）。这类失败
+    /// 用同一个死链重试没有意义——尤其是猫源/书源的 .link 源无法重新解析——只能退出
+    /// 换一条线路。视图据此把「重试」换成「返回换线路」。
+    private(set) var failedNeedsRelink = false
     private var lastSavedTime: Double = 0
     /// 断流自动重开：网络抖动导致这一集被 AVPlayer 结束，就等几秒在原位置重来。
     private var dropRecovery = VideoDropRecovery()
@@ -184,6 +188,7 @@ final class VideoPlaybackController {
 
     private func load(at time: Double) {
         loadTask?.cancel()
+        failedNeedsRelink = false
         player.pause()
         player.replaceCurrentItem(with: nil)
         statusObservation = nil
@@ -296,8 +301,16 @@ final class VideoPlaybackController {
             } else if recoverIfDropped(player.currentItem?.error) {
                 // 连接断了，已经在重开，错误先不显示给人看。
             } else {
+                // 「资源无访问权限」（403 / contentIsNotAuthorized）用同一个链接重试无效。
+                // 猫源/书源的 .link 源无法重新解析，只能退出换线路——给出准确文案并
+                // 让失败页把「重试」换成「返回换线路」。识别按错误码 + 文案兜底。
+                let underlying = player.currentItem?.error
+                failedNeedsRelink = Self.isNotAuthorized(underlying)
+                let message = failedNeedsRelink
+                    ? localized("这个视频链接没有访问权限（可能已过期或需要登录），请返回换一条线路")
+                    : (error ?? localized("无法播放这一集"))
                 AppLogger.info("[Video] episode failed to play: \(error ?? "-")", level: .error)
-                phase = .failed(error ?? localized("无法播放这一集"))
+                phase = .failed(message)
             }
         default:
             break
@@ -396,6 +409,25 @@ final class VideoPlaybackController {
                 self.recoverIfDropped(error)
             }
         }
+    }
+
+    /// 是否为「资源无访问权限」失败：AVFoundation 的 contentIsNotAuthorized(-11835)，
+    /// 或错误链里带 403 / not authorized / 许可 字样。后者是文案兜底——403→-11835
+    /// 的映射不是苹果文档承诺，中文系统还会给出「没有访问…许可」的本地化描述。
+    /// 沿 underlyingErrors 递归，因为 AVPlayerItem.error 常把真实原因包在底层。
+    private static func isNotAuthorized(_ error: Error?) -> Bool {
+        guard let error else { return false }
+        func hit(_ nsError: NSError) -> Bool {
+            if nsError.domain == AVFoundationErrorDomain,
+               nsError.code == AVError.Code.contentIsNotAuthorized.rawValue { return true }
+            let text = (nsError.localizedDescription + " " + (nsError.localizedFailureReason ?? ""))
+                .lowercased()
+            if text.contains("403") || text.contains("not authorized") || text.contains("许可") {
+                return true
+            }
+            return nsError.underlyingErrors.contains(where: hit)
+        }
+        return hit(error as NSError)
     }
 
     /// 连接类错误：按 1s/3s/8s 在原位置重开。真正的失败（403、解码不了）仍然报错。

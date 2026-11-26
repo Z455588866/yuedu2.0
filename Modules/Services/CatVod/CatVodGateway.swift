@@ -413,10 +413,20 @@ enum CatVodError: LocalizedError {
         // 负数是 App 自己造的语义错误码（网盘不支持、磁力链、片单合集…），
         // 文案已经写成人话，不该再包一层「猫源请求失败（-4）」。
         if code < 0 { return text.isEmpty ? localized("播放失败") : text }
-        // 网盘类线路：没登录时的提示原本是「请先在 TVBox 设置 → 网盘设置中保存
-        // 夸克 Cookie」——我们的 App 里没有那个菜单，照着找永远找不到。
+        // 网盘类线路：没登录时源站提示的是「请先在 TVBox 设置 → 网盘设置中保存 Cookie」，
+        // 我们 App 没有那个菜单，照着找永远找不到——这种才翻成我们自己的路径。
+        //
+        // 关键：只有「LoginRequired/登录态缺失」才引导去登录。网关对具体失败已经写好
+        // 精准中文（提取码不对、分享失效、没找到文件、没返回播放地址），这些 message
+        // 里也带「网盘」二字，若一律翻成「还没登录」就会误导已经登录的人。所以命中
+        // 具体业务词时原样保留网关原文。
         if text.contains("网盘") || text.contains("登录") || text.contains("未配置")
             || lower.contains("cookie 未") || lower.contains("cookie未") {
+            let specificFailure = ["提取码", "分享已失效", "分享已过期", "分享地址", "没有找到",
+                                   "播放地址", "分享里", "errno"].contains(where: { text.contains($0) })
+            if specificFailure || (code >= 400 && code != 401 && code != 403) {
+                return text
+            }
             if text.contains("失效") || text.contains("过期") || text.contains("重新登录") {
                 return localized("网盘登录已失效。去「管理 → 网盘账号」重新网页登录一次，再点这一集")
             }

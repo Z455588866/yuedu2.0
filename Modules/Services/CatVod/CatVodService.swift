@@ -417,10 +417,12 @@ final class CatVodService {
     /// the trusted gateway (which holds the account credentials).
     func player(bundleURL: String, site: CatVodSite, episode: CatVodEpisode) async throws -> CatVodPlayback {
         // 网盘线路先认描述符再决定要不要打 spider：
-        // - 百度网盘在网关里明确不支持，打过去只会白等（spider 会去访问分享页，
-        //   于是网盘里留下「查看记录」），必须当场说清楚；
-        // - 夸克/UC/阿里/123 走网关的网盘解析，正常。
-        if let netdisk = CatVodNetdiskEpisode.descriptor(from: episode.playID) {
+        // - 支持名单见 CatVodNetdiskEpisode.supported（覆盖网关能处理的各家网盘
+        //   及直链线路），都由网关 catvod-cloud-player.mjs 解析，不交给 spider
+        //   访问分享页（那样会在网盘留下「查看记录」还白等超时）；
+        // - 名单外的线路当场说清楚，让用户换普通线路。
+        let netdisk = CatVodNetdiskEpisode.descriptor(from: episode.playID)
+        if let netdisk {
             AppLogger.info("[CatVod] ⟐ netdisk episode provider=\(netdisk.provider) site=\(site.key)", level: .notice)
             if !CatVodNetdiskEpisode.isSupported(netdisk.provider) {
                 AppLogger.error("[CatVod] netdisk provider unsupported=\(netdisk.provider)", level: .error)
@@ -429,6 +431,10 @@ final class CatVodService {
                     CatVodNetdiskEpisode.displayName(netdisk.provider)))
             }
         }
+        // 网盘线路要验提取码、列目录、取直链（百度还要先 m3u8 再退回 dlink），
+        // 网关分段各 20 秒；40 秒会在它回话前就超时。只对网盘放宽到 90 秒，
+        // 普通线路仍用 40 秒，不影响它们的响应速度。
+        let timeout: TimeInterval = netdisk != nil ? 90 : 40
         let object: [String: Any]
         do {
             object = try await invoke(bundleURL: bundleURL, site: site, action: "player",
@@ -439,11 +445,11 @@ final class CatVodService {
                                         "id": episode.playID,
                                         "vipFlags": [String]()
                                       ],
-                                      // 网盘线路会先在分享页上绕一圈，源站的 /play 最长
-                                      // 允许 60 秒；客户端再多等只会在转圈上耗时间。
-                                      timeout: 40)
+                                      timeout: timeout)
         } catch let urlError as URLError where urlError.code == .timedOut {
-            throw CatVodError.http(-7, localized("解析这一集的播放地址超过 40 秒，源站没有回话。换一条线路，或稍后再试"))
+            throw CatVodError.http(-7, String(
+                format: localized("解析这一集的播放地址超过 %d 秒，源站没有回话。换一条线路，或稍后再试"),
+                Int(timeout)))
         }
         var headers: [String: String] = [:]
         if let header = object["header"] as? [String: Any] {
