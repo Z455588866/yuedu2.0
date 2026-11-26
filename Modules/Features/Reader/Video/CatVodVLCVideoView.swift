@@ -40,6 +40,11 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
     /// 画面容器。VLC 把像素直接画进这个 UIView，SwiftUI 只负责摆放它。
     let drawable = UIView(frame: .zero)
 
+    /// VLCKit 官方画中画桥。作为 `player.drawable` 同时提供绘图与 PiP 控制。
+    /// 强引用：VLCKit 内部持有 drawable，我们要在回调里稳定访问它；桥自身只弱引用
+    /// player / drawable / pipController，不会形成环。
+    private let pipBridge = CatVodVLCPiPBridge()
+
     private var player: VLCMediaPlayer?
     private var tickTask: Task<Void, Never>?
     private var pendingSeek: Double = 0
@@ -53,6 +58,17 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
     /// 照 tvbox-Swift 的解码容错：默认硬解优先，硬解解不出画面时切软解重播一次。
     private var useSoftwareDecode = false
     private var hasAttemptedSoftDecodeFallback = false
+    /// 纯音频（m4a/mp3/aac…）没有视频轨，videoSize 恒为 .zero。若不排除，
+    /// 下面的"硬解无画面"判据会在播到 2 秒时误判，切软解重开流把音频打断
+    /// （日志里喜马拉雅 m4a 就中过招）。打开时按扩展名标记，跳过画面降级。
+    private var isAudioOnly = false
+    /// 音轨修正只做一次，且只在 VLC 默认选择无效时做（见 selectAudioTrackIfNeeded）。
+    private var didResolveAudioTrack = false
+    /// 这些格式没有视频轨，videoSize 恒为 .zero，不能触发「硬解无画面」降级。
+    /// 代理后扩展名丢失，用路由层从代理 spec 里还原的原始格式判断。
+    private static let audioOnlyExtensions: Set<String> = [
+        "m4a", "m4b", "mp3", "aac", "wav", "flac", "ogg", "opus", "wma", "ape",
+    ]
 
     var isLive: Bool { duration <= 0 }
 
@@ -74,6 +90,11 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         // 每次开新流都从「硬解优先」重新试起，软解降级只针对当前这一次播放。
         useSoftwareDecode = false
         hasAttemptedSoftDecodeFallback = false
+        didResolveAudioTrack = false
+        // 纯音频没有视频轨：按原始格式（代理后从 ?s= 还原）标记，跳过画面降级，
+        // 否则播到 2 秒会被当成「硬解无画面」切软解重开，把音频打断。
+        let originalExt = CatVodPlaybackRoute.originalExtension(of: url) ?? ""
+        isAudioOnly = Self.audioOnlyExtensions.contains(originalExt)
 
         // 照 tvbox-Swift 的 stablePlaybackOptions：少丢帧之外，还关掉 libvlc 的
         // 时钟纠偏（clock-synchro/jitter），网盘流忽快忽慢时画面不抖、音画不错位。
@@ -82,7 +103,12 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
             "--clock-synchro=0", "--clock-jitter=0",
         ])
         player.delegate = self
-        player.drawable = drawable
+        // VLCKit 官方示例：`_mediaPlayer.drawable = self`，self 同时 conform
+        // VLCDrawable + VLCPictureInPictureDrawable，在 addSubview/bounds 里把 VLC 的
+        // 视频输出 view 挂回真正的显示 UIView。这里由桥承担 self 的角色，画面仍挂回
+        // 原来的 drawable —— 缩放/旋转/frame 逻辑一点不改。
+        pipBridge.attach(player: player, drawable: drawable)
+        player.drawable = pipBridge
         // MobileVLCKit 的语义：scaleFactor 只有在 0（自动）时才会跟随 drawable 的尺寸变化。
         // 写死成别的值，之后改 drawable 的 frame 画面不会重排 —— 这也是「填满萤幕后画面没变」
         // 这类问题的常见根因。宽高比按当前档位应用（「拉伸」才需要覆盖）。
@@ -137,6 +163,8 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
 
     func togglePlayPause() {
         guard let player else { return }
+        // VLCKit 头注释要求每次播放状态变化都 invalidate，用户主动播放/暂停也算。
+        pipBridge.invalidatePlaybackState()
         // 播完停在 `.ended`：直接 play() 不会动，得换一个 media 从头来。
         if player.state == .ended {
             replay()
@@ -163,6 +191,16 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         player.play()
     }
 
+    /// 失败页的「重试」：同一地址/请求头再开一次，解码与选轨状态全部重置。
+    /// 复用 replay() 的换 media 方式，不在 error 状态下先 stop()（异步收尾会把新 media 清掉）。
+    func retry() {
+        guard player != nil, sourceURL != nil else { return }
+        useSoftwareDecode = false
+        hasAttemptedSoftDecodeFallback = false
+        didResolveAudioTrack = false
+        replay()
+    }
+
     /// 硬解无画面时切软解重来，保留当前播放进度（照 tvbox 的
     /// attemptSoftDecodeFallbackIfNeeded：resumePosition 用当前时间，别从头播）。
     /// 调用前需先把 useSoftwareDecode 置 true，makeMedia 才会写 avcodec-hw=none。
@@ -180,6 +218,7 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
 
     func seek(to seconds: Double) {
         guard let player, !isLive else { return }
+        pipBridge.invalidatePlaybackState()
         let target = max(0, min(seconds, duration > 0 ? duration : seconds))
         player.time = VLCTime(int: Int32(target * 1000))
         time = target
@@ -202,6 +241,31 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         } else {
             player.videoAspectRatio = nil
         }
+    }
+
+    /// 多轨源若 VLC 默认落在禁用轨（-1）或不在轨表里的 id 上，表现是「有画面没声音」。
+    /// MobileVLCKit 是二进制 framework，Swift 属性签名无法编译期校验，这里用 KVC
+    /// 按 Objective-C selector 读写（二进制中确认 audioTrackIndexes /
+    /// currentAudioTrackIndex 的 getter/setter 都在），避免留下可能编译失败的代码。
+    /// 只在默认选择无效时纠一次，不覆盖 VLC 已经选好的有效轨。
+    private func selectAudioTrackIfNeeded() {
+        guard let player else { return }
+        // value(forKey:) 遇到不存在的 key 会抛 NSUnknownKeyException（ObjC 异常，
+        // Swift 的 try? 接不住）。二进制 strings 只能证明字符串存在、不能证明 KVC
+        // 合规，所以先用 responds(to:) 确认 getter/setter selector 真的存在再读写，
+        // 让这个"锦上添花"的修正绝无可能把能播的片子搞崩。
+        guard player.responds(to: Selector("audioTrackIndexes")),
+              player.responds(to: Selector("currentAudioTrackIndex")),
+              player.responds(to: Selector("setCurrentAudioTrackIndex:")) else { return }
+        guard let tracks = player.value(forKey: "audioTrackIndexes") as? [NSNumber] else { return }
+        let valid = tracks.map(\.intValue).filter { $0 >= 0 }
+        guard let first = valid.first else { return }
+        let selected = (player.value(forKey: "currentAudioTrackIndex") as? NSNumber)?.intValue ?? -1
+        guard !valid.contains(selected) else { return }
+        // 显式包成 NSNumber：KVC 走 Objective-C，Int 的隐式桥接不保证在所有
+        // Swift 版本都成立，包一层杜绝 setValue 因类型不符抛异常。
+        player.setValue(NSNumber(value: first), forKey: "currentAudioTrackIndex")
+        AppLogger.info("[CatVod][VLC] 默认音轨无效，改选 id=\(first) 轨数=\(valid.count)", level: .notice)
     }
 
     func stop() {
@@ -270,11 +334,20 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
             }
         }
 
+        // 音轨信息要在 open 之后、媒体装载一会儿才解析得出来；到 1.5 秒只尝试
+        // 一次，避免每 500ms 反复读写。此刻轨表若还没解析出来，就保持 VLC 默认选择。
+        if !didResolveAudioTrack, current >= 1.5 {
+            didResolveAudioTrack = true
+            selectAudioTrackIfNeeded()
+        }
+
         // 照 tvbox-Swift 的硬解容错：默认硬解优先，但部分设备/编码（如 H.265 10bit、
         // AV1）硬解解不出视频轨，音频照常走——用户看到的就是「有声音没画面」。
         // 判据：已在播放、时间推进超过阈值、但始终拿不到 videoSize（视频轨没出画面），
         // 且还没降级过。命中则换软解重播一次。只降一次，避免死循环。
-        if !hasAttemptedSoftDecodeFallback, !useSoftwareDecode,
+        // 纯音频（m4a/mp3/…）根本没有视频轨，videoSize 恒为 .zero，必须排除，
+        // 否则播到 2 秒就会切软解重开流，把正在播的音频打断。
+        if !isAudioOnly, !hasAttemptedSoftDecodeFallback, !useSoftwareDecode,
            player.isPlaying, current > 2.0, videoSize == .zero {
             AppLogger.info("[CatVod][VLC] 硬解无画面→切软解重播 t=\(Int(current))s", level: .notice)
             hasAttemptedSoftDecodeFallback = true
@@ -284,7 +357,11 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
     }
 
     nonisolated func mediaPlayerStateChanged(_ aNotification: Notification) {
-        Task { @MainActor [weak self] in self?.stateChanged() }
+        Task { @MainActor [weak self] in
+            self?.stateChanged()
+            // 官方示例：状态变化后刷新 PiP 界面的播放/暂停按钮、时长等。
+            self?.pipBridge.invalidatePlaybackState()
+        }
     }
 
     private func stateChanged() {
@@ -320,7 +397,117 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         }
     }
 
+    // MARK: - 画中画（VLCKit 官方 VLCPictureInPictureMediaControlling 的转发出口）
+    // 这些读数直接问 VLCMediaPlayer（NSObject 同步属性），不碰 @MainActor 状态，
+    // 因此 VLCKit 从任意线程回调都不会触发主线程断言——这是相对早期版本的关键修正。
+
+    /// 非主线程可读：PiP 窗口要实时进度，不能用 500ms 采样的 @Published 值。
+    func pipMediaTime() -> Int64 { Int64(player?.time.intValue ?? 0) }
+    func pipMediaLength() -> Int64 { Int64(player?.media?.length.intValue ?? 0) }
+    func pipIsSeekable() -> Bool { player?.isSeekable ?? false }
+    func pipIsPlaying() -> Bool { player?.isPlaying ?? false }
+
+    /// PiP 的播放/拖动要切换到主线程执行：这些会改 player 状态并可能走 replay()。
+    func pipPlay() {
+        guard let player else { return }
+        if player.state == .ended { replay(); return }
+        if !player.isPlaying { player.play() }
+    }
+
+    func pipPause() {
+        guard let player, player.isPlaying else { return }
+        player.pause()
+    }
+
+    /// offset 单位由 VLCKit 官方头注释指定为毫秒。
+    func pipSeekBy(_ offsetMs: Int64, completion: @escaping () -> Void) {
+        guard let player, !isLive else { completion(); return }
+        player.jumpWithOffset(Int32(offsetMs)) { completion() }
+    }
+
+    /// 控制条 PiP 按钮入口；pipController 由 VLCKit 在 pictureInPictureReady 里给到。
+    func startPictureInPicture() { pipBridge.startPictureInPicture() }
+
     static let safariUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+}
+
+/// VLCKit 官方画中画桥，逐条照搬 VideoLAN `Examples/iOS/VLCPictureInPicture/ViewController.m`：
+/// 官方让「显示视图」同时 conform VLCDrawable + VLCPictureInPictureDrawable，并让
+/// `mediaController` 返回自己（再 conform VLCPictureInPictureMediaControlling）。官方那个
+/// self 是 UIViewController —— 它只在 addSubview/bounds 里把 VLC 的视频输出 view
+/// 挂到真正的 movieView 上。这里用 NSObject 桥承担同一角色，Swift 6 下不受 @MainActor 隔离约束。
+///
+/// 线程处理（修复早期版本用 MainActor.assumeIsolated 会在后台回调直接崩溃的缺陷）：
+/// - 读数（mediaTime/mediaLength/...）直接问 VLCMediaPlayer 的同步属性，任意线程安全；
+/// - UIView 操作（addSubview/bounds）必须在主线程：主线程直接做，后台派发并同步等待；
+/// - 播放/拖动会改 player 状态，派发到主线程的 model 执行。
+/// @unchecked Sendable：桥的可变状态都是 attach 时写入的弱引用 + ready block 给出的
+/// pipController，按官方示例在主线程读写。
+final class CatVodVLCPiPBridge: NSObject, @unchecked Sendable,
+                                VLCDrawable,
+                                VLCPictureInPictureDrawable,
+                                VLCPictureInPictureMediaControlling {
+    private weak var player: VLCMediaPlayer?
+    /// 真正的画面容器，对应官方示例的 movieView。
+    private weak var drawable: UIView?
+    /// 刷新界面/启停 PiP 的控制器，由 pictureInPictureReady 的 block 给到（官方是 weak atomic）。
+    private weak var pipController: (any VLCPictureInPictureWindowControlling)?
+
+    func attach(player: VLCMediaPlayer, drawable: UIView) {
+        self.player = player
+        self.drawable = drawable
+    }
+
+    // MARK: VLCDrawable —— UIKit 必须在主线程；后台回调则派发并同步等待结果。
+    func addSubview(_ view: UIView) {
+        if Thread.isMainThread {
+            drawable?.addSubview(view)
+        } else {
+            DispatchQueue.main.sync { [weak self] in
+                guard let drawable = self?.drawable else { return }
+                drawable.addSubview(view)
+            }
+        }
+    }
+
+    func bounds() -> CGRect {
+        if Thread.isMainThread { return drawable?.bounds ?? .zero }
+        var result = CGRect.zero
+        DispatchQueue.main.sync { [weak self] in
+            result = self?.drawable?.bounds ?? .zero
+        }
+        return result
+    }
+
+    // MARK: VLCPictureInPictureDrawable
+    func mediaController() -> Any { self }
+
+    /// 官方：`__weak typeof(self) drawable = self; return ^(id pipController){ drawable.pipController = pipController; };`
+    func pictureInPictureReady() -> ((Any) -> Void) {
+        weak var weakSelf = self
+        return { controller in
+            weakSelf?.pipController = controller as? (any VLCPictureInPictureWindowControlling)
+        }
+    }
+
+    // MARK: VLCPictureInPictureMediaControlling —— 读数直接问 player，任意线程安全。
+    func mediaLength() -> Int64 { Int64(player?.media?.length.intValue ?? 0) }
+    func mediaTime() -> Int64 { Int64(player?.time.intValue ?? 0) }
+    func isMediaSeekable() -> Bool { player?.isSeekable ?? false }
+    func isMediaPlaying() -> Bool { player?.isPlaying ?? false }
+
+    /// 官方的 play/pause/seek 直接作用于 _mediaPlayer；这里同步执行，对齐官方且不引入线程陷阱。
+    func play() { player?.play() }
+    func pause() { player?.pause() }
+    func seekBy(_ offset: Int64, completion: @escaping () -> Void) {
+        guard let player else { completion(); return }
+        player.jumpWithOffset(Int32(offset)) { completion() }
+    }
+
+    // MARK: 客户端侧控制（SwiftUI 按钮 / 播放回调调用）
+    func startPictureInPicture() { pipController?.startPictureInPicture() }
+    func stopPictureInPicture() { pipController?.stopPictureInPicture() }
+    func invalidatePlaybackState() { pipController?.invalidatePlaybackState() }
 }
 
 /// 全屏的 VLC 播放页。外观与 App 自己的播放器一致：黑底、顶部标题、底部控制条。
@@ -448,8 +635,13 @@ struct CatVodVLCVideoView: View {
                     Text(failure)
                         .font(.system(size: 15))
                         .multilineTextAlignment(.center)
-                    Button("返回") { onClose() }
-                        .buttonStyle(.borderedProminent)
+                    // 与系统播放器失败页一致：给一次就地重试，不用退出重进这一集。
+                    HStack(spacing: DSSpacing.md) {
+                        Button(localized("重试")) { model.retry() }
+                            .buttonStyle(.bordered)
+                        Button("返回") { onClose() }
+                            .buttonStyle(.borderedProminent)
+                    }
                 }
                 .foregroundStyle(.white)
                 .padding(28)
@@ -737,6 +929,13 @@ struct CatVodVLCVideoView: View {
                         .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
                 }
                 .accessibilityLabel(localized("旋转画面"))
+                // 画中画：VLCKit 官方 PiP（VLCPictureInPictureDrawable + 桥），与系统内核同款图标。
+                Button { model.startPictureInPicture() } label: {
+                    Image(systemName: "picture.in.picture")
+                        .font(DSFont.toolbarIcon)
+                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                }
+                .accessibilityLabel(localized("画中画"))
                 // 横/竖屏切换：用户反馈的痛点——VLC 内核此前竖屏无法转横屏。
                 Button {
                     let next: FixedLayoutOrientation = {

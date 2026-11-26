@@ -1,3 +1,4 @@
+import Foundation
 import YueduCoreText
 import SwiftUI
 import GoogleSignIn
@@ -583,11 +584,26 @@ enum ChapterUpdater {
                 positionStore: AppDependencies.live.readingPositionStore
             )
         } catch {
-            AppLogger.network(
-                "Failed to auto-update book TOC",
-                error: error,
-                context: ["bookId": book.id.uuidString, "title": book.title]
-            )
+            // A deleted source leaves the book's bookSourceId dangling. The refresh throws
+            // BookStore code -3 (-1 on the switch path) with "找不到来源配置" before any
+            // network work. Keep bookSourceId intact so re-importing that source can still
+            // rebind this book; just don't log the same non-actionable failure at ERROR on
+            // every shelf refresh pass.
+            let nsError = error as NSError
+            if nsError.domain == "BookStore", (nsError.code == -3 || nsError.code == -1) {
+                AppLogger.network(
+                    "Skipped auto-update: book's source is no longer configured",
+                    level: .notice,
+                    context: ["bookId": book.id.uuidString, "title": book.title,
+                              "sourceId": book.bookSourceId?.uuidString ?? "nil"]
+                )
+            } else {
+                AppLogger.network(
+                    "Failed to auto-update book TOC",
+                    error: error,
+                    context: ["bookId": book.id.uuidString, "title": book.title]
+                )
+            }
         }
     }
 }

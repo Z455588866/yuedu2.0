@@ -570,18 +570,30 @@ private enum CardKeyStore {
 }
 
 /// 设备标识：Keychain 里的一个 UUID，卸载重装不会变。
+///
+/// 2.4 之前这条记录存在 `com.yuedu.reader.cardkey` 名下，后来改成了
+/// `com.yuedu.reader.identity`。Keychain 按 service 名隔离，改名之后老用户
+/// 那条记录就读不到了，App 会当成新设备重新生成 UUID —— 用户看到的就是
+/// 「升级之后会员没了，还得重新买」。所以这里保留旧名字做回退：新名字读不到
+/// 就去翻旧的，翻到就迁移到新名字下，此后只用新名字。
 private enum CardKeyDeviceIdentity {
     private static let service = "com.yuedu.reader.identity"
+    /// 旧版本用过的 service 名，只读不写（只用于一次性迁移）。
+    private static let legacyService = "com.yuedu.reader.cardkey"
     private static let account = "device_id"
 
     static func current() -> String {
-        if let existing = read(), !existing.isEmpty { return existing }
+        if let existing = read(service: service), !existing.isEmpty { return existing }
+        if let legacy = read(service: legacyService), !legacy.isEmpty {
+            write(legacy, service: service)
+            return legacy
+        }
         let created = UUID().uuidString
-        write(created)
+        write(created, service: service)
         return created
     }
 
-    private static func baseQuery() -> [String: Any] {
+    private static func baseQuery(service: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -589,8 +601,8 @@ private enum CardKeyDeviceIdentity {
         ]
     }
 
-    private static func read() -> String? {
-        var query = baseQuery()
+    private static func read(service: String) -> String? {
+        var query = baseQuery(service: service)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -602,10 +614,10 @@ private enum CardKeyDeviceIdentity {
         return value
     }
 
-    private static func write(_ value: String) {
-        SecItemDelete(baseQuery() as CFDictionary)
+    private static func write(_ value: String, service: String) {
+        SecItemDelete(baseQuery(service: service) as CFDictionary)
 
-        var attributes = baseQuery()
+        var attributes = baseQuery(service: service)
         attributes[kSecValueData as String] = Data(value.utf8)
         // 首次解锁后可读：后台校验也能拿到，且不会因为锁屏失败
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock

@@ -27,6 +27,13 @@ enum CatVodPlaybackRoute: Sendable, Equatable {
         "rm", "rmvb", "mpg", "mpeg", "vob", "divx", "xvid", "m2ts",
     ]
 
+    /// 系统播放器的强项格式。代理后扩展名丢失又 sniff 超时时，靠它们把
+    /// HLS/MP4/纯音频从 loopback→VLC 兜底里救回来（走错内核的正是这几类）。
+    static let systemOnlyExtensions: Set<String> = [
+        "m3u8", "m3u", "ts", "mpd", "mp4", "m4v", "mov",
+        "m4a", "m4b", "mp3", "aac", "wav", "flac", "ogg",
+    ]
+
     static func decide(url: URL, headers: [String: String]) async -> CatVodPlaybackRoute {
         // 本地网关（127.0.0.1）的路径是 /v1/media 之类，没有扩展名，只能读字节。
         let name = url.lastPathComponent
@@ -49,9 +56,42 @@ enum CatVodPlaybackRoute: Sendable, Equatable {
         //   旧代码一律 return .system，而 AVFoundation 根本解不了网盘的 MKV，
         //   结果就是「无可用资源」黑屏（FongMi/TV 的做法是默认用能力最强的内核，
         //   只有明确认出是系统强项才给系统，而不是反过来）。
-        // 本地网关代理（127.0.0.1）来源几乎都是网盘/转码容器，读不到头也该交给 VLC。
+        // 这里优先看代理 URL 里编码的「原始格式」：m3u8/mp4/m4a 是系统强项，
+        // 明确认出的 VLC 容器走 VLC，两者都不是才沿用原来的 PROXY 兜底。
+        // 真 MKV 走上面 sniff 命中 EBML 的分支，不受这里影响。
+        if let hint = originalExtension(of: url) {
+            if vlcOnlyExtensions.contains(hint) { return .vlc(reason: hint.uppercased()) }
+            if systemOnlyExtensions.contains(hint) { return .system }
+        }
         if isLoopback(url) { return .vlc(reason: "PROXY") }
         return .system
+    }
+
+    /// 网关把原始地址编码进代理 URL 的 `?s=`（见 CatVodGateway.proxyURL），
+    /// 扩展名因此丢失。路由决策和 VLC 内核都需要知道代理前的格式，统一在这里还原。
+    /// 解不出来只返回 nil，调用方沿用原有兜底，绝不让解析失败改变既有行为。
+    static func originalExtension(of url: URL) -> String? {
+        // 未走代理（或代理不可用时）的直链，路径里本来就有扩展名。
+        let direct = (url.lastPathComponent as NSString).pathExtension.lowercased()
+        if !direct.isEmpty { return direct }
+        guard let specText = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "s" })?.value else { return nil }
+        // 代理 spec 用 URL-safe 且去掉 padding 的 base64，解码方式必须和网关一致。
+        var base64 = specText.replacingOccurrences(of: "-", with: "+")
+                             .replacingOccurrences(of: "_", with: "/")
+        while base64.count % 4 != 0 { base64 += "=" }
+        guard let data = Data(base64Encoded: base64),
+              let spec = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        // 公网源：u 是原始完整地址；回环源：p 是原始 path（可能带 query）。
+        if let original = spec["u"] as? String, let ext = extensionFromPath(original) { return ext }
+        if let path = spec["p"] as? String, let ext = extensionFromPath(path) { return ext }
+        return nil
+    }
+
+    private static func extensionFromPath(_ path: String) -> String? {
+        let withoutQuery = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
+        let ext = (withoutQuery as NSString).pathExtension.lowercased()
+        return ext.isEmpty ? nil : ext
     }
 
     private static func isLoopback(_ url: URL) -> Bool {

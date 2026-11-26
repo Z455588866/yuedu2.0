@@ -29,9 +29,23 @@ final class CatVodService {
         warmedBundles.remove(bundleURL)
     }
 
+    /// bundle URL 里夹了没转义的空格/控制字符时，网关会下载失败并静默降级成 0 站点，
+    /// 界面只剩空白。在触发下载前拦下来，让人一眼知道该改地址而不是怀疑 App 坏了。
+    private func validate(bundleURL: String) throws {
+        let illegal = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
+        guard !bundleURL.isEmpty, bundleURL.rangeOfCharacter(from: illegal) == nil else {
+            let shown = String(bundleURL.prefix(120))
+            throw CatVodError.http(
+                -8,
+                localized("接口地址无效：含有空格或非法字符（\(shown)）。请把空格改成 %20，或重新复制一个完整的地址")
+            )
+        }
+    }
+
     /// Loads the site catalog exposed by a CatVod bundle. Starts the engine with this bundle
     /// allowlisted, then asks the gateway for its sites.
     func catalog(bundleURL: String) async throws -> [CatVodSite] {
+        try validate(bundleURL: bundleURL)
         let base = try await CatVodGateway.shared.ensureStarted(allowedBundleURL: bundleURL)
         let endpoint = base.appendingPathComponent("/v1/catvod/catalog")
         let object = try await post(endpoint, body: ["bundle": bundleURL])
