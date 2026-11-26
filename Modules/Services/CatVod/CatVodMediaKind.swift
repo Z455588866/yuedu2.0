@@ -86,6 +86,22 @@ extension CatVodMediaKind {
         return .video
     }
 
+    /// 图片列表的最低成本确认：至少一张带图片扩展名，且没有音频/视频扩展名。
+    /// 不能只看 http 前缀——签名 CDN 的多档 m3u8/mp4 列表也是 http URL 列表，
+    /// 一旦被判成漫画就会破坏原有的视频播放。扩展名走 URL.pathExtension，
+    /// 不扫 query（query 里常带封面 jpg，扫了会把视频误判成图片）。
+    private static func looksLikeImageList(_ tokens: [String]) -> Bool {
+        guard !tokens.isEmpty else { return false }
+        var sawImage = false
+        for token in tokens {
+            let ext = URL(string: token.trimmingCharacters(in: .whitespacesAndNewlines))?
+                .pathExtension.lowercased() ?? ""
+            if audioExtensions.contains(ext) || videoExtensions.contains(ext) { return false }
+            if imageExtensions.contains(ext) { sawImage = true }
+        }
+        return sawImage
+    }
+
     /// 把猫源漫画的播放结果转成 `MangaChapterParser.parsedImages` 能直接吃的内容。
     /// 返回 nil 表示不是漫画地址。已知的猫源/图库漫画格式：
     /// - `mange://https://img1&&https://img2`（包子漫画）；
@@ -140,15 +156,18 @@ extension CatVodMediaKind {
                 let lowered = $0.lowercased()
                 return lowered.hasPrefix("http://") || lowered.hasPrefix("https://")
             }
-            if http.count == array.count { return content }
+            if http.count == array.count, looksLikeImageList(array) { return content }
         }
 
-        // JSON 图片数组 / <img> HTML / 换行图片列表：与阅读器同一判定。
-        if MangaChapterParser.looksLikeMangaContent(content) { return content }
+        // JSON 图片数组 / <img> HTML / 换行图片列表：与阅读器同一判定，
+        // 再加一道图片扩展名确认，避免 m3u8/mp4 多档列表误入漫画阅读器。
+        if MangaChapterParser.looksLikeMangaContent(content),
+           looksLikeImageList(MangaChapterParser.imageURLs(from: content)) { return content }
 
-        // 单张图片直链：图库类源一集一张长图。视频地址不会以图片扩展名结尾，
-        // 误判风险为零；漫画阅读器按单页呈现。
-        if let ext = pathExtension(of: content), imageExtensions.contains(ext) {
+        // 单张图片直链：图库类源一集一张长图。只看 URL.pathExtension（不扫 query），
+        // `?file=x.mp4&cover=a.jpg` 这类签名视频链不会误判；视频地址本身不会以
+        // 图片扩展名结尾，漫画阅读器按单页呈现。
+        if let url = URL(string: content), imageExtensions.contains(url.pathExtension.lowercased()) {
             return content
         }
         return nil

@@ -1326,11 +1326,16 @@ struct CatVodHomeView: View {
                     do {
                         let native = try CatVodNativeBridge.bridge(
                             playback: playback, media: nativeMedia, site: site, store: bookStore)
-                        // 详情弹层还盖在本视图上：直接设 nativeContent 的 cover 会被
-                        // iOS 静默丢弃。先把内容存入 pending，弹层 onDismiss 再呈现。
-                        pendingNativeAfterDetailDismiss = CatVodNativeContent(
+                        let content = CatVodNativeContent(
                             kind: native.kind, bookID: native.bookID, title: native.title)
-                        detailItem = nil
+                        if detailItem == nil {
+                            // 用户在解析中途手动关掉了详情弹层：onDismiss 已经跑过，
+                            // 再等它就不会有第二次机会，直接呈现，避免内容丢失/串页。
+                            nativeContent = content
+                        } else {
+                            pendingNativeAfterDetailDismiss = content
+                            detailItem = nil
+                        }
                         lastPlayedEpisodeID = episode.id
                     } catch {
                         message = error.localizedDescription
