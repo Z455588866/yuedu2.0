@@ -84,6 +84,10 @@ struct VideoPlayerView: View {
     @State private var showsInfo = false
 
     var body: some View {
+        // 这一层 GeometryReader 只为拿到「可视区尺寸」，用来把下面的 ZStack 钉死，
+        // 见 .frame(width:height:) 处的说明。它不改变任何现有布局：
+        // proxy.size 就是现在 ZStack 实际占据的那块区域。
+        GeometryReader { proxy in
         ZStack {
             DSColor.videoPlayerBackground.ignoresSafeArea()
             if let controller {
@@ -127,62 +131,34 @@ struct VideoPlayerView: View {
                     .position(x: rect.midX, y: rect.midY)
                 }
                 .ignoresSafeArea()
-                // Kept in the tree and faded out instead of being removed: the overlay
-                // settings panels are presented from these buttons, and tearing the
-                // subtree down would dismiss a panel that is still being used.
-                controls(controller)
-                    .opacity(showsControls ? 1 : 0)
-                    .allowsHitTesting(showsControls)
-                    .accessibilityHidden(!showsControls)
-                if let pan, pan.kind == .seek, let range = controller.seekableRange {
-                    VideoSeekBadge(time: pan.value, end: range.upperBound, delta: pan.value - pan.origin)
-                }
-                // 亮度/音量调节浮层，照 tvbox 的 indicator（图标 + 百分比）。
-                if let pan, pan.kind == .brightness {
-                    VideoAdjustBadge(kind: .brightness, value: pan.value)
-                }
-                if let pan, pan.kind == .volume {
-                    VideoAdjustBadge(kind: .volume, value: pan.value)
-                }
-                // 锁屏语义对齐 B站 / 腾讯 / GSYVideoPlayer：锁屏后画面干净，中央**不常驻**
-                // 任何锁图标。点击屏幕时才让锁图标短暂闪现一下（lockHint 驱动），提示
-                // "已锁定，点此解锁"，随后自动消失；点这个闪现的图标才解锁。
-                // 之前把大黑圆常驻在画面正中、只在点击时变亮放大，既不成熟也膈应人。
-                if isLocked {
-                    Button {
-                        isLocked = false
-                        lockHint = false
-                        lockHintTask?.cancel()
-                        showsControls = true
-                        touched()
-                    } label: {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(14)
-                            .background(.black.opacity(0.55), in: Circle())
-                    }
-                    // 默认完全隐藏、不占命中；只有 flashLockHint 期间短暂出现且可点。
-                    .opacity(lockHint ? 1 : 0)
-                    .allowsHitTesting(lockHint)
-                    .accessibilityHidden(!lockHint)
-                    .animation(DSAnimation.fast, value: lockHint)
-                    .accessibilityLabel(localized("解锁屏幕"))
-                }
-                // 退出键不在这里画：由外层 `.overlay(alignment: .topLeading)`（closeButton）
-                // 单独盖在整棵播放器之上。写进这个 ZStack 会和控制条顶栏里同位置的
-                // 弹幕按钮抢同一块区域（顶栏在 ZStack 里后画，会把它盖住），
-                // 失败页曾经就是这样看不到 X。GSYVideoPlayer / B站的做法也是把返回键
-                // 作为独立浮层压在最上面，不跟着控制条走。
-                if showsInfo {
-                    VideoInfoPanel(lines: controller.playbackInfoLines)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .padding(.top, 92)
-                        .padding(.trailing, 14)
-                }
             } else {
                 ProgressView()
                     .tint(DSColor.textOnFixedFill)
+            }
+        }
+        // 把根视图的尺寸钉在「可视区」上，而不是让它跟着内容宽度走。
+        // 竖屏时顶栏一排图标（占位 + 弹幕 + 字幕 + 倍速 + AirPlay + 画面 + 旋转 + 信息 +
+        // 分享 ≈ 9 个 44pt）加起来比屏幕还宽，HStack 会把整个 ZStack 撑到屏幕外；
+        // ZStack 一宽、又居中，它的左边缘就落到负坐标，加在它上面的
+        // `.overlay(alignment: .topLeading)` 的 leading 边界也跟着跑到屏幕外面——
+        // X 只剩几个点在屏内，这就是「有个小叉但冒到屏幕外看不见」的真正原因。
+        // 钉成 proxy.size 后，overlay 的边界 = 屏幕边界，X 恒定落在安全区左上角。
+        // 顶栏本身一行不改，超出部分仍按原样绘制，行为与之前完全一致。
+        .frame(width: proxy.size.width, height: proxy.size.height)
+        // 控制层（控制条 / 进度提示 / 亮度音量 / 锁图标 / 播放信息）全部走 overlay，
+        // 不再作为 ZStack 的子视图——这是这次真正修掉「X 看不见」的地方。
+        // SwiftUI 的 ZStack 尺寸 = 所有子视图尺寸的并集：竖屏时顶栏一排图标
+        // （占位 + 弹幕 + 字幕 + 倍速 + AirPlay + 画面 + 旋转 + 信息 + 分享 ≈ 9×44pt）
+        // 放不下，HStack 先把自己变宽，再把整个 ZStack 撑到比屏幕还宽、然后居中，
+        // 左边缘就落到负坐标，挂在外层的退出键边界也跟着出屏——VLC 内核溢出小、
+        // 只剩几个点在屏内，系统内核顶栏项目更多、溢出更大，就完全看不见。
+        // overlay 的内容不参与父视图测量：父视图尺寸始终等于画面（= 屏幕），
+        // 控制条再宽也只在自己这一层里溢出，绝不会把退出键推出去。
+        // 这正是 Swiftfin（开源 Emby 客户端）的分层方式：画面层与 UI 层分开，
+        // UI 层的边界只由系统安全区决定，不由内容宽度决定。
+        .overlay {
+            if let controller {
+                chrome(controller)
             }
         }
         // 常驻退出键：独立浮层，压在所有内容（画面/手势层/控制条/失败页/信息面板）之上。
@@ -295,6 +271,7 @@ struct VideoPlayerView: View {
                 )
                 .presentationDetents([.medium, .large])
             }
+        }
         }
     }
 
@@ -483,6 +460,62 @@ struct VideoPlayerView: View {
 
     // MARK: Controls
 
+    /// 控制层：控制条 + 各类浮层。由 body 最外层的 `.overlay` 承载，
+    /// 因此**不参与画面层的尺寸测量**——顶栏再宽也撑不宽播放器根视图，
+    /// 退出键的位置不再受它影响（详见 body 里 `.overlay` 处的说明）。
+    private func chrome(_ controller: VideoPlaybackController) -> some View {
+        ZStack {
+            // Kept in the tree and faded out instead of being removed: the overlay
+            // settings panels are presented from these buttons, and tearing the
+            // subtree down would dismiss a panel that is still being used.
+            controls(controller)
+                .opacity(showsControls ? 1 : 0)
+                .allowsHitTesting(showsControls)
+                .accessibilityHidden(!showsControls)
+            if let pan, pan.kind == .seek, let range = controller.seekableRange {
+                VideoSeekBadge(time: pan.value, end: range.upperBound, delta: pan.value - pan.origin)
+            }
+            // 亮度/音量调节浮层，照 tvbox 的 indicator（图标 + 百分比）。
+            if let pan, pan.kind == .brightness {
+                VideoAdjustBadge(kind: .brightness, value: pan.value)
+            }
+            if let pan, pan.kind == .volume {
+                VideoAdjustBadge(kind: .volume, value: pan.value)
+            }
+            // 锁屏语义对齐 B站 / 腾讯 / GSYVideoPlayer：锁屏后画面干净，中央**不常驻**
+            // 任何锁图标。点击屏幕时才让锁图标短暂闪现一下（lockHint 驱动），提示
+            // "已锁定，点此解锁"，随后自动消失；点这个闪现的图标才解锁。
+            // 之前把大黑圆常驻在画面正中、只在点击时变亮放大，既不成熟也膈应人。
+            if isLocked {
+                Button {
+                    isLocked = false
+                    lockHint = false
+                    lockHintTask?.cancel()
+                    showsControls = true
+                    touched()
+                } label: {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(14)
+                        .background(.black.opacity(0.55), in: Circle())
+                }
+                // 默认完全隐藏、不占命中；只有 flashLockHint 期间短暂出现且可点。
+                .opacity(lockHint ? 1 : 0)
+                .allowsHitTesting(lockHint)
+                .accessibilityHidden(!lockHint)
+                .animation(DSAnimation.fast, value: lockHint)
+                .accessibilityLabel(localized("解锁屏幕"))
+            }
+            if showsInfo {
+                VideoInfoPanel(lines: controller.playbackInfoLines)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(.top, 92)
+                    .padding(.trailing, 14)
+            }
+        }
+    }
+
     private func controls(_ controller: VideoPlaybackController) -> some View {
         ZStack {
             LinearGradient(
@@ -520,6 +553,9 @@ struct VideoPlayerView: View {
                 // 竖屏图标多、宽度不够时这 44pt 会被优先压缩，顶部图标就顶到最左边，
                 // 和常驻 X 叠在一起。给占位最高布局优先级，保证 X 的位置永远留出来。
                 .layoutPriority(1)
+                // 只给优先级还不够：HStack 在总宽超出时仍会把低优先级的项压成 0，
+                // 这 44pt 是 X 的专属位置，宽度再紧也不许压。
+                .fixedSize()
             VStack(alignment: .leading, spacing: DSSpacing.xxs) {
                 Text(controller.book.title)
                     .font(DSFont.headline)

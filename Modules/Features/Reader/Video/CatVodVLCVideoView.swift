@@ -438,6 +438,8 @@ struct CatVodVLCVideoView: View {
     @State private var pictureRotation = 0
 
     var body: some View {
+        // 只为拿「可视区尺寸」把下面 ZStack 钉死，见 .frame(width:height:) 处的说明。
+        GeometryReader { proxy in
         ZStack {
             Color.black.ignoresSafeArea()
             // 画面、弹幕、字幕放进同一个「画面矩形」里，而不是各自铺满整窗：
@@ -524,55 +526,21 @@ struct CatVodVLCVideoView: View {
                 .foregroundStyle(.white)
                 .padding(28)
             }
-            // 控制条常驻视图树，只切透明度/命中：弹幕、字幕设置面板挂在它的按钮上，
-            // 若用 if 摘掉子树，面板会在用户还在调整时被一起关闭。
-            controls
-                .opacity(showsControls ? 1 : 0)
-                .allowsHitTesting(showsControls)
-                .accessibilityHidden(!showsControls)
-            if let pan, pan.kind == .seek {
-                VideoSeekBadge(time: pan.value, end: max(model.duration, 0.1),
-                               delta: pan.value - pan.origin)
-            }
-            if let pan, pan.kind == .brightness {
-                VideoAdjustBadge(kind: .brightness, value: pan.value)
-            }
-            if let pan, pan.kind == .volume {
-                VideoAdjustBadge(kind: .volume, value: pan.value)
-            }
-            // 锁屏语义对齐 B站 / 腾讯 / GSYVideoPlayer：锁屏后画面干净，中央**不常驻**
-            // 任何锁图标。点击屏幕时才让锁图标短暂闪现一下（lockHint 驱动），提示
-            // "已锁定，点此解锁"，随后自动消失；点这个闪现的图标才解锁。
-            if isLocked {
-                Button {
-                    isLocked = false
-                    lockHint = false
-                    lockHintTask?.cancel()
-                    showsControls = true
-                    scheduleHide()
-                } label: {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(14)
-                        .background(.black.opacity(0.55), in: Circle())
-                }
-                // 默认完全隐藏、不占命中；只有 flashLockHint 期间短暂出现且可点。
-                .opacity(lockHint ? 1 : 0)
-                .allowsHitTesting(lockHint)
-                .accessibilityHidden(!lockHint)
-                .animation(DSAnimation.fast, value: lockHint)
-                .accessibilityLabel(localized("解锁屏幕"))
-            }
-            // 退出键不在这里画：由外层 `.overlay(alignment: .topLeading)` 单独盖在整棵
-            // 播放器之上，和控制条顶栏（弹幕按钮同位置）不会互相遮挡。
-            if showsInfo {
-                VideoInfoPanel(lines: (info ?? VideoStreamInfo()).lines(
-                    pictureSize: model.videoSize, measuredBitrate: nil))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(.top, 92)
-                    .padding(.trailing, 14)
-            }
+        }
+        // 把根视图尺寸钉在「可视区」上，而不是跟着内容宽度走。
+        // 竖屏时顶栏一排图标（占位 + 弹幕 + 字幕 + 倍速 + AirPlay + 画面 + 旋转 + 信息 +
+        // 分享 ≈ 9 个 44pt）比屏幕还宽，HStack 会把整个 ZStack 撑到屏幕外；ZStack 一宽、
+        // 又居中，左边缘就落到负坐标，加在它上面的 `.overlay(alignment: .topLeading)`
+        // 的 leading 边界也跟着出屏——X 只剩几个点露在屏内，这就是「小叉冒到屏幕外」的
+        // 真正原因（与系统内核同一处问题、同一处修法）。
+        .frame(width: proxy.size.width, height: proxy.size.height)
+        // 控制层走 overlay，不再作为 ZStack 的子视图：SwiftUI 的 ZStack 尺寸是
+        // 所有子视图尺寸的并集，竖屏顶栏一排图标放不下时 HStack 会把整棵树撑到
+        // 屏幕外、再居中，退出键的父边界跟着出屏（系统内核同一处问题、同一处修法，
+        // 详见 VideoPlayerView 里的说明）。overlay 的内容不参与父视图测量，
+        // 所以控制条再宽也只会溢在自己那一层，不会把退出键推出去。
+        .overlay {
+            chrome
         }
         // 常驻退出键：独立浮层，压在所有内容之上，不依赖控制条/锁屏/失败态。
         .overlay(alignment: .topLeading) {
@@ -645,6 +613,7 @@ struct CatVodVLCVideoView: View {
             // 还原用户调过的屏幕亮度，别让其他页面跟着变暗。
             systemControls.restoreBrightness()
             if turnsWindow { ReaderOrientationController.shared.restoreDefault(in: window.windowScene) }
+        }
         }
     }
 
@@ -737,6 +706,60 @@ struct CatVodVLCVideoView: View {
         }
     }
 
+    /// 控制层：控制条 + 各类浮层。由 body 最外层的 `.overlay` 承载，
+    /// 因此不参与画面层的尺寸测量——顶栏再宽也撑不宽播放器根视图。
+    private var chrome: some View {
+        ZStack {
+            // 控制条常驻视图树，只切透明度/命中：弹幕、字幕设置面板挂在它的按钮上，
+            // 若用 if 摘掉子树，面板会在用户还在调整时被一起关闭。
+            controls
+                .opacity(showsControls ? 1 : 0)
+                .allowsHitTesting(showsControls)
+                .accessibilityHidden(!showsControls)
+            if let pan, pan.kind == .seek {
+                VideoSeekBadge(time: pan.value, end: max(model.duration, 0.1),
+                               delta: pan.value - pan.origin)
+            }
+            if let pan, pan.kind == .brightness {
+                VideoAdjustBadge(kind: .brightness, value: pan.value)
+            }
+            if let pan, pan.kind == .volume {
+                VideoAdjustBadge(kind: .volume, value: pan.value)
+            }
+            // 锁屏语义对齐 B站 / 腾讯 / GSYVideoPlayer：锁屏后画面干净，中央**不常驻**
+            // 任何锁图标。点击屏幕时才让锁图标短暂闪现一下（lockHint 驱动），提示
+            // "已锁定，点此解锁"，随后自动消失；点这个闪现的图标才解锁。
+            if isLocked {
+                Button {
+                    isLocked = false
+                    lockHint = false
+                    lockHintTask?.cancel()
+                    showsControls = true
+                    scheduleHide()
+                } label: {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(14)
+                        .background(.black.opacity(0.55), in: Circle())
+                }
+                // 默认完全隐藏、不占命中；只有 flashLockHint 期间短暂出现且可点。
+                .opacity(lockHint ? 1 : 0)
+                .allowsHitTesting(lockHint)
+                .accessibilityHidden(!lockHint)
+                .animation(DSAnimation.fast, value: lockHint)
+                .accessibilityLabel(localized("解锁屏幕"))
+            }
+            if showsInfo {
+                VideoInfoPanel(lines: (info ?? VideoStreamInfo()).lines(
+                    pictureSize: model.videoSize, measuredBitrate: nil))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(.top, 92)
+                    .padding(.trailing, 14)
+            }
+        }
+    }
+
     private var controls: some View {
         VStack {
             HStack(spacing: DSSpacing.md) {
@@ -747,6 +770,8 @@ struct CatVodVLCVideoView: View {
                     // 竖屏图标多、宽度不够时这 44pt 会被优先压缩，顶部图标就顶到最左边，
                     // 和常驻 X 叠在一起。给占位最高布局优先级，保证 X 的位置永远留出来。
                     .layoutPriority(1)
+                    // 这 44pt 是 X 的专属位置，宽度再紧也不许压成 0。
+                    .fixedSize()
                 Text(title)
                     .font(DSFont.headline)
                     .lineLimit(1)
