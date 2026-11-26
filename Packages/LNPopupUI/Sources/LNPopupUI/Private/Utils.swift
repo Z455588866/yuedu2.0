@@ -95,16 +95,14 @@ internal struct TitleContentView : View {
 	
 	var body: some View {
 		if let popupBar {
-			// These are private LNPopupBar keys. A rename on a new iOS must not take
-			// down the now-playing bar: fall back to the SwiftUI environment instead.
-			let titleFont = popupBar.value(forKey: "_titleFont") as? CTFont
-			let subtitleFont = popupBar.value(forKey: "_subtitleFont") as? CTFont
-			let titleColor = popupBar.value(forKey: "_titleColor") as? UIColor
-			let subtitleColor = popupBar.value(forKey: "_subtitleColor") as? UIColor
+			let titleFont = popupBar.value(forKey: "_titleFont") as! CTFont
+			let subtitleFont = popupBar.value(forKey: "_subtitleFont") as! CTFont
+			let titleColor = popupBar.value(forKey: "_titleColor") as! UIColor
+			let subtitleColor = popupBar.value(forKey: "_subtitleColor") as! UIColor
 			
 			VStack(spacing: 2) {
-				titleView.font(font ?? titleFont.map { Font($0) }).foregroundColor(titleColor.map { Color($0) })
-				subtitleView?.font(font ?? subtitleFont.map { Font($0) }).foregroundColor(subtitleColor.map { Color($0) })
+				titleView.font(font ?? Font(titleFont)).foregroundColor(Color(titleColor))
+				subtitleView?.font(font ?? Font(subtitleFont)).foregroundColor(Color(subtitleColor))
 			}.lineLimit(1)
 		}
 	}
