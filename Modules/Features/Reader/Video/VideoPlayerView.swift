@@ -169,34 +169,11 @@ struct VideoPlayerView: View {
                     .animation(DSAnimation.fast, value: lockHint)
                     .accessibilityLabel(localized("解锁屏幕"))
                 }
-                // 左上角常驻退出键：无条件显示，不随控制条收起、锁屏或失败态消失。
-                // 用户实际使用中出现过「失败页没有 X、只剩无效重试、无法退出」——
-                // 任何依赖状态隐藏退出键的写法都不可靠，退出路径必须永远在场。
-                // 锁屏时这个 X 仍可点（锁屏只禁用手势和拖动，不禁用关闭）。
-                //
-                // 命中可靠性（此前「X 点不动」的根因在此规避）：
-                // SwiftUI 中 Spacer 与空的 HStack/VStack 本身不参与命中测试，只有 Button
-                // 自身可点，其余区域的点击穿透到下层手势层。
-                // 绝不能给这个容器加 `.allowsHitTesting(false)`——那会让整棵子树（含子按钮）
-                // 退出命中测试、子按钮写 true 也救不回来，这正是此前「X 点不动」的根因。
-                // `.contentShape(Circle())` 把命中区明确为圆形本身，不随 label 尺寸漂移。
-                VStack {
-                    HStack {
-                        Button { onClose() } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
-                                .background(.black.opacity(0.45), in: Circle())
-                        }
-                        .contentShape(Circle())
-                        .accessibilityLabel(localized("关闭"))
-                        Spacer()
-                    }
-                    Spacer()
-                }
-                .padding(.leading, 14)
-                .padding(.top, 8)
+                // 退出键不在这里画：由外层 `.overlay(alignment: .topLeading)`（closeButton）
+                // 单独盖在整棵播放器之上。写进这个 ZStack 会和控制条顶栏里同位置的
+                // 弹幕按钮抢同一块区域（顶栏在 ZStack 里后画，会把它盖住），
+                // 失败页曾经就是这样看不到 X。GSYVideoPlayer / B站的做法也是把返回键
+                // 作为独立浮层压在最上面，不跟着控制条走。
                 if showsInfo {
                     VideoInfoPanel(lines: controller.playbackInfoLines)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
@@ -207,6 +184,24 @@ struct VideoPlayerView: View {
                 ProgressView()
                     .tint(DSColor.textOnFixedFill)
             }
+        }
+        // 常驻退出键：独立浮层，压在所有内容（画面/手势层/控制条/失败页/信息面板）之上。
+        // 不依赖 showsControls、isLocked、phase——失败页、锁屏、竖屏都必须能退出。
+        // 命中区用 `.contentShape(Circle())` 明确为圆形本身，避开容器空白区不参与命中的坑。
+        .overlay(alignment: .topLeading) {
+            Button { onClose() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                    .background(.black.opacity(0.45), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 14)
+            .padding(.top, 8)
+            .zIndex(999)
+            .accessibilityLabel(localized("关闭"))
         }
         .readerWindowProbe(window)
         .statusBarHidden(!showsControls)

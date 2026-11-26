@@ -564,37 +564,8 @@ struct CatVodVLCVideoView: View {
                 .animation(DSAnimation.fast, value: lockHint)
                 .accessibilityLabel(localized("解锁屏幕"))
             }
-            // 左上角常驻退出键：控制条几秒后就会自动收起，顶栏那个 X 会跟着消失，
-            // 竖屏窄屏又没有系统返回手势，用户就没法退出这一集。这个 X 不依赖
-            // showsControls——控制条显示时常驻键也在（与控制条顶栏的 X 同位置、同
-            // 功能，由这一层负责点击），控制条收起后更不会消失。锁屏时隐藏，交给
-            // 中央解锁按钮，与 B站/腾讯视频的锁屏语义一致。
-            // 左上角常驻退出键：无条件显示，不随控制条收起、锁屏或失败态消失。
-            // 用户实际使用中出现过「失败页没有 X、只剩无效重试、无法退出」——
-            // 任何依赖状态隐藏退出键的写法都不可靠，退出路径必须永远在场。
-            // 锁屏只禁用手势和拖动，不禁用关闭。
-            //
-            // 命中可靠性（此前「X 点不动」的根因在此规避）：
-            // SwiftUI 中 VStack/HStack/Spacer 的空白区本就不拦截点击，事件照常穿透到手势层，
-            // 只有圆形按钮自身可点。绝不能给容器加 `.allowsHitTesting(false)`；
-            // `.contentShape(Circle())` 把命中区明确为圆形本身。
-            VStack {
-                HStack {
-                    Button { onClose() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
-                            .background(.black.opacity(0.45), in: Circle())
-                    }
-                    .contentShape(Circle())
-                    .accessibilityLabel(localized("关闭"))
-                    Spacer()
-                }
-                Spacer()
-            }
-            .padding(.leading, 14)
-            .padding(.top, 8)
+            // 退出键不在这里画：由外层 `.overlay(alignment: .topLeading)` 单独盖在整棵
+            // 播放器之上，和控制条顶栏（弹幕按钮同位置）不会互相遮挡。
             if showsInfo {
                 VideoInfoPanel(lines: (info ?? VideoStreamInfo()).lines(
                     pictureSize: model.videoSize, measuredBitrate: nil))
@@ -602,6 +573,22 @@ struct CatVodVLCVideoView: View {
                     .padding(.top, 92)
                     .padding(.trailing, 14)
             }
+        }
+        // 常驻退出键：独立浮层，压在所有内容之上，不依赖控制条/锁屏/失败态。
+        .overlay(alignment: .topLeading) {
+            Button { onClose() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
+                    .background(.black.opacity(0.45), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 14)
+            .padding(.top, 8)
+            .zIndex(999)
+            .accessibilityLabel(localized("关闭"))
         }
         .readerWindowProbe(window)
         .statusBarHidden(!showsControls)
