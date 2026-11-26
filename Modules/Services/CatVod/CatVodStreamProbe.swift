@@ -54,9 +54,6 @@ enum CatVodStreamProbe {
             // 网盘/大文件 CDN 对 Range 探测经常不回包，超时不代表不能播。这类地址
             // 交给 AVPlayer 自己谈，失败时播放器会带着自己的错误提示。
             if error.code == .timedOut, Self.isNetdiskCDN(url) { return .playable }
-            // 网盘/大文件 CDN 对 Range 探测经常不回包，超时不代表不能播。这类地址
-            // 交给 AVPlayer 自己谈，失败时播放器会带着自己的错误提示。
-            if error.code == .timedOut, Self.isNetdiskCDN(url) { return .playable }
             switch error.code {
             case .cannotFindHost, .dnsLookupFailed:
                 return .blocked(localized("这条线路的域名已失效（源站问题），换一条线路或换一个源"))

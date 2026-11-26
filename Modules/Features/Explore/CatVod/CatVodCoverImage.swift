@@ -117,6 +117,9 @@ struct CatVodCoverImage: View {
             }
         }
         .task(id: url) {
+            // cell 复用/换剧时 url 变了，先清掉上一张，避免新图落地前闪出旧封面
+            // （与详情页换剧时显式 detailPoster = nil 同一处理）。命中缓存会立即覆盖。
+            image = nil
             if let cached = CatVodCoverStore.shared.cached(url) {
                 image = cached
                 return

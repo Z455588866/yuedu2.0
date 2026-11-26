@@ -352,7 +352,13 @@ struct CatVodVLCVideoView: View {
     @State private var systemControls = VideoSystemControls()
     /// 锁定后手势层禁用拖动/双指，只留点击唤出解锁按钮。
     @State private var isLocked = false
+    /// 锁屏点击反馈：点画面只让中央锁图标短暂高亮（对齐 B站/腾讯/GSYVideoPlayer），
+    /// 绝不弹出控制条——控制条里的按钮在锁屏时应完全不可触及。
+    @State private var lockHint = false
+    @State private var lockHintTask: Task<Void, Never>?
     @State private var hideTask: Task<Void, Never>?
+    /// 片源弹幕的加载任务：退出/切集时取消，别让十几秒后才到的弹幕 adopt 到已销毁的视图。
+    @State private var danmakuLoadTask: Task<Void, Never>?
     /// 本播放器所在窗口。横竖屏请求必须发给它的 scene（iPad 多窗口/外接屏时不是 keyWindow）。
     @State private var window = ReaderWindowReference()
     /// 用户显式的横/竖选择；nil 表示跟随设备方向。
@@ -468,6 +474,7 @@ struct CatVodVLCVideoView: View {
             if isLocked {
                 Button {
                     isLocked = false
+                    lockHint = false
                     showsControls = true
                     scheduleHide()
                 } label: {
@@ -475,8 +482,11 @@ struct CatVodVLCVideoView: View {
                         .font(.system(size: 22, weight: .semibold))
                         .foregroundStyle(.white)
                         .padding(16)
-                        .background(.black.opacity(0.45), in: Circle())
+                        // 点画面时短暂高亮（成熟播放器锁屏反馈）；亮度由 lockHint 驱动。
+                        .background(.black.opacity(lockHint ? 0.85 : 0.45), in: Circle())
+                        .scaleEffect(lockHint ? 1.18 : 1)
                 }
+                .animation(DSAnimation.fast, value: lockHint)
                 .accessibilityLabel(localized("解锁屏幕"))
             }
             // 左上角常驻退出键：控制条几秒后就会自动收起，顶栏那个 X 会跟着消失，
@@ -520,11 +530,15 @@ struct CatVodVLCVideoView: View {
             clock.attach { [model] in (model.rawTime, model.isPlaying) }
             if let danmaku {
                 // 画面先起来，弹幕到了再叠——红果取整集弹幕要十几秒。
-                Task {
+                // 存句柄并加取消保护：退出/重进这一集时取消，避免迟到的弹幕写回已销毁视图。
+                danmakuLoadTask?.cancel()
+                danmakuLoadTask = Task {
                     if let items = await danmaku(), !items.isEmpty {
+                        guard !Task.isCancelled else { return }
                         danmakuController.adopt(items, title: title,
                                                 sourceName: localized("片源自带"))
                     } else {
+                        guard !Task.isCancelled else { return }
                         // 片源没给弹幕（接口挂了/这集没有）时退回按标题在线匹配，
                         // 与系统播放器行为一致，而不是让 VLC 内核一条弹幕都没有。
                         danmakuController.attach(title: title, episodeNumber: nil)
@@ -551,6 +565,8 @@ struct CatVodVLCVideoView: View {
         }
         .onDisappear {
             clock.detach()
+            lockHintTask?.cancel()
+            danmakuLoadTask?.cancel()
             model.stop()
             danmakuController.stop()
             subtitle.stop()
@@ -582,6 +598,10 @@ struct CatVodVLCVideoView: View {
         VideoGestureSurface(
             isLocked: isLocked,
             onTap: {
+                // 对齐 B站/腾讯/GSYVideoPlayer 的锁屏语义：锁屏时点画面只让中央锁图标
+                // 短暂高亮，提示"已锁定，请点锁图标解锁"，绝不弹出控制条。控制条里的
+                // 按钮在锁屏时必须完全不可触及。拖动/双指已被 VideoGestureSurface 禁用。
+                guard !isLocked else { flashLockHint(); return }
                 showsControls.toggle()
                 scheduleHide()
             },
@@ -764,20 +784,18 @@ struct CatVodVLCVideoView: View {
                     HStack(spacing: 10) {
                         Text(clock(scrubbing ?? model.time))
                             .monospacedDigit()
-                        Slider(
-                            value: Binding(
-                                get: { scrubbing ?? model.time },
-                                set: { scrubbing = $0 }
-                            ),
-                            in: 0...max(model.duration, 0.1),
-                            onEditingChanged: { editing in
-                                if !editing, let value = scrubbing {
-                                    model.seek(to: value)
-                                    scrubbing = nil
-                                }
+                        // 与系统播放器同款 ScrubSlider（FB-175）：SwiftUI Slider 在 iOS 上
+                        // 编辑会话不关闭、onEditingChanged(false) 永不触发，表现为拖了不 seek。
+                        ScrubSlider(
+                            value: scrubbing ?? model.time,
+                            bounds: 0...max(model.duration, 0.1),
+                            tint: .white,
+                            onScrub: { scrubbing = $0 },
+                            onCommit: { value in
+                                model.seek(to: value)
+                                scrubbing = nil
                             }
                         )
-                        .tint(.white)
                         Text(clock(model.duration))
                             .monospacedDigit()
                     }
@@ -826,6 +844,19 @@ struct CatVodVLCVideoView: View {
                scrubbing == nil, pan == nil, !isLocked {
                 showsControls = false
             }
+        }
+    }
+
+    /// 锁屏时点画面的反馈：只让中央锁图标短暂高亮，控制条保持收起。
+    /// 与 GSYVideoPlayer 的 mLockScreen 语义一致——给一个"这里是锁"的提示，
+    /// 但不做任何解锁/唤出控制条的动作。
+    private func flashLockHint() {
+        lockHint = true
+        lockHintTask?.cancel()
+        lockHintTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled else { return }
+            lockHint = false
         }
     }
 

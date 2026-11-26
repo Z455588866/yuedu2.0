@@ -64,6 +64,10 @@ struct VideoPlayerView: View {
     @State private var systemControls = VideoSystemControls()
     /// 锁定后手势层只剩点击（唤出/隐藏解锁按钮），拖动/双指都禁用。
     @State private var isLocked = false
+    /// 锁屏点击反馈：点画面只让中央锁图标短暂高亮（对齐 B站/腾讯/GSYVideoPlayer），
+    /// 绝不弹出控制条——控制条里的按钮在锁屏时应完全不可触及。
+    @State private var lockHint = false
+    @State private var lockHintTask: Task<Void, Never>?
     /// 画面摆放方式：适应 / 铺满（裁剪）/ 拉伸 / 原始尺寸，四档与 ijkplayer 一致。
     @State private var scalingMode: VideoScalingMode = .fit
     /// Manual quarter-turn correction for sideways-encoded streams (0/1/2/3).
@@ -142,6 +146,7 @@ struct VideoPlayerView: View {
                 if isLocked {
                     Button {
                         isLocked = false
+                        lockHint = false
                         showsControls = true
                         touched()
                     } label: {
@@ -149,8 +154,11 @@ struct VideoPlayerView: View {
                             .font(.system(size: 22, weight: .semibold))
                             .foregroundStyle(.white)
                             .padding(16)
-                            .background(.black.opacity(0.45), in: Circle())
+                            // 点画面时短暂高亮（成熟播放器锁屏反馈）；亮度由 lockHint 驱动。
+                            .background(.black.opacity(lockHint ? 0.85 : 0.45), in: Circle())
+                            .scaleEffect(lockHint ? 1.18 : 1)
                     }
+                    .animation(DSAnimation.fast, value: lockHint)
                     .accessibilityLabel(localized("解锁屏幕"))
                 }
                 // 左上角常驻退出键：控制条几秒后自动收起，顶栏那个 X 会跟着消失，
@@ -256,6 +264,7 @@ struct VideoPlayerView: View {
         }
         .onDisappear {
             clock.detach()
+            lockHintTask?.cancel()
             controller?.close()
             // 退出播放器把用户调过的屏幕亮度还原，别让阅读页也跟着变暗。
             systemControls.restoreBrightness()
@@ -362,6 +371,19 @@ struct VideoPlayerView: View {
         interaction += 1
     }
 
+    /// 锁屏时点画面的反馈：只让中央锁图标短暂高亮，控制条保持收起。
+    /// 与 GSYVideoPlayer 的 mLockScreen 语义一致——给一个"这里是锁"的提示，
+    /// 但不做任何解锁/唤出控制条的动作。
+    private func flashLockHint() {
+        lockHint = true
+        lockHintTask?.cancel()
+        lockHintTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled else { return }
+            lockHint = false
+        }
+    }
+
     // MARK: Gestures
 
     /// Under the controls: a tap shows or hides them, a long press plays faster while held
@@ -371,8 +393,10 @@ struct VideoPlayerView: View {
         VideoGestureSurface(
             isLocked: isLocked,
             onTap: {
-                // 锁屏时点击只把控制条叫回来（里面有解锁按钮）；拖动/双指已被
-                // VideoGestureSurface 禁用，避免误触改进度或亮度。
+                // 对齐 B站/腾讯/GSYVideoPlayer 的锁屏语义：锁屏时点画面只让中央锁图标
+                // 短暂高亮，提示"已锁定，请点锁图标解锁"，绝不弹出控制条。控制条里的
+                // 按钮在锁屏时必须完全不可触及。拖动/双指已被 VideoGestureSurface 禁用。
+                guard !isLocked else { flashLockHint(); return }
                 showsControls.toggle()
                 touched()
             },

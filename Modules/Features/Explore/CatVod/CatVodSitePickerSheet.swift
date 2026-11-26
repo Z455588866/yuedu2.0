@@ -19,9 +19,14 @@ struct CatVodSitePickerSheet: View {
         site.key.hasPrefix("py-")
     }
 
+    /// 全部在线站点（不过滤搜索词），用来区分「一个站点都没有」和「搜索没结果」。
+    private var allOnlineSites: [CatVodSite] {
+        sites.filter { !Self.isPython($0) }
+    }
+
     /// 过滤掉 py 源——它们有自己的固定面板。
     private var filtered: [CatVodSite] {
-        let online = sites.filter { !Self.isPython($0) }
+        let online = allOnlineSites
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return online }
         return online.filter { $0.name.localizedCaseInsensitiveContains(term)
@@ -62,7 +67,32 @@ struct CatVodSitePickerSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                if !filtered.isEmpty {
+                if filtered.isEmpty {
+                    // 与下面的 PythonSheet 同款空态：区分「一个站点都没有」和「搜索没结果」，
+                    // 后者给一键清除。以前这里整页空白，用户以为界面坏了。
+                    Section {
+                        VStack(spacing: 10) {
+                            Image(systemName: query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                  ? "tray" : "magnifyingglass")
+                                .font(.system(size: 34))
+                                .foregroundStyle(DSColor.textSecondary)
+                            if allOnlineSites.isEmpty {
+                                Text(localized("这个接口没有在线站点"))
+                                    .font(DSFont.headline)
+                                Text(localized("到「管理猫源」导入js/猫源接口后再来。"))
+                                    .font(DSFont.caption)
+                                    .foregroundStyle(DSColor.textSecondary)
+                                    .multilineTextAlignment(.center)
+                            } else {
+                                Text(localized("没有匹配的站点"))
+                                    .font(DSFont.headline)
+                                Button(localized("清除搜索")) { query = "" }
+                                    .font(DSFont.caption)
+                            }
+                        }
+                        .padding(.vertical, 24)
+                    }
+                } else {
                     Section {
                         ForEach(filtered) { site in row(site) }
                     } header: {

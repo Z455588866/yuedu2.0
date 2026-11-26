@@ -195,9 +195,15 @@ final class CatVodGateway {
             YueduNodeRuntime.updateConfiguration(json)
         }
 
-        // 引擎已经在跑：直接把地址给它，别重复 start（那会把正在服务的引擎重启一次，
-        // 已经在跑的请求全断）。allowlist 上面已经更新过了。
+        // 引擎已经在跑：把更新后的 allowlist 无条件推一次再返回。
+        // 以前把推送全押在下面那个 guard pythonSpiderPort>0 的后台 Task 上——没装
+        // Python 源或 Python 启动失败时端口恒为 0，推送永不发生，新导入的猫源被
+        // node 侧白名单挡成 403。allowlist 与 Python 无关，不该被它连坐。
+        // 不要重复 start（那会把正在服务的引擎重启、断了在跑的请求）。
         if let ready = baseURL, YueduNodeRuntime.listeningURL() != nil {
+            if let json = try? configurationJSON() {
+                YueduNodeRuntime.updateConfiguration(json)
+            }
             return ready
         }
         // 另一个调用方正在启动中：跟它一起等，不抢着重启。

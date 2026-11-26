@@ -67,11 +67,14 @@ final class CatVodSourceHealth {
         persist()
     }
 
-    func recordFailure(bundleURL: String, siteKey: String) {        let key = id(bundleURL: bundleURL, siteKey: siteKey)
+    func recordFailure(bundleURL: String, siteKey: String) {
+        let key = id(bundleURL: bundleURL, siteKey: siteKey)
         var record = records[key] ?? Record(failures: 0, downSince: nil)
-        // 冷却期已过还失败：重新计数，让它再拿一次机会而不是永久沉底。
+        // 冷却期已过还失败：按设计「失败一次就再次沉底」。预置到阈值-1，
+        // 这样下面 +1 后立即达到 failuresBeforePenalty，重新盖上 downSince。
+        // 之前重置成 0 会让坏站再骗过一次完整超时预算才沉底。
         if let since = record.downSince, Date().timeIntervalSince(since) >= Self.cooldown {
-            record = Record(failures: 0, downSince: nil)
+            record = Record(failures: Self.failuresBeforePenalty - 1, downSince: nil)
         }
         record.failures += 1
         if record.failures >= Self.failuresBeforePenalty, record.downSince == nil {

@@ -69,15 +69,25 @@ enum CatVodNativeBridge {
         }
 
         // 1) 虚拟书源：空内容规则 + 类型号；header 把猫源播放器拿到的 referer/UA 带过去。
-        var source = BookSource()
-        source.bookSourceName = "猫元·\(label(for: kind))"
-        source.bookSourceUrl = "catvod-native://\(kind.rawValue)/\(site?.key ?? "site")"
-        source.bookSourceType = kind == .audio ? 1 : (kind == .manga ? 2 : 0)
-        source.ruleContent.content = ""
-        source.header = headerJSON(playback.header ?? [:])
-        // 副作用：BookSourceStore.add(_:) 会落盘并进入书源列表与同步
-        // （BookSourceStore.swift:298-312）。重复点击会产生多条虚拟源，属已知取舍。
-        BookSourceStore.shared.add(source)
+        // 按 bookSourceUrl 复用已有虚拟源，不再每次点击都 add 一条——以前反复打开同一
+        // 站点会在用户的书源列表里堆出几十条「猫元·听书/漫画/小说」，还会触发同步写盘。
+        // 来源 url 由 kind+site 决定，是稳定身份；正文已预写缓存，header 差异不影响取内容。
+        let sourceURL = "catvod-native://\(kind.rawValue)/\(site?.key ?? "site")"
+        let sourceID: UUID
+        if let existing = BookSourceStore.shared.sources.first(where: {
+            $0.bookSourceUrl == sourceURL
+        }) {
+            sourceID = existing.id
+        } else {
+            var source = BookSource()
+            source.bookSourceName = "猫元·\(label(for: kind))"
+            source.bookSourceUrl = sourceURL
+            source.bookSourceType = kind == .audio ? 1 : (kind == .manga ? 2 : 0)
+            source.ruleContent.content = ""
+            source.header = headerJSON(playback.header ?? [:])
+            BookSourceStore.shared.add(source)
+            sourceID = source.id
+        }
 
         // 2) 章节引用：addOnlineBook 会用 ReaderHTMLUtilities 清洗 title，
         //    因此缓存里的 tocTitle 必须用同一份清洗后的值；sourceURL 原样使用。
@@ -90,7 +100,7 @@ enum CatVodNativeBridge {
         let book = store.addOnlineBook(
             name: media.name.isEmpty ? storedTitle : media.name,
             author: "",
-            sourceId: source.id,
+            sourceId: sourceID,
             bookInfoURL: chapterURL,
             coverUrl: media.cover,
             chapters: [chapter],

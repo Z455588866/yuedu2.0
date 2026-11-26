@@ -23,9 +23,11 @@ final class CatVodLiveModel {
 
     var visibleChannels: [CatVodLiveChannel] {
         let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // 搜索是全局的：输入关键词时搜全部频道，不受当前分组限制，否则别组的台搜不到。
+        let searching = !keyword.isEmpty
         return channels.filter { channel in
-            if let selectedGroup, channel.group != selectedGroup { return false }
-            guard !keyword.isEmpty else { return true }
+            if !searching, let selectedGroup, channel.group != selectedGroup { return false }
+            guard searching else { return true }
             return channel.name.lowercased().contains(keyword)
                 || channel.group.lowercased().contains(keyword)
         }
