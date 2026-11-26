@@ -299,7 +299,10 @@ class ReadingStatsStore: ObservableObject {
     /// builds are a bare `[ReadingSession]` array and are still accepted below.
     private struct ReadingStatsFile: Codable {
         var sessions: [ReadingSession] = []
-        var dailyGoalMinutes: Int = ReadingStatsStore.defaultDailyGoalMinutes
+        // 用字面值而非 ReadingStatsStore.defaultDailyGoalMinutes：后者在 @MainActor
+        // 隔离域内，本 struct 是 nonisolated，跨域取默认值在 Swift 6 下报
+        // "main actor-isolated default value in a nonisolated context"。
+        var dailyGoalMinutes: Int = 30
 
         private enum CodingKeys: String, CodingKey {
             case sessions, dailyGoalMinutes
@@ -315,7 +318,7 @@ class ReadingStatsStore: ObservableObject {
             sessions = try values.decodeIfPresent([ReadingSession].self, forKey: .sessions) ?? []
             dailyGoalMinutes = boundedReadingGoal(
                 try values.decodeIfPresent(Int.self, forKey: .dailyGoalMinutes)
-                    ?? ReadingStatsStore.defaultDailyGoalMinutes
+                    ?? 30
             )
         }
     }

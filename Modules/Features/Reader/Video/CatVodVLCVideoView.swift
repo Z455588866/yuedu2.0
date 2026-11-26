@@ -40,10 +40,6 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
     /// 画面容器。VLC 把像素直接画进这个 UIView，SwiftUI 只负责摆放它。
     let drawable = UIView(frame: .zero)
 
-    /// VLCKit 官方画中画桥。作为 `player.drawable` 同时提供绘图与 PiP 控制。
-    /// 强引用：VLCKit 内部持有 drawable，我们要在回调里稳定访问它；桥自身只弱引用
-    /// player / drawable / pipController，不会形成环。
-    private let pipBridge = CatVodVLCPiPBridge()
 
     private var player: VLCMediaPlayer?
     private var tickTask: Task<Void, Never>?
@@ -103,12 +99,7 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
             "--clock-synchro=0", "--clock-jitter=0",
         ])
         player.delegate = self
-        // VLCKit 官方示例：`_mediaPlayer.drawable = self`，self 同时 conform
-        // VLCDrawable + VLCPictureInPictureDrawable，在 addSubview/bounds 里把 VLC 的
-        // 视频输出 view 挂回真正的显示 UIView。这里由桥承担 self 的角色，画面仍挂回
-        // 原来的 drawable —— 缩放/旋转/frame 逻辑一点不改。
-        pipBridge.attach(player: player, drawable: drawable)
-        player.drawable = pipBridge
+        player.drawable = drawable
         // MobileVLCKit 的语义：scaleFactor 只有在 0（自动）时才会跟随 drawable 的尺寸变化。
         // 写死成别的值，之后改 drawable 的 frame 画面不会重排 —— 这也是「填满萤幕后画面没变」
         // 这类问题的常见根因。宽高比按当前档位应用（「拉伸」才需要覆盖）。
@@ -163,8 +154,6 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
 
     func togglePlayPause() {
         guard let player else { return }
-        // VLCKit 头注释要求每次播放状态变化都 invalidate，用户主动播放/暂停也算。
-        pipBridge.invalidatePlaybackState()
         // 播完停在 `.ended`：直接 play() 不会动，得换一个 media 从头来。
         if player.state == .ended {
             replay()
@@ -218,7 +207,6 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
 
     func seek(to seconds: Double) {
         guard let player, !isLive else { return }
-        pipBridge.invalidatePlaybackState()
         let target = max(0, min(seconds, duration > 0 ? duration : seconds))
         player.time = VLCTime(int: Int32(target * 1000))
         time = target
@@ -357,11 +345,7 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
     }
 
     nonisolated func mediaPlayerStateChanged(_ aNotification: Notification) {
-        Task { @MainActor [weak self] in
-            self?.stateChanged()
-            // 官方示例：状态变化后刷新 PiP 界面的播放/暂停按钮、时长等。
-            self?.pipBridge.invalidatePlaybackState()
-        }
+        Task { @MainActor [weak self] in self?.stateChanged() }
     }
 
     private func stateChanged() {
@@ -397,117 +381,7 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         }
     }
 
-    // MARK: - 画中画（VLCKit 官方 VLCPictureInPictureMediaControlling 的转发出口）
-    // 这些读数直接问 VLCMediaPlayer（NSObject 同步属性），不碰 @MainActor 状态，
-    // 因此 VLCKit 从任意线程回调都不会触发主线程断言——这是相对早期版本的关键修正。
-
-    /// 非主线程可读：PiP 窗口要实时进度，不能用 500ms 采样的 @Published 值。
-    func pipMediaTime() -> Int64 { Int64(player?.time.intValue ?? 0) }
-    func pipMediaLength() -> Int64 { Int64(player?.media?.length.intValue ?? 0) }
-    func pipIsSeekable() -> Bool { player?.isSeekable ?? false }
-    func pipIsPlaying() -> Bool { player?.isPlaying ?? false }
-
-    /// PiP 的播放/拖动要切换到主线程执行：这些会改 player 状态并可能走 replay()。
-    func pipPlay() {
-        guard let player else { return }
-        if player.state == .ended { replay(); return }
-        if !player.isPlaying { player.play() }
-    }
-
-    func pipPause() {
-        guard let player, player.isPlaying else { return }
-        player.pause()
-    }
-
-    /// offset 单位由 VLCKit 官方头注释指定为毫秒。
-    func pipSeekBy(_ offsetMs: Int64, completion: @escaping () -> Void) {
-        guard let player, !isLive else { completion(); return }
-        player.jumpWithOffset(Int32(offsetMs)) { completion() }
-    }
-
-    /// 控制条 PiP 按钮入口；pipController 由 VLCKit 在 pictureInPictureReady 里给到。
-    func startPictureInPicture() { pipBridge.startPictureInPicture() }
-
     static let safariUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-}
-
-/// VLCKit 官方画中画桥，逐条照搬 VideoLAN `Examples/iOS/VLCPictureInPicture/ViewController.m`：
-/// 官方让「显示视图」同时 conform VLCDrawable + VLCPictureInPictureDrawable，并让
-/// `mediaController` 返回自己（再 conform VLCPictureInPictureMediaControlling）。官方那个
-/// self 是 UIViewController —— 它只在 addSubview/bounds 里把 VLC 的视频输出 view
-/// 挂到真正的 movieView 上。这里用 NSObject 桥承担同一角色，Swift 6 下不受 @MainActor 隔离约束。
-///
-/// 线程处理（修复早期版本用 MainActor.assumeIsolated 会在后台回调直接崩溃的缺陷）：
-/// - 读数（mediaTime/mediaLength/...）直接问 VLCMediaPlayer 的同步属性，任意线程安全；
-/// - UIView 操作（addSubview/bounds）必须在主线程：主线程直接做，后台派发并同步等待；
-/// - 播放/拖动会改 player 状态，派发到主线程的 model 执行。
-/// @unchecked Sendable：桥的可变状态都是 attach 时写入的弱引用 + ready block 给出的
-/// pipController，按官方示例在主线程读写。
-final class CatVodVLCPiPBridge: NSObject, @unchecked Sendable,
-                                VLCDrawable,
-                                VLCPictureInPictureDrawable,
-                                VLCPictureInPictureMediaControlling {
-    private weak var player: VLCMediaPlayer?
-    /// 真正的画面容器，对应官方示例的 movieView。
-    private weak var drawable: UIView?
-    /// 刷新界面/启停 PiP 的控制器，由 pictureInPictureReady 的 block 给到（官方是 weak atomic）。
-    private weak var pipController: (any VLCPictureInPictureWindowControlling)?
-
-    func attach(player: VLCMediaPlayer, drawable: UIView) {
-        self.player = player
-        self.drawable = drawable
-    }
-
-    // MARK: VLCDrawable —— UIKit 必须在主线程；后台回调则派发并同步等待结果。
-    func addSubview(_ view: UIView) {
-        if Thread.isMainThread {
-            drawable?.addSubview(view)
-        } else {
-            DispatchQueue.main.sync { [weak self] in
-                guard let drawable = self?.drawable else { return }
-                drawable.addSubview(view)
-            }
-        }
-    }
-
-    func bounds() -> CGRect {
-        if Thread.isMainThread { return drawable?.bounds ?? .zero }
-        var result = CGRect.zero
-        DispatchQueue.main.sync { [weak self] in
-            result = self?.drawable?.bounds ?? .zero
-        }
-        return result
-    }
-
-    // MARK: VLCPictureInPictureDrawable
-    func mediaController() -> Any { self }
-
-    /// 官方：`__weak typeof(self) drawable = self; return ^(id pipController){ drawable.pipController = pipController; };`
-    func pictureInPictureReady() -> ((Any) -> Void) {
-        weak var weakSelf = self
-        return { controller in
-            weakSelf?.pipController = controller as? (any VLCPictureInPictureWindowControlling)
-        }
-    }
-
-    // MARK: VLCPictureInPictureMediaControlling —— 读数直接问 player，任意线程安全。
-    func mediaLength() -> Int64 { Int64(player?.media?.length.intValue ?? 0) }
-    func mediaTime() -> Int64 { Int64(player?.time.intValue ?? 0) }
-    func isMediaSeekable() -> Bool { player?.isSeekable ?? false }
-    func isMediaPlaying() -> Bool { player?.isPlaying ?? false }
-
-    /// 官方的 play/pause/seek 直接作用于 _mediaPlayer；这里同步执行，对齐官方且不引入线程陷阱。
-    func play() { player?.play() }
-    func pause() { player?.pause() }
-    func seekBy(_ offset: Int64, completion: @escaping () -> Void) {
-        guard let player else { completion(); return }
-        player.jumpWithOffset(Int32(offset)) { completion() }
-    }
-
-    // MARK: 客户端侧控制（SwiftUI 按钮 / 播放回调调用）
-    func startPictureInPicture() { pipController?.startPictureInPicture() }
-    func stopPictureInPicture() { pipController?.stopPictureInPicture() }
-    func invalidatePlaybackState() { pipController?.invalidatePlaybackState() }
 }
 
 /// 全屏的 VLC 播放页。外观与 App 自己的播放器一致：黑底、顶部标题、底部控制条。
@@ -929,13 +803,6 @@ struct CatVodVLCVideoView: View {
                         .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
                 }
                 .accessibilityLabel(localized("旋转画面"))
-                // 画中画：VLCKit 官方 PiP（VLCPictureInPictureDrawable + 桥），与系统内核同款图标。
-                Button { model.startPictureInPicture() } label: {
-                    Image(systemName: "picture.in.picture")
-                        .font(DSFont.toolbarIcon)
-                        .frame(width: DSLayout.minimumTapTarget, height: DSLayout.minimumTapTarget)
-                }
-                .accessibilityLabel(localized("画中画"))
                 // 横/竖屏切换：用户反馈的痛点——VLC 内核此前竖屏无法转横屏。
                 Button {
                     let next: FixedLayoutOrientation = {
