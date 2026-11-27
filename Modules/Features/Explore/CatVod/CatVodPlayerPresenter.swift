@@ -75,12 +75,14 @@ enum CatVodPlayerPresenter {
         let box = HostBox()
         // 播完一集：先关掉当前全屏播放器，再让上层解析并播下一集。
         // 必须等 dismiss 完成再回调，否则上一个播放器还占着屏，present 会被防重叠拦掉。
-        let ended: (@MainActor () -> Void)? = onNextEpisode.map { next in
-            return {
+        var ended: (@MainActor () -> Void)?
+        if let next = onNextEpisode {
+            let action: @MainActor () -> Void = {
                 box.host?.dismiss(animated: false) {
                     Task { @MainActor in next() }
                 }
             }
+            ended = action
         }
         let host = UIHostingController(rootView:
             VideoPlayerView(content: .link(stream, title: title), danmaku: danmaku,
@@ -140,12 +142,14 @@ enum CatVodPlayerPresenter {
                                    scene: UIWindowScene, on topVC: UIViewController) {
         final class HostBox { weak var host: UIViewController? }
         let box = HostBox()
-        let ended: (@MainActor () -> Void)? = onNextEpisode.map { next in
-            return {
+        var ended: (@MainActor () -> Void)?
+        if let next = onNextEpisode {
+            let action: @MainActor () -> Void = {
                 box.host?.dismiss(animated: false) {
                     Task { @MainActor in next() }
                 }
             }
+            ended = action
         }
         let host = UIHostingController(rootView:
             CatVodVLCVideoView(url: url, headers: headers, title: title, startAt: startAt,
