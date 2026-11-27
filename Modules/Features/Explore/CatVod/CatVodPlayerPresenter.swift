@@ -76,7 +76,7 @@ enum CatVodPlayerPresenter {
         // 播完一集：先关掉当前全屏播放器，再让上层解析并播下一集。
         // 必须等 dismiss 完成再回调，否则上一个播放器还占着屏，present 会被防重叠拦掉。
         let ended: (@MainActor () -> Void)? = onNextEpisode.map { next in
-            {
+            return {
                 box.host?.dismiss(animated: false) {
                     Task { @MainActor in next() }
                 }
@@ -141,7 +141,7 @@ enum CatVodPlayerPresenter {
         final class HostBox { weak var host: UIViewController? }
         let box = HostBox()
         let ended: (@MainActor () -> Void)? = onNextEpisode.map { next in
-            {
+            return {
                 box.host?.dismiss(animated: false) {
                     Task { @MainActor in next() }
                 }
