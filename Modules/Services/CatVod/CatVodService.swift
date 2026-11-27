@@ -875,7 +875,7 @@ final class CatVodService {
     /// Every spider action (catalog/home/category/detail/player/search…) funnels
     /// through here. Two transient gateway failures get one automatic retry:
     ///   - 502 "stopped/exited": the spider session was reclaimed and rebuilt.
-    ///   - NSURLErrorCannotConnectToHost / connectionReset / networkConnectionLost:
+    ///   - NSURLErrorCannotConnectToHost / networkConnectionLost:
     ///     a stale loopback connection was reused after the gateway went idle or
     ///     the app resumed from background. The export shows dozens of unrelated
     ///     nodejs sites failing in the same millisecond at ms=4~9 (TCP refused in
@@ -916,7 +916,7 @@ final class CatVodService {
         }
         if let urlError = error as? URLError {
             switch urlError.code {
-            case .cannotConnectToHost, .networkConnectionLost, .connectionReset:
+            case .cannotConnectToHost, .networkConnectionLost:
                 return true
             default:
                 return false
