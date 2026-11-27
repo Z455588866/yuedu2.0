@@ -46,9 +46,8 @@ final class CatVodService {
     /// allowlisted, then asks the gateway for its sites.
     func catalog(bundleURL: String) async throws -> [CatVodSite] {
         try validate(bundleURL: bundleURL)
-        let base = try await CatVodGateway.shared.ensureStarted(allowedBundleURL: bundleURL)
-        let endpoint = base.appendingPathComponent("/v1/catvod/catalog")
-        let object = try await post(endpoint, body: ["bundle": bundleURL])
+        let object = try await post("/v1/catvod/catalog", bundleURL: bundleURL,
+                                    body: ["bundle": bundleURL])
         // 网关在 bundle 下载/校验/启动/config 失败时会降级返回独立站点，并把真实
         // 原因放进 diagnostic。以前这里完全静默，界面只剩「右边空白」无从排查；
         // 现在把原因写进 App 日志（用户可导出），按接口 URL 与站点数一起打印。
@@ -87,9 +86,8 @@ final class CatVodService {
     /// Live playlists this bundle declares (`lives` in its config). Most JavaScript
     /// spiders have none — an empty array means "no live", not an error.
     func liveSources(bundleURL: String) async throws -> [CatVodLiveSource] {
-        let base = try await CatVodGateway.shared.ensureStarted(allowedBundleURL: bundleURL)
-        let endpoint = base.appendingPathComponent("/v1/catvod/catalog")
-        let object = try await post(endpoint, body: ["bundle": bundleURL])
+        let object = try await post("/v1/catvod/catalog", bundleURL: bundleURL,
+                                    body: ["bundle": bundleURL])
         guard let lives = object["lives"] as? [[String: Any]], !lives.isEmpty,
               let data = try? JSONSerialization.data(withJSONObject: lives) else { return [] }
         let sources = (try? decoder.decode([CatVodLiveSource].self, from: data)) ?? []
@@ -835,13 +833,13 @@ final class CatVodService {
         // bulk refreshes must not eat the 6000-line export window.
         let startedAt = Date()
         do {
-            let base = try await CatVodGateway.shared.ensureStarted(allowedBundleURL: bundleURL)
+            // cookie 要灌进 bundle 的池子，得先保证引擎在跑；ensureStarted 幂等。
+            _ = try await CatVodGateway.shared.ensureStarted(allowedBundleURL: bundleURL)
             // WebView 里登录/过挑战拿到的 cookie，先灌进 bundle 的 Cookie 池，
             // 否则同一个站点在浏览器里是登录态、在 spider 里是游客态。
             if shouldSeedCookies(bundleURL) {
                 await seedCookies(bundleURL: bundleURL)
             }
-            let endpoint = base.appendingPathComponent("/v1/spider/invoke")
             let body: [String: Any] = [
                 "version": 1,
                 "action": action,
@@ -854,7 +852,9 @@ final class CatVodService {
                 ],
                 "arguments": arguments
             ]
-            let result = try await post(endpoint, body: body, timeout: timeout)
+            // post 在连接被拒时会重新 ensureStarted 拿网关当前端口再打一次。
+            let result = try await post("/v1/spider/invoke", bundleURL: bundleURL,
+                                        body: body, timeout: timeout)
             let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
             if ["catalog", "home", "category", "detail", "player", "search"].contains(action) {
                 // site.key is an identifier, never a credential; api/arguments are
@@ -872,22 +872,57 @@ final class CatVodService {
         }
     }
 
-    private func post(_ endpoint: URL, body: [String: Any],
+    /// Every spider action (catalog/home/category/detail/player/search…) funnels
+    /// through here. Two transient gateway failures get one automatic retry:
+    ///   - 502 "stopped/exited": the spider session was reclaimed and rebuilt.
+    ///   - NSURLErrorCannotConnectToHost / connectionReset / networkConnectionLost:
+    ///     a stale loopback connection was reused after the gateway went idle or
+    ///     the app resumed from background. The export shows dozens of unrelated
+    ///     nodejs sites failing in the same millisecond at ms=4~9 (TCP refused in
+    ///     a few ms — not a source timeout), then all `ok` again seconds later.
+    ///     That is a dead connection, not a broken source; replaying the read on a
+    ///     fresh connection is what "点一下又能上" does by hand. Re-running
+    ///     `ensureStarted` also re-pushes config in case the engine was restarted.
+    /// A genuinely dead engine cannot be revived in-process (native `start`
+    /// returns while its thread lives), so that case still needs an app relaunch.
+    private func post(_ path: String, bundleURL: String,
+                      body: [String: Any],
                       timeout: TimeInterval = 50) async throws -> [String: Any] {
-        // A spider session can be reclaimed while the app is backgrounded or idle.
-        // The gateway rebuilds it on demand, so one automatic retry turns a
-        // transient "CatVod stopped" 502 into a seamless success.
-        do {
-            return try await postOnce(endpoint, body: body, timeout: timeout)
-        } catch let error as CatVodError {
-            if case .http(let status, let message) = error,
-               status == 502,
-               message.localizedCaseInsensitiveContains("stopped")
-                || message.localizedCaseInsensitiveContains("exited") {
-                return try await postOnce(endpoint, body: body, timeout: timeout)
-            }
-            throw error
+        // 每次都从网关当前地址现算：会话被回收后旧端口会失效，重试要靠它拿新端口。
+        func endpoint() async throws -> URL {
+            let base = try await CatVodGateway.shared.ensureStarted(allowedBundleURL: bundleURL)
+            return base.appendingPathComponent(path)
         }
+        do {
+            return try await postOnce(try await endpoint(), body: body, timeout: timeout)
+        } catch {
+            guard Self.isRetryableGatewayFailure(error) else { throw error }
+            AppLogger.info("[CatVod] ⟐ 网关连接被拒，重建 endpoint 重试一次 path=\(path) error=\(error)",
+                           level: .notice)
+            return try await postOnce(try await endpoint(), body: body, timeout: timeout)
+        }
+    }
+
+    /// Only transport-level "gateway went away" failures are safe to replay:
+    /// catalog/home/category/detail/player are all reads, so a duplicate is
+    /// harmless. Real source errors (403/5xx/empty) must pass through untouched.
+    private static func isRetryableGatewayFailure(_ error: Error) -> Bool {
+        if let error = error as? CatVodError,
+           case .http(let status, let message) = error,
+           status == 502,
+           message.localizedCaseInsensitiveContains("stopped")
+                || message.localizedCaseInsensitiveContains("exited") {
+            return true
+        }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .cannotConnectToHost, .networkConnectionLost, .connectionReset:
+                return true
+            default:
+                return false
+            }
+        }
+        return false
     }
 
     private func postOnce(_ endpoint: URL, body: [String: Any],
