@@ -1284,6 +1284,32 @@ struct CatVodHomeView: View {
         }
     }
 
+    /// 同一线路里的下一集，按当前展示顺序（`episodesReversed`）取。
+    /// 用 episode.groupIndex 定位线路而不是可变的 detailRouteIndex：播完时用户可能
+    /// 已经翻过线路，但这一集属于哪条线路是固定的，接着播的必须是同一条。
+    private func nextEpisode(after episode: CatVodEpisode) -> CatVodEpisode? {
+        guard detailGroups.indices.contains(episode.groupIndex) else { return nil }
+        let list = episodes(for: detailGroups[episode.groupIndex])
+        guard let position = list.firstIndex(where: { $0.id == episode.id }) else { return nil }
+        let next = position + 1
+        return next < list.count ? list[next] : nil
+    }
+
+    /// 播完一集后由 Presenter 回调：解析并播放同一线路的下一集。
+    /// 捕获剧集列表的快照而不是 @State 本身——播完这一集时详情可能已经关掉。
+    private func nextEpisodeAction(after episode: CatVodEpisode, title: String) -> (@MainActor () -> Void)? {
+        guard let next = nextEpisode(after: episode) else { return nil }
+        let groups = detailGroups
+        let reversed = episodesReversed
+        return { [weak self] in
+            guard let self, groups.indices.contains(next.groupIndex) else { return }
+            let list = reversed ? Array(groups[next.groupIndex].episodes.reversed())
+                                : groups[next.groupIndex].episodes
+            guard list.contains(next) else { return }
+            Task { await self.play(next, title: title) }
+        }
+    }
+
     private func play(_ episode: CatVodEpisode, title: String) async {
         let busy = await MainActor.run { () -> Bool in
             if isResolvingPlayback { return true }
@@ -1435,7 +1461,8 @@ struct CatVodHomeView: View {
                                               title: QualityPrompt.displayTitle("\(title) · \(episode.title)",
                                                                                 quality: effectiveQuality),
                                               danmaku: resolved.danmaku,
-                                              info: info)
+                                              info: info,
+                                              onNextEpisode: nextEpisodeAction(after: episode, title: title))
                 isResolvingPlayback = false
                 playingEpisodeID = nil
             }
@@ -1614,12 +1641,18 @@ struct CatVodHomeView: View {
                             height: option.height,
                             bitrate: option.bitrate,
                             sourceHost: URL(string: option.url)?.host)
+                        // 从详情列表按 id 找回这一集，才能算出同线路下一集。
+                        let playedEpisode = detailGroups.flatMap(\.episodes)
+                            .first(where: { $0.id == prompt.episodeID })
                         CatVodPlayerPresenter.present(
                             url: URL(string: option.url) ?? URL(string: "about:blank")!,
                             headers: prompt.headers,
                             title: QualityPrompt.displayTitle(prompt.title, quality: option.name),
                             danmaku: prompt.danmaku,
-                            info: info)
+                            info: info,
+                            onNextEpisode: playedEpisode.flatMap {
+                                nextEpisodeAction(after: $0, title: prompt.title)
+                            })
                         qualityPrompt = nil
                     }
                 }

@@ -46,7 +46,15 @@ enum SourceBrowserPresenter {
         final class HostBox { weak var host: UIViewController? }
         let box = HostBox()
         let host = UIHostingController(rootView:
-            VideoPlayerView(content: .link(stream, title: title)) { box.host?.dismiss(animated: true) }
+            VideoPlayerView(content: .link(stream, title: title),
+                            onNoVideoTrack: { [weak topVC] stream, at in
+                guard let topVC, let systemHost = box.host else { return }
+                // 换核逻辑封装在 Presenter（内部有 VLCKit 条件编译保护）；
+                // 无 VLCKit 的构建里它是空操作，书源视频维持原来的系统内核行为。
+                CatVodPlayerPresenter.replaceWithVLC(stream: stream, startAt: at,
+                                                     title: title, scene: scene,
+                                                     presenting: topVC, systemHost: systemHost)
+            }) { box.host?.dismiss(animated: true) }
                 .followsScenePhase(of: scene)
         )
         box.host = host

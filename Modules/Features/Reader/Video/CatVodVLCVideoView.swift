@@ -60,6 +60,10 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
     private var isAudioOnly = false
     /// 音轨修正只做一次，且只在 VLC 默认选择无效时做（见 selectAudioTrackIfNeeded）。
     private var didResolveAudioTrack = false
+    /// 播完回调只发一次：VLC 可能重复投递 ended 状态，换集由上层接管，不能重复触发。
+    private var didSignalEnded = false
+    /// 单集直链播完后的回调（猫源/书源脚本）。上层关掉播放器并解析下一集。
+    var onPlaybackEnded: (@MainActor () -> Void)?
     /// 这些格式没有视频轨，videoSize 恒为 .zero，不能触发「硬解无画面」降级。
     /// 代理后扩展名丢失，用路由层从代理 spec 里还原的原始格式判断。
     private static let audioOnlyExtensions: Set<String> = [
@@ -87,6 +91,7 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         useSoftwareDecode = false
         hasAttemptedSoftDecodeFallback = false
         didResolveAudioTrack = false
+        didSignalEnded = false
         // 纯音频没有视频轨：按原始格式（代理后从 ?s= 还原）标记，跳过画面降级，
         // 否则播到 2 秒会被当成「硬解无画面」切软解重开，把音频打断。
         let originalExt = CatVodPlaybackRoute.originalExtension(of: url) ?? ""
@@ -369,6 +374,10 @@ final class CatVodVLCPlayerModel: NSObject, ObservableObject, VLCMediaPlayerDele
         case .ended:
             isPreparing = false
             isPlaying = false
+            if !didSignalEnded {
+                didSignalEnded = true
+                onPlaybackEnded?()
+            }
         case .error:
             isPreparing = false
             isPlaying = false
@@ -396,6 +405,8 @@ struct CatVodVLCVideoView: View {
     var danmaku: (@MainActor () async -> [DanmakuItem]?)? = nil
     /// 插件/网关返回的清晰度与线路信息；只用于信息面板，不改变播放行为。
     var info: VideoStreamInfo? = nil
+    /// 单集直链播完后的回调。上层关掉播放器并解析下一集；book-based/直播不设。
+    var onPlaybackEnded: (@MainActor () -> Void)? = nil
     let onClose: () -> Void
 
     @StateObject private var model = CatVodVLCPlayerModel()
@@ -566,6 +577,7 @@ struct CatVodVLCVideoView: View {
         // 就成了「白底白字、看起来一片空白但其实有内容」。
         .environment(\.colorScheme, .dark)
         .task {
+            model.onPlaybackEnded = onPlaybackEnded
             model.open(url: url, headers: headers, startAt: startAt)
             clock.attach { [model] in (model.rawTime, model.isPlaying) }
             if let danmaku {

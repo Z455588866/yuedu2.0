@@ -24,6 +24,8 @@ struct VideoPlayerView: View {
     /// 系统内核解不出视频轨时请上层改走 VLC 的回调。只有猫源链路传它；
     /// 普通书源视频为 nil，播放器行为与以前完全一致。
     let onNoVideoTrack: (@MainActor (VideoStream, Double) -> Void)?
+    /// 单集直链播完后的回调。book-based 播放用内置 guide 换集，不走这里。
+    let onPlaybackEnded: (@MainActor () -> Void)?
     /// 片源自带弹幕的加载器（猫源 `playerContent.danmaku`）。有就优先用它，
     /// 没有才按标题去弹幕站搜——两者不能同时跑，否则同一条弹幕会叠两遍。
     ///
@@ -33,10 +35,12 @@ struct VideoPlayerView: View {
     init(content: Content,
          danmaku: (@MainActor () async -> [DanmakuItem]?)? = nil,
          onNoVideoTrack: (@MainActor (VideoStream, Double) -> Void)? = nil,
+         onPlaybackEnded: (@MainActor () -> Void)? = nil,
          onClose: @escaping () -> Void) {
         self.content = content
         self.sourceDanmaku = danmaku
         self.onNoVideoTrack = onNoVideoTrack
+        self.onPlaybackEnded = onPlaybackEnded
         self.onClose = onClose
     }
 
@@ -291,6 +295,7 @@ struct VideoPlayerView: View {
             controller = VideoPlaybackController(link: stream, title: title)
         }
         controller?.onNoVideoTrack = onNoVideoTrack
+        controller?.onPlaybackEnded = onPlaybackEnded
         return controller
     }
 

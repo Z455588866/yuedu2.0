@@ -268,7 +268,16 @@ struct VideoDetailView: View {
                     .environmentObject(bookStore)
                     .environment(\.readerNavigator, nil)
             case .transient(let book):
-                VideoPlayerView(content: .transient(book), onClose: { player = nil })
+                VideoPlayerView(content: .transient(book),
+                                onNoVideoTrack: { stream, at in
+                    // 系统内核解不出画面时切 VLC 软解。transient 是 book-based，
+                    // 内置 guide 已负责自动下一集，这里只换内核、不动换集逻辑。
+                    guard let topVC = BookSourceFormLoginView.topViewController(),
+                          let scene = topVC.view.window?.windowScene else { return }
+                    CatVodPlayerPresenter.replaceWithVLC(stream: stream, startAt: at,
+                                                         title: book.title, scene: scene,
+                                                         presenting: topVC, systemHost: topVC)
+                }, onClose: { player = nil })
                     .environmentObject(bookStore)
             }
         }

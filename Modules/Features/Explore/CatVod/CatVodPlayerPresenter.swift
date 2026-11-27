@@ -14,7 +14,8 @@ enum CatVodPlayerPresenter {
 
     static func present(url: URL, headers: [String: String], title: String,
                         danmaku: CatVodDanmakuPayload? = nil,
-                        info: VideoStreamInfo? = nil) {
+                        info: VideoStreamInfo? = nil,
+                        onNextEpisode: (@MainActor () -> Void)? = nil) {
         // 弹幕**不能**在这里同步取完再播：红果的弹幕要按 30 秒一个窗口打 20 次接口，
         // 取完要几秒到十几秒，先取再播就等于点一集黑屏十几秒。这里只把「怎么取」
         // 交给播放器，片子先起来，弹幕到了再叠上去。
@@ -39,7 +40,7 @@ enum CatVodPlayerPresenter {
             // scheme + host only: playback URLs carry share tokens in the query.
             AppLogger.info("[CatVod] ⟐ present route=\(route.logTag) url=\(url.scheme ?? "?")://\(url.host ?? "?") ext=\(url.pathExtension)", level: .notice)
             presentResolved(route, url: url, headers: headers, title: title,
-                            danmaku: loader, info: info)
+                            danmaku: loader, info: info, onNextEpisode: onNextEpisode)
         }
     }
 
@@ -47,7 +48,8 @@ enum CatVodPlayerPresenter {
     private static func presentResolved(_ route: CatVodPlaybackRoute, url: URL,
                                         headers: [String: String], title: String,
                                         danmaku: (@MainActor () async -> [DanmakuItem]?)?,
-                                        info: VideoStreamInfo?) {
+                                        info: VideoStreamInfo?,
+                                        onNextEpisode: (@MainActor () -> Void)?) {
         guard let topVC = BookSourceFormLoginView.topViewController(),
               let scene = topVC.view.window?.windowScene else { return }
         // 等待期间可能已经有人开了播放器。
@@ -57,27 +59,36 @@ enum CatVodPlayerPresenter {
         case .vlc(let reason) where CatVodVLCKernel.isAvailable:
             AppLogger.info("[CatVod] 用 VLC 内核播放（\(reason)）", level: .notice)
             presentVLC(url: url, headers: headers, title: title, danmaku: danmaku,
-                       info: info, scene: scene, on: topVC)
+                       info: info, onNextEpisode: onNextEpisode, scene: scene, on: topVC)
         default:
             presentSystem(url: url, headers: headers, title: title, danmaku: danmaku,
-                          info: info, scene: scene, on: topVC)
+                          info: info, onNextEpisode: onNextEpisode, scene: scene, on: topVC)
         }
     }
 
     private static func presentSystem(url: URL, headers: [String: String], title: String,
                                       danmaku: (@MainActor () async -> [DanmakuItem]?)?,
-                                      info: VideoStreamInfo?,
+                                      info: VideoStreamInfo?, onNextEpisode: (@MainActor () -> Void)?,
                                       scene: UIWindowScene, on topVC: UIViewController) {
         let stream = VideoStream(url: url, headers: headers, info: info)
         final class HostBox { weak var host: UIViewController? }
         let box = HostBox()
+        // 播完一集：先关掉当前全屏播放器，再让上层解析并播下一集。
+        // 必须等 dismiss 完成再回调，否则上一个播放器还占着屏，present 会被防重叠拦掉。
+        let ended: (@MainActor () -> Void)? = onNextEpisode.map { next in
+            {
+                box.host?.dismiss(animated: false) {
+                    Task { @MainActor in next() }
+                }
+            }
+        }
         let host = UIHostingController(rootView:
             VideoPlayerView(content: .link(stream, title: title), danmaku: danmaku,
                             onNoVideoTrack: { [weak topVC] stream, at in
                 Self.switchToVLC(stream: stream, startAt: at, headers: headers, title: title,
-                                 danmaku: danmaku, info: info, scene: scene,
-                                 presenting: topVC, systemHost: box.host)
-            }) { box.host?.dismiss(animated: true) }
+                                 danmaku: danmaku, info: info, onNextEpisode: onNextEpisode,
+                                 scene: scene, presenting: topVC, systemHost: box.host)
+            }, onPlaybackEnded: ended) { box.host?.dismiss(animated: true) }
                 .followsScenePhase(of: scene)
         )
         box.host = host
@@ -86,12 +97,25 @@ enum CatVodPlayerPresenter {
         topVC.present(host, animated: true)
     }
 
+    /// 给书源脚本 `java.openVideoPlayer` 用的换核入口：系统内核解不出画面时切 VLC。
+    /// 与猫源共用一个实现；单集直链没有下一集，onNextEpisode 传 nil。
+    /// 必须放在这里而不是调用方：`CatVodVLCVideoView` 只在 VLCKit 构建中存在，
+    /// 由本文件内已有的 `#if canImport(VLCKitSPM)` 边界统一保护。
+    static func replaceWithVLC(stream: VideoStream, startAt: Double, title: String,
+                               scene: UIWindowScene, presenting: UIViewController,
+                               systemHost: UIViewController) {
+        switchToVLC(stream: stream, startAt: startAt, headers: stream.headers, title: title,
+                    danmaku: nil, info: stream.info, onNextEpisode: nil,
+                    scene: scene, presenting: presenting, systemHost: systemHost)
+    }
+
     /// 系统内核只解出音频轨（有声音没画面）时的兜底：把这一集原样交给 VLC 软解重播一次。
     /// 只有系统内核的检测回调会走到这里；VLC 视图不设该回调，不会来回切。
     private static func switchToVLC(stream: VideoStream, startAt: Double,
                                     headers: [String: String], title: String,
                                     danmaku: (@MainActor () async -> [DanmakuItem]?)?,
-                                    info: VideoStreamInfo?, scene: UIWindowScene,
+                                    info: VideoStreamInfo?, onNextEpisode: (@MainActor () -> Void)?,
+                                    scene: UIWindowScene,
                                     presenting: UIViewController?, systemHost: UIViewController?) {
         guard let systemHost, systemHost.presentingViewController != nil,
               let presenting else { return }
@@ -102,7 +126,8 @@ enum CatVodPlayerPresenter {
             Task { @MainActor in
                 guard presenting.presentedViewController == nil else { return }
                 presentVLC(url: stream.url, headers: headers, title: title, danmaku: danmaku,
-                           info: info, startAt: startAt, scene: scene, on: presenting)
+                           info: info, startAt: startAt, onNextEpisode: onNextEpisode,
+                           scene: scene, on: presenting)
             }
         }
     }
@@ -111,12 +136,20 @@ enum CatVodPlayerPresenter {
     private static func presentVLC(url: URL, headers: [String: String], title: String,
                                    danmaku: (@MainActor () async -> [DanmakuItem]?)?,
                                    info: VideoStreamInfo?, startAt: Double = 0,
+                                   onNextEpisode: (@MainActor () -> Void)?,
                                    scene: UIWindowScene, on topVC: UIViewController) {
         final class HostBox { weak var host: UIViewController? }
         let box = HostBox()
+        let ended: (@MainActor () -> Void)? = onNextEpisode.map { next in
+            {
+                box.host?.dismiss(animated: false) {
+                    Task { @MainActor in next() }
+                }
+            }
+        }
         let host = UIHostingController(rootView:
             CatVodVLCVideoView(url: url, headers: headers, title: title, startAt: startAt,
-                               danmaku: danmaku, info: info) {
+                               danmaku: danmaku, info: info, onPlaybackEnded: ended) {
                 box.host?.dismiss(animated: true)
             }
             .followsScenePhase(of: scene)
@@ -130,10 +163,11 @@ enum CatVodPlayerPresenter {
     private static func presentVLC(url: URL, headers: [String: String], title: String,
                                    danmaku: (@MainActor () async -> [DanmakuItem]?)?,
                                    info: VideoStreamInfo?, startAt: Double = 0,
+                                   onNextEpisode: (@MainActor () -> Void)?,
                                    scene: UIWindowScene, on topVC: UIViewController) {
         // 没链接 VLCKit 的构建无法软解兜底，维持原来的系统内核行为。
         presentSystem(url: url, headers: headers, title: title, danmaku: danmaku,
-                      info: info, scene: scene, on: topVC)
+                      info: info, onNextEpisode: onNextEpisode, scene: scene, on: topVC)
     }
     #endif
 }

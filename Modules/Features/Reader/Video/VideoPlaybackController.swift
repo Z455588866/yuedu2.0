@@ -50,6 +50,10 @@ final class VideoPlaybackController {
     var onNoVideoTrack: (@MainActor (VideoStream, Double) -> Void)?
     private var didRequestKernelFallback = false
 
+    /// 单集直链（猫源/书源脚本）播完后的回调。book-based 播放由内置 guide 自动换集，
+    /// 不走这里；只有 guide 没有下一集、且上层设置了它时才调用，让上层解析并播下一集。
+    var onPlaybackEnded: (@MainActor () -> Void)?
+
     private enum Source {
         /// A book's episodes, resolved through the chapter cache; `persists` for a shelf book.
         case book(BookStore, persists: Bool)
@@ -530,6 +534,10 @@ final class VideoPlaybackController {
     private func episodeEnded() {
         if let next = guide.episode(after: chapterIndex) {
             play(chapterIndex: next)
+        } else if let onPlaybackEnded {
+            // 单集直链（猫源/书源脚本)播完：交给上层关掉播放器并解析下一集。
+            // 上层没有下一集时不设置这个回调，就走下面的结束态。
+            onPlaybackEnded()
         } else {
             phase = .ended
             currentTime = 0
