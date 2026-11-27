@@ -703,9 +703,10 @@ struct VideoPlayerView: View {
         }
     }
 
-    /// A script's single link has no episodes to choose from.
+    /// A script's single link has no episodes to choose from. 用真实剧集表判断，
+    /// 不能用 hasNext——单集直链挂了换集回调后 hasNext 也为真，会冒出空选集面板。
     private func hasEpisodes(_ controller: VideoPlaybackController) -> Bool {
-        controller.hasNext || controller.hasPrevious
+        controller.hasEpisodeList
     }
 
     private func subtitle(_ controller: VideoPlaybackController) -> String {

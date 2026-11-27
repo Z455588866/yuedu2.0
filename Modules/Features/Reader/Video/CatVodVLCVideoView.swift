@@ -930,6 +930,16 @@ struct CatVodVLCVideoView: View {
                         Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: 26))
                     }
+                    // 下一集：与系统内核同一图标/语义。点击走上层换集回调——关掉当前
+                    // 全屏播放器、重新解析并按正常路由播放下一集（不是强制走 VLC）。
+                    // 与播完自动连播共用 onPlaybackEnded，行为一致；没有下一集时置灰。
+                    Button { onPlaybackEnded?(); scheduleHide() } label: {
+                        Image(systemName: "forward.end.fill")
+                            .font(.system(size: 22))
+                            .frame(width: DSLayout.videoCenterControlSide, height: DSLayout.videoCenterControlSide)
+                    }
+                    .disabled(onPlaybackEnded == nil)
+                    .accessibilityLabel(localized("下一集"))
                     Menu {
                         ForEach([0.5, 0.75, 1, 1.25, 1.5, 2], id: \.self) { value in
                             Button(String(format: "%g×", value)) { model.setRate(Float(value)) }

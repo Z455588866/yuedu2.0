@@ -50,8 +50,13 @@ final class VideoPlaybackController {
     var onNoVideoTrack: (@MainActor (VideoStream, Double) -> Void)?
     private var didRequestKernelFallback = false
 
-    /// 单集直链（猫源/书源脚本）播完后的回调。book-based 播放由内置 guide 自动换集，
+    /// 单集直链（猫源/书源脚本）的「下一集」出口。book-based 播放由内置 guide 自动换集，
     /// 不走这里；只有 guide 没有下一集、且上层设置了它时才调用，让上层解析并播下一集。
+    /// 两个入口共用它：① 播完自动连播（episodeEnded）；② 中央「下一集」按钮（playNext）。
+    /// 上层（CatVodHomeView.play）会重新解析下一集地址并按正常路由选内核——这与
+    /// onNoVideoTrack 的 VLC 兜底是两回事：这里是常规换集，只有上层重新解析时
+    /// 系统内核又解不出画面，才会各自触发那条兜底。与书源视频走 guide 的逻辑等价。
+    /// 上层没设置时按钮保持禁用、播完停在结束态。
     var onPlaybackEnded: (@MainActor () -> Void)?
 
     private enum Source {
@@ -111,7 +116,12 @@ final class VideoPlaybackController {
     }
 
     var route: VideoEpisodeGuide.Route? { guide.route(containing: chapterIndex) }
-    var hasNext: Bool { guide.episode(after: chapterIndex) != nil }
+    /// 真实剧集表是否多于一个（决定「选集」入口）。单集直链 guide 只有一集，
+    /// 即使挂了换集回调也不算「有选集」——不能用 hasNext 判断，否则会冒出空选集面板。
+    var hasEpisodeList: Bool { guide.routes.reduce(0) { $0 + $1.episodes.count } > 1 }
+    /// 单集直链的 guide 只有一集，没有「下一集」；但上层可能挂了换集回调（猫源详情）。
+    /// 有回调就认为有下一集，中央「下一集」按钮不置灰、点了走回调重新解析播放。
+    var hasNext: Bool { guide.episode(after: chapterIndex) != nil || onPlaybackEnded != nil }
     var hasPrevious: Bool { guide.episode(before: chapterIndex) != nil }
 
     /// The episode's title as the source names it.
@@ -194,7 +204,13 @@ final class VideoPlaybackController {
     }
 
     func playNext() {
-        if let next = guide.episode(after: chapterIndex) { play(chapterIndex: next) }
+        if let next = guide.episode(after: chapterIndex) {
+            play(chapterIndex: next)
+        } else {
+            // 单集直链（猫源详情）：guide 无下一集，交给上层重新解析并播放下一集。
+            // 与播完自动连播走同一个出口，行为一致。
+            onPlaybackEnded?()
+        }
     }
 
     func playPrevious() {
