@@ -1301,8 +1301,8 @@ struct CatVodHomeView: View {
         guard let next = nextEpisode(after: episode) else { return nil }
         let groups = detailGroups
         let reversed = episodesReversed
-        return { [weak self] in
-            guard let self, groups.indices.contains(next.groupIndex) else { return }
+        return {
+            guard groups.indices.contains(next.groupIndex) else { return }
             let list = reversed ? Array(groups[next.groupIndex].episodes.reversed())
                                 : groups[next.groupIndex].episodes
             guard list.contains(next) else { return }
