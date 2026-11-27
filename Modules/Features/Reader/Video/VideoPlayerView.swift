@@ -21,6 +21,9 @@ struct VideoPlayerView: View {
 
     let content: Content
     let onClose: () -> Void
+    /// 系统内核解不出视频轨时请上层改走 VLC 的回调。只有猫源链路传它；
+    /// 普通书源视频为 nil，播放器行为与以前完全一致。
+    let onNoVideoTrack: (@MainActor (VideoStream, Double) -> Void)?
     /// 片源自带弹幕的加载器（猫源 `playerContent.danmaku`）。有就优先用它，
     /// 没有才按标题去弹幕站搜——两者不能同时跑，否则同一条弹幕会叠两遍。
     ///
@@ -29,9 +32,11 @@ struct VideoPlayerView: View {
 
     init(content: Content,
          danmaku: (@MainActor () async -> [DanmakuItem]?)? = nil,
+         onNoVideoTrack: (@MainActor (VideoStream, Double) -> Void)? = nil,
          onClose: @escaping () -> Void) {
         self.content = content
         self.sourceDanmaku = danmaku
+        self.onNoVideoTrack = onNoVideoTrack
         self.onClose = onClose
     }
 
@@ -276,14 +281,17 @@ struct VideoPlayerView: View {
     }
 
     private func makeController() -> VideoPlaybackController? {
+        let controller: VideoPlaybackController?
         switch content {
         case .shelf(let id):
-            store.readingBook(id: id).map { VideoPlaybackController(book: $0, store: store, persists: true) }
+            controller = store.readingBook(id: id).map { VideoPlaybackController(book: $0, store: store, persists: true) }
         case .transient(let book):
-            VideoPlaybackController(book: book, store: store, persists: false)
+            controller = VideoPlaybackController(book: book, store: store, persists: false)
         case .link(let stream, let title):
-            VideoPlaybackController(link: stream, title: title)
+            controller = VideoPlaybackController(link: stream, title: title)
         }
+        controller?.onNoVideoTrack = onNoVideoTrack
+        return controller
     }
 
     /// Feeds the danmaku matcher the current video's name and episode number.

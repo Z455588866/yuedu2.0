@@ -44,6 +44,12 @@ final class VideoPlaybackController {
     /// AVPlayer accessLog 的当前视频码率；未知时为 nil。
     private(set) var measuredVideoBitrate: Int?
 
+    /// 内核兜底：系统内核播起来却解不出视频轨（有声音没画面）时，让上层把这一集
+    /// 原样交给 VLC 软解重播。上层只在猫源链路设置它，书源视频会是 nil，行为不变。
+    /// 传回当前流的副本和进度秒数，VLC 侧据此从同一位置接着播。
+    var onNoVideoTrack: (@MainActor (VideoStream, Double) -> Void)?
+    private var didRequestKernelFallback = false
+
     private enum Source {
         /// A book's episodes, resolved through the chapter cache; `persists` for a shelf book.
         case book(BookStore, persists: Bool)
@@ -193,6 +199,7 @@ final class VideoPlaybackController {
 
     private func load(at time: Double) {
         loadTask?.cancel()
+        didRequestKernelFallback = false
         failedNeedsRelink = false
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -280,6 +287,30 @@ final class VideoPlaybackController {
             item.observe(\.seekableTimeRanges, options: [.new]) { item, _ in timelineChanged(item) },
         ]
         player.replaceCurrentItem(with: item)
+    }
+
+    /// 系统内核的固有盲区：`CatVodPlaybackRoute.decide` 只看容器和扩展名，看不到容器里
+    /// 视频轨的编码。HLS/MP4 这些 AVPlayer 强项容器里也可能装着它解不出的视频轨
+    /// （HEVC 10bit / AV1 等），这时 `status` 照样是 readyToPlay、音频正常播，只有画面
+    /// 全黑，也不会进 `.failed` 分支——正是用户看到的「有声音没画面」。
+    ///
+    /// 判据与 VLC 内核的「硬解无画面→软解」完全同构（照 tvbox-Swift）：播放中、时间
+    /// 推进超过 2 秒、却始终拿不到画面尺寸。命中就请上层换 VLC 软解重播一次，只做
+    /// 一次避免来回切。纯音频按扩展名排除；上层没设回调（普通书源视频）时直接返回。
+    private func checkMissingVideoTrack(at seconds: Double, stream: VideoStream) {
+        guard !didRequestKernelFallback, seconds > 2, phase == .playing else { return }
+        guard let fallback = onNoVideoTrack else { return }
+        let ext = (CatVodPlaybackRoute.originalExtension(of: stream.url)
+                   ?? stream.info?.sourceExtension ?? "").lowercased()
+        guard !CatVodPlaybackRoute.audioOnlyExtensions.contains(ext) else { return }
+        // 解不出视频轨时 presentationSize 恒为 .zero，画面层 KVO 不会写入 pictureSize。
+        // 不能用 accessLog 码率代替：indicatedBitrate 兜底连纯音频都有值，判据会失效。
+        let hasPicture = (pictureSize?.width ?? 0) > 0 && (pictureSize?.height ?? 0) > 0
+        guard !hasPicture else { return }
+        didRequestKernelFallback = true
+        AppLogger.info("[Video] 系统内核无视频轨，切 VLC 软解重播（\(Int(seconds))s）", level: .notice)
+        player.pause()
+        fallback(stream, seconds)
     }
 
     private func itemStatusChanged(_ status: AVPlayerItem.Status, error: String?, of item: ObjectIdentifier) {
@@ -471,6 +502,11 @@ final class VideoPlaybackController {
         currentTime = seconds
         refreshPlaybackBitrate()
         if abs(seconds - lastSavedTime) >= 5 { saveProgress(force: false) }
+        // 猫源链路：系统内核解不出视频轨（有声音没画面）时切 VLC 软解重播。
+        // 挂在这里而不是独立定时器，和 VLC 内核的每秒采样判据完全同构。
+        if case .link(let stream) = source {
+            checkMissingVideoTrack(at: seconds, stream: stream)
+        }
     }
 
     /// Apple 文档：accessLog 的 averageVideoBitrate / indicatedAverageBitrate 是

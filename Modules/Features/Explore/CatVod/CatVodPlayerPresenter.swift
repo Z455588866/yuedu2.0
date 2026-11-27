@@ -72,7 +72,12 @@ enum CatVodPlayerPresenter {
         final class HostBox { weak var host: UIViewController? }
         let box = HostBox()
         let host = UIHostingController(rootView:
-            VideoPlayerView(content: .link(stream, title: title), danmaku: danmaku) { box.host?.dismiss(animated: true) }
+            VideoPlayerView(content: .link(stream, title: title), danmaku: danmaku,
+                            onNoVideoTrack: { [weak topVC] stream, at in
+                Self.switchToVLC(stream: stream, startAt: at, headers: headers, title: title,
+                                 danmaku: danmaku, info: info, scene: scene,
+                                 presenting: topVC, systemHost: box.host)
+            }) { box.host?.dismiss(animated: true) }
                 .followsScenePhase(of: scene)
         )
         box.host = host
@@ -81,15 +86,37 @@ enum CatVodPlayerPresenter {
         topVC.present(host, animated: true)
     }
 
+    /// 系统内核只解出音频轨（有声音没画面）时的兜底：把这一集原样交给 VLC 软解重播一次。
+    /// 只有系统内核的检测回调会走到这里；VLC 视图不设该回调，不会来回切。
+    private static func switchToVLC(stream: VideoStream, startAt: Double,
+                                    headers: [String: String], title: String,
+                                    danmaku: (@MainActor () async -> [DanmakuItem]?)?,
+                                    info: VideoStreamInfo?, scene: UIWindowScene,
+                                    presenting: UIViewController?, systemHost: UIViewController?) {
+        guard let systemHost, systemHost.presentingViewController != nil,
+              let presenting else { return }
+        // 进度先落盘：即使 startAt 传参环节出意外，VLC 侧仍能从 VideoLinkPositions 续上。
+        VideoLinkPositions.save(startAt, for: stream.url)
+        AppLogger.info("[CatVod] 系统内核无画面，切 VLC 内核重播（\(Int(startAt))s）", level: .notice)
+        systemHost.dismiss(animated: false) {
+            Task { @MainActor in
+                guard presenting.presentedViewController == nil else { return }
+                presentVLC(url: stream.url, headers: headers, title: title, danmaku: danmaku,
+                           info: info, startAt: startAt, scene: scene, on: presenting)
+            }
+        }
+    }
+
     #if canImport(VLCKitSPM)
     private static func presentVLC(url: URL, headers: [String: String], title: String,
                                    danmaku: (@MainActor () async -> [DanmakuItem]?)?,
-                                   info: VideoStreamInfo?,
+                                   info: VideoStreamInfo?, startAt: Double = 0,
                                    scene: UIWindowScene, on topVC: UIViewController) {
         final class HostBox { weak var host: UIViewController? }
         let box = HostBox()
         let host = UIHostingController(rootView:
-            CatVodVLCVideoView(url: url, headers: headers, title: title, danmaku: danmaku, info: info) {
+            CatVodVLCVideoView(url: url, headers: headers, title: title, startAt: startAt,
+                               danmaku: danmaku, info: info) {
                 box.host?.dismiss(animated: true)
             }
             .followsScenePhase(of: scene)
@@ -102,8 +129,9 @@ enum CatVodPlayerPresenter {
     #else
     private static func presentVLC(url: URL, headers: [String: String], title: String,
                                    danmaku: (@MainActor () async -> [DanmakuItem]?)?,
-                                   info: VideoStreamInfo?,
+                                   info: VideoStreamInfo?, startAt: Double = 0,
                                    scene: UIWindowScene, on topVC: UIViewController) {
+        // 没链接 VLCKit 的构建无法软解兜底，维持原来的系统内核行为。
         presentSystem(url: url, headers: headers, title: title, danmaku: danmaku,
                       info: info, scene: scene, on: topVC)
     }

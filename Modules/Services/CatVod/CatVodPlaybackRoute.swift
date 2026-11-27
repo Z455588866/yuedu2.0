@@ -34,6 +34,12 @@ enum CatVodPlaybackRoute: Sendable, Equatable {
         "m4a", "m4b", "mp3", "aac", "wav", "flac", "ogg",
     ]
 
+    /// 纯音频没有视频轨，画面降级判据必须排除它们，否则有声书/音乐会被误判成
+    /// 「解不出画面」。与 VLC 内核 `CatVodVLCPlayerModel.audioOnlyExtensions` 保持一致。
+    static let audioOnlyExtensions: Set<String> = [
+        "m4a", "m4b", "mp3", "aac", "wav", "flac", "ogg", "opus", "wma", "ape",
+    ]
+
     static func decide(url: URL, headers: [String: String]) async -> CatVodPlaybackRoute {
         // 本地网关（127.0.0.1）的路径是 /v1/media 之类，没有扩展名，只能读字节。
         let name = url.lastPathComponent
