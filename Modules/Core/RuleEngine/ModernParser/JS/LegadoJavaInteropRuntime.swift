@@ -205,6 +205,55 @@ enum LegadoJavaInteropRuntime {
             getDecoder: function () { return { decode: function (value) { return javaBytes(decode64(value)); } }; },
             getEncoder: function () { return { encodeToString: function (bytes) { return encode64(bytes, 2); } }; }
         };
+        // android.graphics.BitmapFactory/Bitmap — 起点段评源把正文插图重编码成带赞/评胶囊 SVG
+        // 时用到。真正的解码/缩放/PNG 编码由原生图片桥做 (JSCoreEngine 注入), JS 侧只保留
+        // 源的调用契约: decodeByteArray → Bitmap(getWidth/getHeight/createScaledBitmap/compress/
+        // recycle), compress 把位图的 PNG 字节写进 ByteArrayOutputStream。
+        // 原生不可用时 decodeByteArray 返回 null, 源会走自己的保原图兜底, 不会更坏。
+        var nativeBitmapDecode = global.__yueduBitmapDecode;
+        var nativeBitmapScale = global.__yueduBitmapScale;
+        function makeBitmap(result) {
+            var bytes = result && result.bytes;
+            var w = result ? Number(result.width) || 0 : 0;
+            var h = result ? Number(result.height) || 0 : 0;
+            var bitmap = {
+                __pngBytes: bytes,
+                getWidth: function () { return w; },
+                getHeight: function () { return h; },
+                recycle: function () { bitmap.__pngBytes = null; },
+                isRecycled: function () { return bitmap.__pngBytes == null; },
+                compress: function (format, quality, baos) {
+                    var data = bitmap.__pngBytes;
+                    if (!data || !baos || typeof baos.write !== 'function') return false;
+                    baos.write(javaBytes(data));
+                    return true;
+                }
+            };
+            return bitmap;
+        }
+        var BitmapFactory = {
+            // Options 只是按安卓契约接收 inPreferredConfig 的空壳, 解码器不需要它。
+            Options: function () { this.inPreferredConfig = null; },
+            decodeByteArray: function (bytes, offset, length, opts) {
+                if (typeof nativeBitmapDecode !== 'function') return null;
+                var raw = unsignedBytes(bytes);
+                if (offset != null || length != null) {
+                    raw = raw.slice(Number(offset) || 0,
+                        length == null ? undefined : (Number(offset) || 0) + Number(length));
+                }
+                var result = nativeBitmapDecode(javaBytes(raw));
+                return result && result.bytes && result.bytes.length ? makeBitmap(result) : null;
+            }
+        };
+        var AndroidBitmap = {
+            Config: { ARGB_8888: 1, RGB_565: 2, ALPHA_8: 3, ARGB_4444: 4 },
+            CompressFormat: { PNG: 0, JPEG: 1, WEBP: 2 },
+            createScaledBitmap: function (src, dw, dh, filter) {
+                if (!src || typeof nativeBitmapScale !== 'function') return src;
+                var result = nativeBitmapScale(javaBytes(src.__pngBytes), Number(dw), Number(dh));
+                return result && result.bytes && result.bytes.length ? makeBitmap(result) : src;
+            }
+        };
         var UUID = {
             randomUUID: function () {
                 var value = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
@@ -682,6 +731,7 @@ enum LegadoJavaInteropRuntime {
             },
             'javax.net.ssl': { HttpsURLConnection: HttpURLConnection },
             'android.util': { Base64: AndroidBase64 },
+            'android.graphics': { BitmapFactory: BitmapFactory, Bitmap: AndroidBitmap },
             'android.text': { TextUtils: TextUtils },
             'android.webkit': { CookieManager: CookieManager },
             'io.legado.app.help.http': { StrResponse: StrResponse, CookieStore: LegadoCookieStore },

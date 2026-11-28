@@ -55,6 +55,18 @@ enum LegadoRuntimeCapabilityRegistry {
         .init(path: "Packages.android.util.Base64.URL_SAFE", kind: .constant),
         .init(path: "Packages.android.util.Base64.encodeToString", kind: .method),
         .init(path: "Packages.android.util.Base64.decode", kind: .method),
+        // android.graphics.BitmapFactory/Bitmap: 起点段评源的插图卡 (createChapterImageCard)
+        // 用它们把正文插图重编码成带赞/评胶囊的 SVG。iOS 无安卓位图 API, 由原生图片桥承接。
+        .init(path: "Packages.android.graphics", kind: .namespace),
+        .init(path: "Packages.android.graphics.BitmapFactory", kind: .namespace),
+        .init(path: "Packages.android.graphics.BitmapFactory.Options", kind: .constructor),
+        .init(path: "Packages.android.graphics.BitmapFactory.decodeByteArray", kind: .method),
+        .init(path: "Packages.android.graphics.Bitmap", kind: .namespace),
+        .init(path: "Packages.android.graphics.Bitmap.Config", kind: .namespace),
+        .init(path: "Packages.android.graphics.Bitmap.Config.ARGB_8888", kind: .constant),
+        .init(path: "Packages.android.graphics.Bitmap.CompressFormat", kind: .namespace),
+        .init(path: "Packages.android.graphics.Bitmap.CompressFormat.PNG", kind: .constant),
+        .init(path: "Packages.android.graphics.Bitmap.createScaledBitmap", kind: .method),
         .init(path: "Packages.javax.crypto.Cipher", kind: .namespace),
         .init(path: "Packages.javax.crypto.Cipher.getInstance", kind: .method),
         .init(path: "Packages.javax.crypto.spec.SecretKeySpec", kind: .constructor),

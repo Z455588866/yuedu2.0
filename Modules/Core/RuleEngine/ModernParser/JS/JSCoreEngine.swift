@@ -1,6 +1,9 @@
 import Foundation
 import JavaScriptCore
 import os
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// JavaScript execution engine wrapping JavaScriptCore.
 /// Provides Legado-compatible `java.*` bridge functions so book source
@@ -847,6 +850,41 @@ class JSCoreEngine {
         return nil
     }
 
+    /// android.graphics.BitmapFactory 原生承接：把图片字节解码（可选按宽度等比缩放），
+    /// 返回 PNG 字节 + 宽高，供起点段评源的插图卡 shim 使用。
+    /// - Parameters:
+    ///   - bytes: JS 侧传入的字节（Java signed / JS unsigned 共用低 8 位）。
+    ///   - targetWidth: >0 时按该宽度等比缩放（对应 createScaledBitmap）；0 表示原样。
+    ///   - targetHeight: targetWidth>0 且 >0 时按指定高度，否则按宽高比推算。
+    /// - Returns: ["bytes": [Int], "width": Int, "height": Int]；失败返回空字典。
+    private static func decodeImagePNG(bytes: [Int], targetWidth: Int = 0, targetHeight: Int = 0) -> [String: Any] {
+        #if canImport(UIKit)
+        guard !bytes.isEmpty, bytes.count <= 32 * 1024 * 1024 else { return [:] }
+        let data = Data(bytes.map { UInt8(truncatingIfNeeded: $0) })
+        guard let image = UIImage(data: data) else { return [:] }
+        var output = image
+        if targetWidth > 0 {
+            let width = CGFloat(targetWidth)
+            let height = targetHeight > 0 ? CGFloat(targetHeight) : width * image.size.height / image.size.width
+            let target = CGSize(width: width, height: max(1, height))
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            format.opaque = false
+            output = UIGraphicsImageRenderer(size: target, format: format).image { _ in
+                image.draw(in: CGRect(origin: .zero, size: target))
+            }
+        }
+        guard let png = output.pngData() else { return [:] }
+        return [
+            "bytes": png.map(Int.init),
+            "width": Int(output.size.width.rounded(.towardZero)),
+            "height": Int(output.size.height.rounded(.towardZero))
+        ]
+        #else
+        return [:]
+        #endif
+    }
+
     /// Reset the context — clears all JS variables and re-injects the bridge.
     func reset() {
         onJSQueue {
@@ -1073,6 +1111,19 @@ class JSCoreEngine {
             delete __yueduBase64Encode;
             delete __yueduBase64Decode;
         """)
+
+        // android.graphics.BitmapFactory / Bitmap 的原生承接：起点段评源用它们把正文插图
+        // 重编码成带赞/评胶囊的 SVG 卡。JS 兼容层 (LegadoJavaInteropRuntime) 的 BitmapFactory
+        // shim 调这两个 block；返回的 bytes 是 PNG 原始字节 (-javaBytes 约定由 JS 侧解码)。
+        // 任何一步失败返回 nil，源走自己的保原图兜底。
+        let bitmapDecode: @convention(block) ([Int]) -> [String: Any] = { bytes in
+            Self.decodeImagePNG(bytes: bytes, targetWidth: 0)
+        }
+        let bitmapScale: @convention(block) ([Int], Int, Int) -> [String: Any] = { bytes, w, h in
+            Self.decodeImagePNG(bytes: bytes, targetWidth: w, targetHeight: h)
+        }
+        ctx.setObject(bitmapDecode, forKeyedSubscript: "__yueduBitmapDecode" as NSString)
+        ctx.setObject(bitmapScale, forKeyedSubscript: "__yueduBitmapScale" as NSString)
         let getCookieBlock: @convention(block) (String, JSValue?) -> String = { [weak bridge] url, keyValue in
             guard let bridge else { return "" }
             let key: String
