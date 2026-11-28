@@ -1514,8 +1514,8 @@ struct BookDetailIntroSection: View {
     private var isSourcesOwnRich: Bool {
         guard readsSourceFormats else { return false }
         switch content {
-        case .html, .web: true
-        case .plain, .markdown: false
+        case .html, .web: return true
+        case .plain, .markdown: return false
         }
     }
 
