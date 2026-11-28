@@ -734,6 +734,116 @@ enum ReviewCommentGrabber {
     return { adapter: 'sqpanel', title: h1 || '段评', subtitle: '', context: context, items: out };
   }
 
+  /* ---------- 适配器 2.9：起点共享站 comment-card 结构（qd1314 等） ----------
+   * 服务端只给壳，script.js 前端渲染：#commentList > div.comment-card.flex.gap-2
+   *   .avatar-wrap > img.avatar-frame(头像框) + img.avatar(头像)
+   *   .flex-1 > .flex.items-center > span.user-name + .badge-essence 等徽章
+   *           .comment-text(正文) + img.comment-img(配图) + audio(配音)
+   *           .mt-2.flex.justify-between > span(时间·楼层·IP) + span.flex.items-center(👍 N)
+   *           .reply-toggle「展开N条回复」+ .replies-box > .reply-item(楼中楼)
+   * 通用兜底抓不出赞数/楼层（数字混在时间里），按结构精确取字段。
+   */
+  function adaptCardPage() {
+    var cards = document.querySelectorAll('.comment-card');
+    if (cards.length < 1) return null;
+
+    function likeOf(card) {
+      var row = card.querySelector('.mt-2.flex.justify-between');
+      if (!row) return 0;
+      var ls = row.querySelector('span.flex.items-center') || row.lastElementChild;
+      return ls ? (pickNumbers(txt(ls))[0] || 0) : 0;
+    }
+
+    function metaOf(card) {
+      var row = card.querySelector('.mt-2.flex.justify-between');
+      if (!row || !row.firstElementChild) return '';
+      return txt(row.firstElementChild);
+    }
+
+    function badgeOf(card) {
+      var out = [];
+      var be = card.querySelector('.badge-essence');
+      if (be && txt(be)) out.push(txt(be));
+      if (card.querySelector('.god-stamp')) out.push('神评');
+      return out.join(' ');
+    }
+
+    function imagesOf(root, images) {
+      var im = root ? root.querySelector('img.comment-img') : null;
+      if (im) {
+        var src = abs(im.getAttribute('src') || im.getAttribute('data-src'));
+        if (src) images.push(src);
+      }
+    }
+
+    function replyOf(card, i) {
+      var replies = [];
+      var subs = card.querySelectorAll('.reply-item');
+      for (var r = 0; r < subs.length; r++) {
+        var s = subs[r];
+        var rIm = [];
+        var rTx = s.querySelector('.comment-text');
+        var rContent = rTx ? bodyContent(rTx, rIm) : '';
+        imagesOf(s, rIm);
+        /* 楼中楼正文前端拼的是「回复 <span>@昵称</span>：正文」，textContent 后解析 */
+        var rTo = '';
+        var rm = rContent.match(/^回复\s*@?(.+?)：([\s\S]*)$/);
+        if (rm) { rTo = rm[1].trim(); rContent = rm[2]; }
+        var rAv = s.querySelector('img.avatar');
+        replies.push({
+          id: 'cp' + i + '_' + r,
+          user: txt(s.querySelector('.user-name')) || '书友',
+          avatar: rAv ? abs(rAv.getAttribute('src')) : '',
+          content: rContent.trim(),
+          images: rIm,
+          replyTo: rTo
+        });
+      }
+      return replies;
+    }
+
+    var out = [];
+    for (var i = 0; i < cards.length; i++) {
+      var c = cards[i];
+      var images = [];
+      var tx = c.querySelector('.comment-text');
+      var content = tx ? bodyContent(tx, images) : '';
+      imagesOf(c, images);
+      if (!content && !images.length) continue;
+      var avImg = c.querySelector('.avatar-wrap img.avatar');
+      var au = c.querySelector('audio[src]');
+      var toggle = c.querySelector('.reply-toggle');
+      var replyCount = toggle ? (pickNumbers(txt(toggle))[0] || 0) : 0;
+      var replies = replyOf(c, i);
+      if (replies.length) replyCount = Math.max(replyCount, replies.length);
+      out.push({
+        id: c.getAttribute('data-review-id') || ('cp' + i),
+        user: txt(c.querySelector('.user-name')) || '书友',
+        avatar: avImg ? abs(avImg.getAttribute('src')) : '',
+        level: 0,
+        levelText: '',
+        badge: badgeOf(c),
+        meta: metaOf(c),
+        quote: '',
+        segment: '',
+        content: content,
+        images: images,
+        voice: au ? abs(au.getAttribute('src')) : '',
+        likes: likeOf(c),
+        replyCount: replyCount,
+        replyTo: '',
+        replies: replies
+      });
+    }
+    if (!out.length) return null;
+    var withText = out.filter(function (x) { return x.content || x.images.length; }).length;
+    if (withText / out.length < 0.6) return null;
+    /* 作者说页只有 author-hero，没有 .comment-card，不冲突 */
+    var hero = document.querySelector('.author-hero');
+    if (hero) return null;
+    return { adapter: 'cardpage', title: '', subtitle: '', context: '', items: out };
+  }
+
   /* ---------- 适配器 3：通用——重复兄弟簇 ---------- */
   function signature(el) {
     var kids = el.children;
@@ -974,6 +1084,7 @@ enum ReviewCommentGrabber {
     if (!r) { try { r = adaptFQPanel(); } catch (e4) {} }
     if (!r) { try { r = adaptViewer(); } catch (e5) {} }
     if (!r) { try { r = adaptSqPanel(); } catch (e6) {} }
+    if (!r) { try { r = adaptCardPage(); } catch (e7) {} }
     if (!r) { try { r = adaptGeneric(); } catch (e3) {} }
     return r;
   }
@@ -1013,8 +1124,9 @@ enum ReviewCommentGrabber {
     if (EXPANDING) return false;
     /* 起点系是 .reply-btn[data-action=toggle-replies]；viewer 页的「查看 N 条回复」
        也是 button.reply-button（同 class 还有「回复」按钮，绝不能点它）；
-       书旗系是 .reply-more「展开更多回复」。 */
-    var btns = document.querySelectorAll('.reply-btn[data-action="toggle-replies"], article.card .reply-button, article.comment .reply-more');
+       书旗系是 .reply-more「展开更多回复」；
+       起点共享站（qd1314）是 .reply-toggle「展开N条回复」。 */
+    var btns = document.querySelectorAll('.reply-btn[data-action="toggle-replies"], article.card .reply-button, article.comment .reply-more, .comment-card .reply-toggle');
     var pending = [];
     for (var i = 0; i < btns.length; i++) {
       var b = btns[i];
@@ -1022,6 +1134,7 @@ enum ReviewCommentGrabber {
       var bt = b.textContent || '';
       if (/查看\s*\d+\s*条回复/.test(bt)) { pending.push(b); continue; }
       if (/^展开更多回复/.test(bt.trim())) { pending.push(b); continue; }
+      if (/^展开\s*\d+\s*条回复/.test(bt.trim())) { pending.push(b); continue; }
       if (b.getAttribute('data-action') === 'toggle-replies') pending.push(b);
     }
     if (!pending.length) return false;
@@ -1155,6 +1268,7 @@ enum ReviewCommentGrabber {
   }
 
   function loadStep() {
+    if (!window.__ydGrabAutoLoad) return;
     if (LOAD.done || LOAD.running) return;
     LOAD.running = true;
     LOAD.rounds++;
@@ -1180,16 +1294,32 @@ enum ReviewCommentGrabber {
     }, 700);
   }
 
+  /* 主动滚动加载只允许在「原生卡片」模式下跑：
+     原生卡片是隐藏网页抓数据，替用户滚动无感；但原网页模式下
+     loadStep 会把用户正在看的页面硬滚到底 —— 这就是「浏览器面板
+     打开评论自动跳到最底下」的根因。Swift 侧在 displayMode 变化时
+     调 __ydSetAutoLoad(true/false)；默认关，纯被动抓取。 */
+  window.__ydSetAutoLoad = function (on) {
+    window.__ydGrabAutoLoad = !!on;
+    if (on) startAutoLoad();
+  };
+
+  function startAutoLoad() {
+    if (window.__ydLoadStarted) return;
+    window.__ydLoadStarted = true;
+    setTimeout(loadStep, 400);
+  }
+
   function boot() {
     window.__ydGrabRun = run;
     run(false);
-    /* 首屏：骨架 → 首屏 → 楼中楼，短时间多打几次；之后交给 loadStep
-       主动滚动 / 点「加载更多」，把分页评论逐批拉进 DOM 再增量上报。 */
+    /* 首屏：骨架 → 首屏 → 楼中楼，短时间多打几次；滚动加载（loadStep）
+       只有原生卡片模式（__ydSetAutoLoad(true)）才启动，见上。 */
     [400, 900, 1600].forEach(function (d) {
       setTimeout(function () { run(false); }, d);
     });
     setTimeout(function () { run(true); }, 1400);
-    setTimeout(loadStep, 1200);
+    if (window.__ydGrabAutoLoad) startAutoLoad();
     try {
       var mo = new MutationObserver(schedule);
       mo.observe(document.body, { childList: true, subtree: true, characterData: true });

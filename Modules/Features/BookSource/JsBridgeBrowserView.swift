@@ -293,6 +293,14 @@ struct JsBridgeBrowserView: View {
     /// 段评面板：页面加载后把评论抓出来交给原生卡片画。
     /// 关掉时页面行为与普通书源网页完全一致。
     let grabsComments: Bool
+    /// 「书源原网页」模式：垫半透纸底，正文不再透过玻璃叠在评论上。
+    /// 由 `LegadoReviewBrowserView` 随 displayMode 切换，页面内由
+    /// `__ydSetWebMode` 幂等处理。
+    let webModeActive: Bool
+    /// 「原生玻璃卡片」模式：允许抓取脚本主动滚动/点「加载更多」把分页
+    /// 评论拉全（隐藏网页，用户无感）。原网页模式必须关，否则页面会
+    /// 自己跳到底部 —— 之前「打开评论自动跳最底下」就是它。
+    let autoLoadComments: Bool
     /// 抓到评论（含后续滚动加载补抓）时回调。抓不到不会回调，页面照旧显示。
     let onCommentsGrabbed: ((GrabbedCommentPage) -> Void)?
 
@@ -310,6 +318,8 @@ struct JsBridgeBrowserView: View {
         transparentBackground: Bool = false,
         customCSSScript: String = "",
         grabsComments: Bool = false,
+        webModeActive: Bool = false,
+        autoLoadComments: Bool = false,
         onCommentsGrabbed: ((GrabbedCommentPage) -> Void)? = nil,
         onDismiss: @escaping (_ body: String?) -> Void
     ) {
@@ -326,6 +336,8 @@ struct JsBridgeBrowserView: View {
         self.transparentBackground = transparentBackground
         self.customCSSScript = customCSSScript
         self.grabsComments = grabsComments
+        self.webModeActive = webModeActive
+        self.autoLoadComments = autoLoadComments
         self.onCommentsGrabbed = onCommentsGrabbed
         self.onDismiss = onDismiss
     }
@@ -430,6 +442,8 @@ struct JsBridgeBrowserView: View {
                 transparentBackground: transparentBackground,
                 customCSSScript: customCSSScript,
                 grabsComments: grabsComments,
+                webModeActive: webModeActive,
+                autoLoadComments: autoLoadComments,
                 onCommentsGrabbed: onCommentsGrabbed
             )
                 .edgesIgnoringSafeArea(hidesToolbar ? .all : [])
@@ -758,6 +772,8 @@ struct LegadoReviewBrowserView: View {
                 transparentBackground: true,
                 customCSSScript: customCSSScript,
                 grabsComments: true,
+                webModeActive: displayMode == .web,
+                autoLoadComments: displayMode == .native,
                 onCommentsGrabbed: { page in
                     if !page.items.isEmpty, page != grabbed,
                        page.items.count >= (grabbed?.items.count ?? 0) {
@@ -775,6 +791,8 @@ struct LegadoReviewBrowserView: View {
                 transparentBackground: true,
                 customCSSScript: customCSSScript,
                 grabsComments: true,
+                webModeActive: displayMode == .web,
+                autoLoadComments: displayMode == .native,
                 onCommentsGrabbed: { page in
                     if !page.items.isEmpty, page != grabbed,
                        page.items.count >= (grabbed?.items.count ?? 0) {
@@ -884,6 +902,8 @@ struct JsBridgeBrowserRepresentable: UIViewRepresentable {
     var transparentBackground = false
     var customCSSScript = ""
     var grabsComments = false
+    var webModeActive = false
+    var autoLoadComments = false
     var onCommentsGrabbed: ((GrabbedCommentPage) -> Void)? = nil
 
     static let sourceJavaPromptName = SourceWebUIDelegate.sourceBridgePromptName
@@ -1286,6 +1306,22 @@ struct JsBridgeBrowserRepresentable: UIViewRepresentable {
     /// coordinator —— 否则楼中楼增量结果会写进首次创建时的旧闭包快照。
     func updateUIView(_ uiView: WKWebView, context: Context) {
         context.coordinator.commentsGrabHandler = onCommentsGrabbed
+        // 显示模式联动：原网页模式垫纸底（__ydSetWebMode），原生卡片模式才允许
+        // 抓取脚本自动滚动加载（__ydSetAutoLoad）。幂等，值变化才真正执行 JS。
+        if context.coordinator.appliedWebMode != webModeActive {
+            context.coordinator.appliedWebMode = webModeActive
+            uiView.evaluateJavaScript(
+                "(window.__ydSetWebMode||function(){})(\(webModeActive ? "true" : "false"))",
+                completionHandler: nil
+            )
+        }
+        if context.coordinator.appliedAutoLoad != autoLoadComments {
+            context.coordinator.appliedAutoLoad = autoLoadComments
+            uiView.evaluateJavaScript(
+                "(window.__ydSetAutoLoad||function(){})(\(autoLoadComments ? "true" : "false"))",
+                completionHandler: nil
+            )
+        }
         // 段评模式（transparentBackground）下，sheet 半屏也要能往下翻评论：
         // 系统默认 prefersScrollingExpandsWhenScrolledToEdge = true，网页的
         // scrollView 停在顶部时，上滑手势被优先识别成「展开面板」，列表在
@@ -1346,6 +1382,9 @@ struct JsBridgeBrowserRepresentable: UIViewRepresentable {
 
         weak var webView: WKWebView?
         weak var bridge: JsBridgeBrowserBridge?
+        /// updateUIView 幂等开关：记录上次下发的显示模式值。
+        var appliedWebMode: Bool?
+        var appliedAutoLoad: Bool?
         var progressObservation: NSKeyValueObservation?
         var urlObservation: NSKeyValueObservation?
         var sourceRunHandler: ((String) async throws -> String)?

@@ -98,6 +98,36 @@ enum IslandReviewPanel {
             }
 
             installAll();
+
+            /* 「书源原网页」模式的可读性保底。透明背景脚本会把页面所有
+               容器（含卡片）的底色全清掉，玻璃材质一旦变淡（透明度滑杆
+               拉低），阅读器正文就直接透出来跟评论文字叠在一起 —— 用户
+               截图里的「文字叠文字」就是这么来的。这里由 Swift 在
+               displayMode == .web 时调 __ydSetWebMode(true)：垫一块
+               z-index:-1 的半透纸底（fixed），内容全部浮在它上面，
+               玻璃 tint 仍能透出一点；切回原生卡片时移除。 */
+            var SCRIM_ID = '__yd_web_scrim__';
+            var SCRIM_COLOR = MODE === 'dark'
+                ? 'rgba(16,16,16,0.92)'
+                : 'rgba(248,248,248,0.94)';
+            window.__ydSetWebMode = function (on) {
+                try {
+                    var el = document.getElementById(SCRIM_ID);
+                    if (on) {
+                        if (!el) {
+                            el = document.createElement('div');
+                            el.id = SCRIM_ID;
+                            el.setAttribute('style',
+                                'position:fixed;inset:0;z-index:-1;pointer-events:none;' +
+                                'background-color:' + SCRIM_COLOR + ' !important;');
+                            (document.body || document.documentElement).appendChild(el);
+                        }
+                    } else if (el && el.parentNode) {
+                        el.parentNode.removeChild(el);
+                    }
+                } catch (e) {}
+            };
+
             document.addEventListener('DOMContentLoaded', installAll, { once: true });
             window.addEventListener('load', function () {
                 installAll();
