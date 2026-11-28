@@ -130,15 +130,20 @@ struct BookIntroWebView: UIViewRepresentable {
         """
 
         static let actionMessage = "yueduIntroAction"
-        /// Sends the index of the button or image the reader tapped.
+        /// Sends the index of the button or image the reader tapped, or `script:<source JS>`
+        /// for an element a source marked with `data-click-script` (a `<useweb>` role row,
+        /// which is rendered as written and so cannot use `<usehtml>`'s button form).
         static let actionScript = """
         (function(){
           var attribute = '\(BookIntroInteractiveFragment.actionAttribute)';
+          var scriptAttribute = 'data-click-script';
           document.addEventListener('click', function(event){
-            var element = event.target.closest('[' + attribute + ']');
+            var element = event.target.closest('[' + attribute + '],[' + scriptAttribute + ']');
             if (!element) { return; }
             event.preventDefault();
-            window.webkit.messageHandlers.\(actionMessage).postMessage(element.getAttribute(attribute));
+            var script = element.getAttribute(scriptAttribute);
+            window.webkit.messageHandlers.\(actionMessage).postMessage(
+              script != null ? ('script:' + script) : element.getAttribute(attribute));
           }, true);
         })();
         """
@@ -177,8 +182,14 @@ struct BookIntroWebView: UIViewRepresentable {
                 guard reported.height > 0, reported != layout else { return }
                 layout = reported
             case Self.actionMessage:
-                guard let index = (message.body as? String).flatMap({ Int($0) }),
-                      parsedFragment.actions.indices.contains(index) else { return }
+                guard let body = message.body as? String else { return }
+                if body.hasPrefix("script:") {
+                    let script = String(body.dropFirst("script:".count))
+                    guard !script.isEmpty else { return }
+                    onAction?(BookIntroAction(kind: .button, name: "", script: script))
+                    return
+                }
+                guard let index = Int(body), parsedFragment.actions.indices.contains(index) else { return }
                 onAction?(parsedFragment.actions[index])
             default:
                 break

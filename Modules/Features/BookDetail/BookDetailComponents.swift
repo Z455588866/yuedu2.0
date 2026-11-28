@@ -1502,11 +1502,29 @@ struct BookDetailIntroSection: View {
         }
     }
 
-    /// Whether the text is drawn whole: a section never is, its 「更多」 opens the page of it.
+    /// A source's own rich intro (`<useweb>` / `<usehtml>`) is a whole, self-contained page
+    /// (author card, dossier, roles, groups). Collapsing it to a few lines hides nearly
+    /// everything, so on a detail page it is drawn in full, in place — no 「更多」, no
+    /// separate sheet. Plain / Markdown intros keep the old collapse + 「更多」 page, so
+    /// ordinary descriptions read exactly as before.
+    private var expandsInPlace: Bool {
+        placement == .section && isSourcesOwnRich
+    }
+
+    private var isSourcesOwnRich: Bool {
+        guard readsSourceFormats else { return false }
+        switch content {
+        case .html, .web: true
+        case .plain, .markdown: false
+        }
+    }
+
+    /// Whether the text is drawn whole: a plain section collapses and its 「更多」 opens
+    /// the page; a rich source section and `.full` draw everything.
     private var isOpen: Bool {
         switch placement {
         case .hero: isExpanded
-        case .section: false
+        case .section: expandsInPlace
         case .full: true
         }
     }
@@ -1557,7 +1575,8 @@ struct BookDetailIntroSection: View {
                 introBody
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if mayOverflow, placement == .section || (placement == .hero && isRich) {
+            if mayOverflow, !expandsInPlace,
+               placement == .section || (placement == .hero && isRich) {
                 Button(action: toggle) {
                     Text(isOpen ? localized("收合") : localized("简介：更多"))
                         .font(DSFont.subheadline.weight(.semibold))
@@ -1572,7 +1591,7 @@ struct BookDetailIntroSection: View {
         }
         .padding(.horizontal, placement == .hero ? 0 : DSSpacing.lg)
         .task(id: text) { parseMarkdownIfNeeded() }
-        .sheet(isPresented: placement == .section ? $isExpanded : .constant(false), onDismiss: runPending) {
+        .sheet(isPresented: placement == .section && !expandsInPlace ? $isExpanded : .constant(false), onDismiss: runPending) {
             whole
         }
     }
